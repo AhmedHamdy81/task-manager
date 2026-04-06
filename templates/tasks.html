@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}My Tasks · {{ app_name }}{% endblock %}
+
+{% macro task_stream_item(t) %}
+      <article class="task-item" role="listitem">
+        <div class="task-item-body">
+          <h3 class="task-item-title">{{ t.title }}</h3>
+          {% if t.description %}<p class="project-active-task-desc">{{ t.description }}</p>{% endif %}
+          <p class="task-item-meta">
+            {% if t.project %}
+            <a href="{{ url_for('project_detail', project_id=t.project.id) }}" class="tasks-meta-project">{{ t.project.name }}</a>
+            {% else %}
+            <span>No project</span>
+            {% endif %}
+            <span class="task-item-meta-sep" aria-hidden="true">·</span>
+            <span>Due —</span>
+            <span class="task-item-meta-sep" aria-hidden="true">·</span>
+            <span>Priority —</span>
+          </p>
+        </div>
+        <div class="task-item-actions tasks-page-task-actions">
+          {% if can_update_task_status(t) %}
+          <form method="post" action="{{ url_for('tasks_set_status', task_id=t.id) }}" class="status-form project-active-status-form">
+            <select name="status" class="status-select" aria-label="Task status">
+              <option value="open" {% if t.status == 'open' %}selected{% endif %}>Open</option>
+              <option value="in_progress" {% if t.status == 'in_progress' %}selected{% endif %}>In progress</option>
+              <option value="done" {% if t.status == 'done' %}selected{% endif %}>Done</option>
+            </select>
+          </form>
+          {% else %}
+          <span class="badge">{{ t.status|replace('_', ' ') }}</span>
+          {% endif %}
+          {% if can_delete_task(t) %}
+          <form method="post" action="{{ url_for('tasks_delete', task_id=t.id) }}" class="inline tasks-page-delete-form" data-confirm="{{ ('Are you sure you want to delete the task “' ~ t.title ~ '”? This cannot be undone.')|e }}">
+            <button type="submit" class="btn btn--small btn--danger">Delete</button>
+          </form>
+          {% endif %}
+        </div>
+      </article>
+{% endmacro %}
+
+{% macro task_stream_section(heading, lead, items, empty_msg) %}
+<section class="panel tasks-dashboard-panel">
+  <h2 class="panel-title tasks-dashboard-panel-title">{{ heading }}</h2>
+  {% if lead %}<p class="muted tasks-dashboard-panel-lead">{{ lead }}</p>{% endif %}
+  {% if items %}
+  <div class="tasks-dashboard-panel-inner">
+    <div class="task-stream" role="list">
+      {% for t in items %}
+      {{ task_stream_item(t) }}
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <p class="empty empty--in-panel tasks-dashboard-empty">{{ empty_msg }}</p>
+  {% endif %}
+</section>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <h1>My Tasks</h1>
+  <p class="muted">Work assigned to you, grouped by urgency. Create tasks below with a <strong>task group</strong>, <strong>title</strong>, and <strong>project</strong>; assignees must be on that project’s team (manage people on the <a href="{{ url_for('projects_list') }}">Projects</a> page).</p>
+</div>
+
+{% if not users %}
+<section class="panel">
+  <p class="empty"><strong>Add people to the directory first</strong> — tasks must be assigned to someone.</p>
+  {% if current_account_is_admin %}
+  <a class="btn btn--primary" href="{{ url_for('users_list') }}">Go to Users</a>
+  {% else %}
+  <p class="muted">Ask an administrator to add people in <strong>Users</strong>.</p>
+  {% endif %}
+</section>
+{% elif not projects %}
+<section class="panel">
+  {% if current_account_is_elevated %}
+  <p class="empty"><strong>Create a project first</strong> — every task is tied to a project.</p>
+  <a class="btn btn--primary" href="{{ url_for('projects_list') }}">Go to Projects</a>
+  {% else %}
+  <p class="empty"><strong>No projects available</strong> — you must be on a project team before you can work with tasks. Ask an administrator or super user to add you to a project.</p>
+  <a class="btn btn--primary" href="{{ url_for('projects_list') }}">View your projects</a>
+  {% endif %}
+</section>
+{% elif not has_title_presets %}
+<section class="panel">
+  <p class="empty"><strong>Add task titles</strong> under your groups in the Control panel, then return here.</p>
+  {% if current_account_is_admin %}
+  <a class="btn btn--primary" href="{{ url_for('control_panel') }}">Open Control panel</a>
+  {% else %}
+  <p class="muted">Ask an administrator to add task titles in the Control panel.</p>
+  {% endif %}
+</section>
+{% else %}
+
+<section class="panel">
+  <h2 class="panel-title">New task</h2>
+  {% set task_create_field_prefix = '' %}
+  {% set task_create_show_project_select = true %}
+  {% set task_create_next_url = '' %}
+  {% set task_create_users = users %}
+  {% include 'partials/task_create_form.html' %}
+</section>
+
+{% set du = current_account.directory_user if current_account else none %}
+{% if du %}
+{% set ns = namespace(raw=[]) %}
+{% for g in task_groups %}
+{% for t in tasks_by_group.get(g.id, []) %}
+{% if t.user_id == du.id and t.status != 'done' %}
+{% set _ = ns.raw.append(t) %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% for t in tasks_by_group.get(None, []) %}
+{% if t.user_id == du.id and t.status != 'done' %}
+{% set _ = ns.raw.append(t) %}
+{% endif %}
+{% endfor %}
+{% set urgent_list = (ns.raw|selectattr('status', 'equalto', 'in_progress')|list)|sort(attribute='created_at', reverse=true) %}
+{% set open_sorted = (ns.raw|selectattr('status', 'equalto', 'open')|list)|sort(attribute='created_at') %}
+{% set due_soon_list = open_sorted[:5] %}
+{% set active_list = open_sorted[5:] %}
+
+{{ task_stream_section(
+  'Urgent / Overdue',
+  'In progress now. When tasks have due dates, overdue work will show here too.',
+  urgent_list,
+  'Nothing in progress. You’re all caught up in this bucket.'
+) }}
+{{ task_stream_section(
+  'Due soon',
+  'Oldest open assignments (up to five) to pick up next.',
+  due_soon_list,
+  'No open tasks in this queue.'
+) }}
+{{ task_stream_section(
+  'Active tasks',
+  'Other open work assigned to you.',
+  active_list,
+  'No additional open tasks.'
+) }}
+{% else %}
+<section class="panel tasks-dashboard-panel">
+  <p class="empty empty--in-panel tasks-dashboard-empty">Your account is not linked to a directory user, so assigned tasks cannot be matched to you. Complete your profile or ask an administrator to link your login.</p>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

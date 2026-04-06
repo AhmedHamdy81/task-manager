@@ -1,0 +1,31 @@
+{% extends "auth_base.html" %}
+{% block title %}Register · {{ app_name }}{% endblock %}
+{% block content %}
+<h1 class="auth-title">Create account</h1>
+<p class="auth-sub">Your profile will appear in Users for task assignment.</p>
+
+<form class="form-stack auth-form" method="post" action="{{ url_for('register') }}">
+  <label class="field">
+    <span class="field-label">Name</span>
+    <input type="text" name="name" required autocomplete="name" autofocus placeholder="Your name">
+  </label>
+  <label class="field">
+    <span class="field-label">Email</span>
+    <input type="email" name="email" required autocomplete="email" placeholder="you@example.com">
+  </label>
+  <label class="field">
+    <span class="field-label">Password</span>
+    <input type="password" name="password" required autocomplete="new-password" minlength="8" placeholder="••••••••">
+  </label>
+  <label class="field">
+    <span class="field-label">Confirm password</span>
+    <input type="password" name="confirm" required autocomplete="new-password" minlength="8" placeholder="••••••••">
+  </label>
+  <button type="submit" class="btn btn--primary btn--block">Register</button>
+</form>
+
+<p class="auth-switch">
+  Already have an account?
+  <a href="{{ url_for('login') }}">Sign in</a>
+</p>
+{% endblock %}

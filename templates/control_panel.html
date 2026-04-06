@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Control panel · {{ app_name }}{% endblock %}
+{% block content %}
+<button type="button" class="admin-sidebar-backdrop" id="admin-sidebar-backdrop" tabindex="-1" aria-label="Close menu" hidden></button>
+<div class="admin-shell">
+  <aside class="admin-sidebar" id="admin-sidebar" aria-label="Admin navigation">
+    <div class="admin-sidebar-head">
+      <span class="admin-sidebar-label">Admin</span>
+      <p class="admin-sidebar-title">Control panel</p>
+    </div>
+    <nav class="admin-nav" role="navigation">
+      <button type="button" class="admin-nav-item is-active" data-admin-nav="task-groups" aria-current="page">Task groups</button>
+      <button type="button" class="admin-nav-item" data-admin-nav="task-titles">Task titles</button>
+      <button type="button" class="admin-nav-item" data-admin-nav="job-titles">Job titles</button>
+      {% if current_account_is_admin %}
+      <a href="{{ url_for('users_list') }}" class="admin-nav-item admin-nav-item--link">Users</a>
+      {% endif %}
+      <span class="admin-nav-item admin-nav-item--placeholder" aria-disabled="true">Settings <span class="admin-nav-soon">Soon</span></span>
+    </nav>
+  </aside>
+
+  <div class="admin-main">
+    <div class="admin-main-toolbar">
+      <button type="button" class="admin-sidebar-toggle" id="admin-sidebar-toggle" aria-expanded="false" aria-controls="admin-sidebar">
+        <span class="admin-sidebar-toggle-icon" aria-hidden="true"></span>
+        <span class="sr-only">Sections menu</span>
+      </button>
+      <a class="admin-back-link" href="{{ url_for('tasks_list') }}">← Back to Tasks</a>
+    </div>
+
+    <div class="admin-panel-stack" id="admin-panel-stack">
+      {# —— Task groups —— #}
+      <div class="admin-section" data-admin-panel="task-groups">
+        <header class="admin-section-head">
+          <h1 class="admin-section-title">Task groups</h1>
+          <p class="muted admin-section-lead">Create and order groups. On the Tasks page, users pick a group first, then a title within that group.</p>
+        </header>
+
+        <section class="panel admin-card">
+          <h2 class="panel-title">Add task group</h2>
+          <form class="form-row" method="post" action="{{ url_for('control_groups_new') }}">
+            <label class="field field--grow">
+              <span class="field-label">Group name</span>
+              <input type="text" name="name" required maxlength="120" placeholder="e.g. Compositing">
+            </label>
+            <button type="submit" class="btn btn--primary">Add group</button>
+          </form>
+        </section>
+
+        {% for g in groups %}
+        <section class="panel admin-card control-group-panel">
+          <div class="control-group-head">
+            <form class="control-rename-form" method="post" action="{{ url_for('control_groups_rename', group_id=g.id) }}">
+              <label class="field field--inline">
+                <span class="field-label sr-only">Group name</span>
+                <input type="text" name="name" value="{{ g.name }}" required maxlength="120" class="input-rename">
+              </label>
+              <button type="submit" class="btn btn--small">Save name</button>
+            </form>
+            <div class="control-group-actions">
+              <form method="post" action="{{ url_for('control_groups_move', group_id=g.id) }}" class="inline">
+                <input type="hidden" name="direction" value="up">
+                <button type="submit" class="btn btn--small" {% if loop.first %}disabled{% endif %} title="Move up">↑</button>
+              </form>
+              <form method="post" action="{{ url_for('control_groups_move', group_id=g.id) }}" class="inline">
+                <input type="hidden" name="direction" value="down">
+                <button type="submit" class="btn btn--small" {% if loop.last %}disabled{% endif %} title="Move down">↓</button>
+              </form>
+              <form method="post" action="{{ url_for('control_groups_delete', group_id=g.id) }}" class="inline" data-confirm="{{ ('Are you sure you want to delete the group “' ~ g.name ~ '”, all of its task title presets, and uncategorize existing tasks in that group? This cannot be undone.')|e }}">
+                <button type="submit" class="btn btn--small btn--danger">Delete group</button>
+              </form>
+            </div>
+          </div>
+        </section>
+        {% endfor %}
+
+        {% if not groups %}
+        <section class="panel admin-card">
+          <p class="empty">No task groups yet. Create one above.</p>
+        </section>
+        {% endif %}
+      </div>
+
+      {# —— Task titles (per group) —— #}
+      <div class="admin-section" data-admin-panel="task-titles" hidden>
+        <header class="admin-section-head">
+          <h1 class="admin-section-title">Task titles</h1>
+          <p class="muted admin-section-lead">Preset titles inside each group. These appear when creating tasks.</p>
+        </header>
+
+        {% for g in groups %}
+        <section class="panel admin-card control-group-panel">
+          <h2 class="panel-title admin-group-heading">{{ g.name }}</h2>
+          <div class="control-tasks-block">
+            <h3 class="control-subtitle">Titles in this group</h3>
+            {% set gpresets = presets_by_group.get(g.id, []) %}
+            {% if gpresets %}
+            <ul class="control-task-list">
+              {% for pt in gpresets %}
+              <li class="control-task-row">
+                <span class="control-task-title">{{ pt.title }}</span>
+                {% if pt.description %}<span class="control-task-desc">{{ pt.description }}</span>{% endif %}
+                <form method="post" action="{{ url_for('control_title_delete', title_id=pt.id) }}" class="inline" data-confirm="{{ ('Remove the task title “' ~ pt.title ~ '” from this group? Tasks already created from this title are not deleted.')|e }}">
+                  <button type="submit" class="btn btn--small btn--danger">Remove</button>
+                </form>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="empty empty--tight">No task titles yet. Add one below.</p>
+            {% endif %}
+
+            <form class="form-stack control-add-task" method="post" action="{{ url_for('control_title_new') }}">
+              <input type="hidden" name="group_id" value="{{ g.id }}">
+              <h4 class="control-single-title">Add a title</h4>
+              <div class="form-row form-row--tight">
+                <label class="field field--grow">
+                  <span class="field-label">Task title</span>
+                  <input type="text" name="title" required maxlength="200" placeholder="Task name">
+                </label>
+              </div>
+              <label class="field">
+                <span class="field-label">Description (optional)</span>
+                <textarea name="description" rows="2" placeholder="Default notes when this title is used"></textarea>
+              </label>
+              <button type="submit" class="btn btn--ghost">Add one title</button>
+            </form>
+          </div>
+        </section>
+        {% endfor %}
+
+        {% if not groups %}
+        <section class="panel admin-card">
+          <p class="empty">No task groups yet. Add a group under <strong>Task groups</strong> first.</p>
+        </section>
+        {% endif %}
+      </div>
+
+      {# —— Job titles —— #}
+      <div class="admin-section" data-admin-panel="job-titles" hidden>
+        <header class="admin-section-head">
+          <h1 class="admin-section-title">Job titles</h1>
+          <p class="muted admin-section-lead">Directory roles (e.g. Editor, Colorist) for user profiles. Separate from task groups and task titles.</p>
+        </header>
+
+        <section class="panel admin-card">
+          {% if job_titles %}
+          <ul class="control-task-list">
+            {% for jt in job_titles %}
+            <li class="control-task-row control-job-title-row">
+              <form class="control-job-title-rename form-row form-row--tight" method="post" action="{{ url_for('control_job_title_rename', job_title_id=jt.id) }}">
+                <label class="field field--grow field--inline">
+                  <span class="field-label sr-only">Job title name</span>
+                  <input type="text" name="name" value="{{ jt.name }}" required maxlength="120" class="input-rename">
+                </label>
+                <button type="submit" class="btn btn--small">Save</button>
+              </form>
+              <form method="post" action="{{ url_for('control_job_title_delete', job_title_id=jt.id) }}" class="inline" data-confirm="{{ ('Delete the job title “' ~ jt.name ~ '”? Users who selected it will have no job title.')|e }}">
+                <button type="submit" class="btn btn--small btn--danger">Delete</button>
+              </form>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="empty empty--tight">No job titles yet. Add one below.</p>
+          {% endif %}
+          <form class="form-row control-job-title-add" method="post" action="{{ url_for('control_job_title_new') }}">
+            <label class="field field--grow">
+              <span class="field-label">New job title</span>
+              <input type="text" name="name" required maxlength="120" placeholder="e.g. Colorist">
+            </label>
+            <button type="submit" class="btn btn--primary">Add</button>
+          </form>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/control-panel.js') }}" defer></script>
+{% endblock %}

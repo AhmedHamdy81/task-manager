@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Users · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Users</h1>
+  <p class="muted">People who <strong>register</strong> appear here automatically. <strong>Administrators</strong> can set account type (including Super user) and <strong>job title</strong> for each user. Add others below for collaborators without a login. Deleting removes their tasks; <strong>registered</strong> rows cannot be deleted here.</p>
+</div>
+
+<section class="panel">
+  <h2 class="panel-title">Add external user</h2>
+  <form class="form-row" method="post" action="{{ url_for('users_create') }}">
+    <label class="field">
+      <span class="field-label">Name</span>
+      <input type="text" name="name" required autocomplete="name" placeholder="Jane Doe">
+    </label>
+    <label class="field">
+      <span class="field-label">Email</span>
+      <input type="email" name="email" required autocomplete="email" placeholder="jane@example.com">
+    </label>
+    <button type="submit" class="btn btn--primary">Create</button>
+  </form>
+</section>
+
+<section class="panel panel--table">
+  {% if users %}
+  <table class="data-table data-table--users">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Email</th>
+        <th scope="col">Job title</th>
+        <th scope="col">Account</th>
+        <th scope="col">Role</th>
+        <th scope="col">Tasks</th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>
+          <form id="edit-user-{{ u.id }}" method="post" action="{{ url_for('users_update', user_id=u.id) }}"></form>
+          <input form="edit-user-{{ u.id }}" type="text" name="name" value="{{ u.name }}" required class="input-inline">
+        </td>
+        <td>
+          <input form="edit-user-{{ u.id }}" type="email" name="email" value="{{ u.email }}" required class="input-inline" {% if u.account_id %}title="Linked to login — email stays in sync with the account"{% endif %}>
+        </td>
+        <td>
+          <form method="post" action="{{ url_for('users_set_job_title', user_id=u.id) }}" class="role-form">
+            <label class="sr-only" for="job-title-{{ u.id }}">Job title for {{ u.name }}</label>
+            <select name="job_title_id" id="job-title-{{ u.id }}" class="role-select" title="Job title" onchange="this.form.submit()">
+              <option value="">— None —</option>
+              {% for jt in job_titles %}
+              <option value="{{ jt.id }}"{% if u.job_title_id == jt.id %} selected{% endif %}>{{ jt.name }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </td>
+        <td>
+          {% if u.account_id %}
+          <span class="badge badge--registered">Registered</span>
+          {% else %}
+          <span class="badge badge--muted">External</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if u.account_id and u.account %}
+            {% if current_account_is_admin %}
+            <form method="post" action="{{ url_for('users_set_role', user_id=u.id) }}" class="role-form">
+              <label class="sr-only" for="role-{{ u.id }}">Role for {{ u.name }}</label>
+              <select name="role" id="role-{{ u.id }}" class="role-select" onchange="this.form.submit()">
+                {% for r in account_roles %}
+                <option value="{{ r }}" {% if u.account.role == r %}selected{% endif %}>{{ role_labels[r] }}</option>
+                {% endfor %}
+              </select>
+            </form>
+            {% else %}
+            <span class="badge badge--role">{{ role_labels.get(u.account.role, u.account.role) }}</span>
+            {% endif %}
+          {% else %}
+          <span class="muted-table">—</span>
+          {% endif %}
+        </td>
+        <td><span class="badge">{{ u.tasks|length }}</span></td>
+        <td class="actions">
+          <button form="edit-user-{{ u.id }}" type="submit" class="btn btn--small">Save</button>
+          {% if not u.account_id %}
+          <form method="post" action="{{ url_for('users_delete', user_id=u.id) }}" class="inline danger-form" data-confirm="{{ ('Are you sure you want to delete ' ~ u.name ~ '? All of their tasks will be removed. This cannot be undone.')|e }}">
+            <button type="submit" class="btn btn--small btn--danger">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No users yet. Add someone above.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}{{ account.display_name }} · Profile · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head profile-page-head">
+  <div class="profile-head-preview">
+    <span class="profile-preview-ring">
+      <img src="{{ current_account_avatar_url or url_for('static', filename='avatars/preset-01.svg') }}" alt="" class="profile-preview-avatar" width="112" height="112">
+    </span>
+  </div>
+  <div class="profile-head-text">
+    <h1 class="profile-title-name">{{ account.display_name }}</h1>
+  </div>
+</div>
+
+<section class="panel profile-panel">
+  <h2 class="panel-title">Account details</h2>
+  <form class="form-stack profile-form" method="post" action="{{ url_for('profile') }}" enctype="multipart/form-data">
+    <input type="hidden" name="action" value="profile">
+    <label class="field">
+      <span class="field-label">Full name</span>
+      <input type="text" name="name" required maxlength="120" autocomplete="name" value="{{ directory_user.name if directory_user else '' }}" placeholder="Your full name">
+    </label>
+    <label class="field">
+      <span class="field-label">Email</span>
+      <input type="email" name="email" required autocomplete="email" value="{{ account.email }}" placeholder="you@example.com">
+    </label>
+    <label class="field">
+      <span class="field-label">Phone</span>
+      <input type="tel" name="phone" maxlength="40" autocomplete="tel" value="{{ directory_user.phone if directory_user and directory_user.phone else '' }}" placeholder="Optional">
+    </label>
+    <label class="field">
+      <span class="field-label">Job title</span>
+      <select name="job_title_id" aria-label="Job title">
+        <option value="">— None —</option>
+        {% for jt in job_titles %}
+        <option value="{{ jt.id }}"{% if directory_user and directory_user.job_title_id == jt.id %} selected{% endif %}>{{ jt.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if account.username %}
+    <p class="profile-readonly">
+      <span class="field-label">Username</span>
+      <span class="profile-readonly-value profile-readonly-mono">@{{ account.username }}</span>
+      <span class="muted profile-readonly-hint">Used to sign in instead of email.</span>
+    </p>
+    {% endif %}
+
+    <div class="profile-photo-card">
+      <div class="profile-photo-card-head">
+        <h3 class="profile-photo-card-title">Profile photo</h3>
+        <p class="profile-photo-card-sub muted">This image appears beside your name in the top bar.</p>
+      </div>
+
+      <div class="profile-segmented" role="radiogroup" aria-label="How to set your photo">
+        <label class="profile-segment">
+          <input type="radio" name="avatar_source" value="preset" class="profile-segment-input profile-avatar-source-input"{% if not directory_user or directory_user.avatar_kind != 'upload' %} checked{% endif %}>
+          <span class="profile-segment-label">Gallery</span>
+        </label>
+        <label class="profile-segment">
+          <input type="radio" name="avatar_source" value="upload" class="profile-segment-input profile-avatar-source-input"{% if directory_user and directory_user.avatar_kind == 'upload' %} checked{% endif %}>
+          <span class="profile-segment-label">Upload</span>
+        </label>
+      </div>
+
+      <div class="profile-gallery-rail-wrap">
+        <div class="profile-gallery-rail" id="profile-preset-grid">
+          {% for pid in preset_avatar_ids %}
+          <label class="profile-gallery-item">
+            <input type="radio" name="avatar_preset" value="{{ pid }}" class="profile-gallery-input profile-preset-input"{% if profile_active_preset == pid %} checked{% endif %}>
+            <span class="profile-gallery-face" title="Avatar {{ pid }}">
+              <span class="profile-gallery-img">
+                <img src="{{ url_for('static', filename='avatars/preset-' ~ pid ~ '.svg') }}" alt="" width="64" height="64">
+              </span>
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="profile-upload-panel" id="profile-upload-wrap">
+        <label class="profile-dropzone" id="profile-dropzone">
+          <span class="profile-dropzone-body">
+            <svg class="profile-dropzone-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <span class="profile-dropzone-title">Drop an image here or <em>browse</em></span>
+            <span class="profile-dropzone-meta">PNG, JPG, GIF or WebP · up to 2&nbsp;MB</span>
+          </span>
+          <input type="file" name="avatar_file" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" class="profile-file-input profile-dropzone-input">
+        </label>
+        {% if directory_user and directory_user.avatar_kind == 'upload' %}
+        <p class="profile-upload-status muted">You’re on a custom upload. Pick a new file to replace it, or switch to the gallery.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn--primary">Save profile</button>
+  </form>
+</section>
+
+<section class="panel profile-panel">
+  <h2 class="panel-title">Change password</h2>
+  <p class="muted profile-password-intro">Leave this section alone if you only want to update your profile.</p>
+  <form class="form-stack profile-form profile-form--narrow" method="post" action="{{ url_for('profile') }}">
+    <input type="hidden" name="action" value="password">
+    <label class="field">
+      <span class="field-label">Current password</span>
+      <input type="password" name="current_password" autocomplete="current-password" required placeholder="••••••••">
+    </label>
+    <label class="field">
+      <span class="field-label">New password</span>
+      <input type="password" name="new_password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters">
+    </label>
+    <label class="field">
+      <span class="field-label">Confirm new password</span>
+      <input type="password" name="confirm_password" autocomplete="new-password" required minlength="8" placeholder="Repeat new password">
+    </label>
+    <button type="submit" class="btn btn--primary">Update password</button>
+  </form>
+</section>
+
+<p class="profile-page-foot muted">Your name and photo appear in the header. Sign-in still uses your email{% if account.username %} or @{{ account.username }}{% endif %}.</p>
+
+<script>
+(function () {
+  var presets = document.getElementById('profile-preset-grid');
+  var uploadWrap = document.getElementById('profile-upload-wrap');
+  var sourceInputs = document.querySelectorAll('.profile-avatar-source-input');
+  if (!sourceInputs.length) return;
+  function sync() {
+    var presetRadio = document.querySelector('.profile-avatar-source-input[value="preset"]');
+    var uploadRadio = document.querySelector('.profile-avatar-source-input[value="upload"]');
+    var usePreset = presetRadio && presetRadio.checked;
+    if (uploadWrap) uploadWrap.classList.toggle('profile-upload-panel--visible', uploadRadio && uploadRadio.checked);
+    var railWrap = presets ? presets.parentElement : null;
+    if (railWrap && railWrap.classList.contains('profile-gallery-rail-wrap')) {
+      railWrap.classList.toggle('profile-gallery-rail-wrap--visible', usePreset);
+    }
+    if (presets && usePreset) {
+      var c = presets.querySelector('.profile-gallery-input:checked');
+      if (!c) {
+        var d = presets.querySelector('.profile-gallery-input[value="01"]');
+        if (d) d.checked = true;
+      }
+    }
+  }
+  sourceInputs.forEach(function (el) { el.addEventListener('change', sync); });
+  document.querySelectorAll('.profile-gallery-item').forEach(function (label) {
+    label.addEventListener('click', function () {
+      var pr = document.querySelector('.profile-avatar-source-input[value="preset"]');
+      if (pr) pr.checked = true;
+      sync();
+    });
+  });
+  var fi = document.querySelector('.profile-file-input');
+  if (fi) {
+    fi.addEventListener('change', function () {
+      if (fi.files && fi.files.length) {
+        var ur = document.querySelector('.profile-avatar-source-input[value="upload"]');
+        if (ur) ur.checked = true;
+        sync();
+      }
+    });
+  }
+  var dz = document.getElementById('profile-dropzone');
+  if (dz && fi) {
+    ;['dragenter', 'dragover'].forEach(function (ev) {
+      dz.addEventListener(ev, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dz.classList.add('profile-dropzone--drag');
+      });
+    });
+    ;['dragleave', 'drop'].forEach(function (ev) {
+      dz.addEventListener(ev, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        dz.classList.remove('profile-dropzone--drag');
+      });
+    });
+    dz.addEventListener('drop', function (e) {
+      var dt = e.dataTransfer;
+      if (!dt || !dt.files || !dt.files.length) return;
+      var f = dt.files[0];
+      if (!f.type || f.type.indexOf('image/') !== 0) return;
+      var dtr = new DataTransfer();
+      dtr.items.add(f);
+      fi.files = dtr.files;
+      var ur = document.querySelector('.profile-avatar-source-input[value="upload"]');
+      if (ur) ur.checked = true;
+      sync();
+    });
+  }
+  sync();
+})();
+</script>
+{% endblock %}

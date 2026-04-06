@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Overview · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>{{ app_name }}</h1>
+  <p class="lede">Post-production pipeline: directory, assignments, and task groups.</p>
+</section>
+
+<section class="cards">
+  <article class="card card--accent">
+    <h2>Projects</h2>
+    <p class="card-stat">{{ project_count }}</p>
+    <p class="card-meta">productions on file</p>
+    <a class="btn btn--ghost" href="{{ url_for('projects_list') }}">Manage projects</a>
+  </article>
+  {% if current_account_is_admin %}
+  <article class="card">
+    <h2>Users</h2>
+    <p class="card-stat">{{ user_count }}</p>
+    <p class="card-meta">people in the directory</p>
+    <a class="btn btn--ghost" href="{{ url_for('users_list') }}">Manage users</a>
+  </article>
+  {% endif %}
+  <article class="card">
+    <h2>Open</h2>
+    <p class="card-stat">{{ open_tasks }}</p>
+    <p class="card-meta">still open</p>
+    <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">Triage</a>
+  </article>
+  <article class="card">
+    <h2>Tasks</h2>
+    <p class="card-stat">{{ task_count }}</p>
+    <p class="card-meta">total tasks</p>
+    <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">View tasks</a>
+  </article>
+</section>
+{% endblock %}

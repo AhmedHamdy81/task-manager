@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Completed tasks · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
+  <h1>Completed tasks</h1>
+  <p class="muted">{{ project.name }}</p>
+</div>
+
+<section class="panel project-completed-panel">
+  {% if completed_tasks %}
+  <label class="project-completed-search-label" for="project-completed-search">
+    <span class="sr-only">Search completed tasks by title or user</span>
+    <input type="search" id="project-completed-search" class="input project-completed-search-input" placeholder="Search by task or user…" autocomplete="off">
+  </label>
+  <div class="project-completed-stream" id="project-completed-list" role="list">
+    {% for t in completed_tasks %}
+    <article class="project-completed-item" role="listitem" data-task-search="{{ (t.title ~ ' ' ~ (t.assignee.name if t.assignee else ''))|lower|e }}">
+      <div class="project-completed-item-body">
+        <h3 class="project-completed-item-title">{{ t.title }}</h3>
+        <p class="project-completed-item-meta">
+          <span class="project-completed-item-user">
+            {% if t.assignee %}
+            <span class="project-completed-item-user-label">Assigned to</span>
+            <span class="project-completed-item-user-name">{{ t.assignee.name }}</span>
+            {% else %}
+            <span class="project-completed-item-user-label">User</span>
+            <span class="project-completed-item-user-name project-completed-item-user-name--empty">—</span>
+            {% endif %}
+          </span>
+          <span class="project-completed-item-meta-sep" aria-hidden="true">·</span>
+          <span>Created {% if t.created_at %}{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</span>
+          <span class="project-completed-item-meta-sep" aria-hidden="true">·</span>
+          <span>Completed {% if t.completed_at %}{{ t.completed_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</span>
+        </p>
+      </div>
+      {% if current_account_is_elevated %}
+      <div class="project-completed-item-action">
+        {% if can_delete_task(t) %}
+        <form method="post" action="{{ url_for('tasks_delete', task_id=t.id) }}" class="inline project-completed-delete-form" data-confirm="{{ ('Delete the completed task “' ~ t.title ~ '”? This cannot be undone.')|e }}">
+          <input type="hidden" name="next" value="{{ url_for('project_completed_tasks', project_id=project.id) }}">
+          <button type="submit" class="btn btn--small btn--danger">Delete</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  <script>
+  (function () {
+    var input = document.getElementById('project-completed-search');
+    var list = document.getElementById('project-completed-list');
+    if (!input || !list) return;
+    input.addEventListener('input', function () {
+      var q = (input.value || '').trim().toLowerCase();
+      list.querySelectorAll('.project-completed-item[data-task-search]').forEach(function (row) {
+        var hay = (row.getAttribute('data-task-search') || '').toLowerCase();
+        row.hidden = !!(q && hay.indexOf(q) === -1);
+      });
+    });
+  })();
+  </script>
+  {% else %}
+  <p class="empty empty--tight">No completed tasks for this project yet.</p>
+  {% endif %}
+</section>
+
+<p class="panel-after-link"><a href="{{ url_for('project_detail', project_id=project.id) }}">← Back to project</a></p>
+{% endblock %}

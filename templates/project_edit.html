@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ project.name|e }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
+  <h1>Edit project</h1>
+  <p class="muted">Update name, type, production house, and director.</p>
+</div>
+
+<section class="panel">
+  <form class="form-stack project-form" method="post" action="{{ url_for('project_edit', project_id=project.id) }}">
+    <div class="form-row project-form-row">
+      <label class="field field--grow">
+        <span class="field-label">Project name</span>
+        <input type="text" name="name" required maxlength="200" value={{ (project.name or '')|tojson }} autocomplete="off">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Project type</span>
+        <input type="text" name="project_type" required maxlength="120" value={{ (project.project_type or '')|tojson }} list="project-type-suggestions" autocomplete="off">
+      </label>
+    </div>
+    <datalist id="project-type-suggestions">
+      <option value="Feature film">
+      <option value="Commercial">
+      <option value="TV series">
+      <option value="Documentary">
+      <option value="Music video">
+      <option value="Short film">
+    </datalist>
+    <div class="form-row project-form-row">
+      <label class="field field--grow">
+        <span class="field-label">Production house</span>
+        <input type="text" name="production_house" required maxlength="200" value={{ (project.production_house or '')|tojson }} autocomplete="organization">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Director</span>
+        <input type="text" name="director" required maxlength="200" value={{ (project.director or '')|tojson }} autocomplete="name">
+      </label>
+    </div>
+    <div class="form-actions-row">
+      <button type="submit" class="btn btn--primary">Save changes</button>
+      <a class="btn btn--ghost" href="{{ url_for('project_detail', project_id=project.id) }}">Cancel</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

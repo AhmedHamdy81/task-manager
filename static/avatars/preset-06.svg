@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Avatar">
+  <defs><linearGradient id="g6" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#4a9eb8"/><stop offset="100%" style="stop-color:#1e4a5c"/></linearGradient></defs>
+  <circle cx="64" cy="64" r="64" fill="url(#g6)"/>
+  <ellipse cx="64" cy="56" rx="30" ry="24" fill="rgba(255,255,255,0.9)"/>
+  <ellipse cx="64" cy="102" rx="40" ry="22" fill="rgba(255,255,255,0.9)"/>
+</svg>

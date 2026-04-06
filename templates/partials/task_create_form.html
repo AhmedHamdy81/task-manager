@@ -1,0 +1,106 @@
+{# Shared new-task form: set task_create_field_prefix, task_create_show_project_select,
+   task_create_fixed_project_id (when select hidden), task_create_next_url (optional),
+   task_create_users, then include. Expects task_groups, titles_by_group, user_project_ids,
+   and projects (when task_create_show_project_select). #}
+<form id="{{ task_create_field_prefix }}new-task-form" class="form-stack" method="post" action="{{ url_for('tasks_create') }}">
+  {% if task_create_next_url %}
+  <input type="hidden" name="next" value="{{ task_create_next_url }}">
+  {% endif %}
+  <label class="field">
+    <span class="field-label">Task group</span>
+    <select name="group_id" id="{{ task_create_field_prefix }}task-form-group" required>
+      {% for g in task_groups %}
+      <option value="{{ g.id }}">{{ g.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field">
+    <span class="field-label">Task title</span>
+    <select name="preset_id" id="{{ task_create_field_prefix }}task-form-preset" required>
+      <option value="" disabled selected>Choose a title…</option>
+      {% for g in task_groups %}
+      {% for pt in titles_by_group.get(g.id, []) %}
+      <option value="{{ pt.id }}" data-group-id="{{ g.id }}">{{ pt.title }}</option>
+      {% endfor %}
+      {% endfor %}
+    </select>
+  </label>
+  {% if task_create_show_project_select %}
+  <label class="field">
+    <span class="field-label">Project</span>
+    <select name="project_id" id="{{ task_create_field_prefix }}task-form-project" required>
+      <option value="" disabled selected>Choose project…</option>
+      {% for p in projects %}
+      <option value="{{ p.id }}">{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% else %}
+  <input type="hidden" name="project_id" value="{{ task_create_fixed_project_id }}">
+  {% endif %}
+  <label class="field">
+    <span class="field-label">Assign to</span>
+    <select name="user_id" id="{{ task_create_field_prefix }}task-form-user" required>
+      <option value="" disabled selected>Choose user on this project…</option>
+      {% for u in task_create_users %}
+      <option value="{{ u.id }}" data-projects="{{ user_project_ids.get(u.id, [])|join(',') }}">{{ u.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field">
+    <span class="field-label">Extra notes (optional)</span>
+    <textarea name="description" rows="2" placeholder="Appended to the preset’s default description"></textarea>
+  </label>
+  <button type="submit" class="btn btn--primary">Create task</button>
+</form>
+<script>
+(function () {
+  var groupEl = document.getElementById("{{ task_create_field_prefix }}task-form-group");
+  var presetEl = document.getElementById("{{ task_create_field_prefix }}task-form-preset");
+  var projectEl = document.getElementById("{{ task_create_field_prefix }}task-form-project");
+  var userEl = document.getElementById("{{ task_create_field_prefix }}task-form-user");
+  if (!groupEl || !presetEl) return;
+  function syncPresets() {
+    var gid = groupEl.value;
+    presetEl.querySelectorAll("option").forEach(function (opt) {
+      if (!opt.value) {
+        opt.hidden = false;
+        opt.disabled = false;
+        return;
+      }
+      var match = String(opt.getAttribute("data-group-id")) === String(gid);
+      opt.hidden = !match;
+      opt.disabled = !match;
+    });
+    presetEl.value = "";
+  }
+  function syncAssignees() {
+    if (!userEl) return;
+    {% if task_create_show_project_select %}
+    if (!projectEl) return;
+    var pid = projectEl.value;
+    {% else %}
+    var pid = String({{ task_create_fixed_project_id }});
+    {% endif %}
+    userEl.querySelectorAll("option").forEach(function (opt) {
+      if (!opt.value) {
+        opt.hidden = false;
+        opt.disabled = false;
+        return;
+      }
+      var raw = opt.getAttribute("data-projects") || "";
+      var ids = raw.split(",").filter(function (x) { return x.length; });
+      var ok = pid && ids.indexOf(String(pid)) >= 0;
+      opt.hidden = !ok;
+      opt.disabled = !ok;
+    });
+    userEl.value = "";
+  }
+  groupEl.addEventListener("change", syncPresets);
+  {% if task_create_show_project_select %}
+  if (projectEl) projectEl.addEventListener("change", syncAssignees);
+  {% endif %}
+  syncPresets();
+  syncAssignees();
+})();
+</script>

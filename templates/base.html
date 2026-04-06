@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <div class="header-primary">
+        <button type="button" class="site-nav-toggle" id="site-nav-toggle" aria-expanded="false" aria-controls="site-main-nav" aria-label="Open menu">
+          <span class="site-nav-toggle-bars" aria-hidden="true"></span>
+        </button>
+        <a class="logo" href="{{ url_for('index') }}">{{ app_name }}</a>
+      </div>
+      <nav class="nav nav--main" id="site-main-nav">
+        <a href="{{ url_for('index') }}" class="nav-link{% if request.endpoint == 'index' %} nav-link--active{% endif %}">Overview</a>
+        <a href="{{ url_for('projects_list') }}" class="nav-link{% if request.endpoint and (request.endpoint.startswith('projects_') or request.endpoint == 'project_detail' or request.endpoint == 'project_completed_tasks' or request.endpoint == 'project_edit' or request.endpoint in ('project_members_add', 'project_member_remove')) %} nav-link--active{% endif %}">Projects</a>
+        {% if current_account_is_admin %}
+        <a href="{{ url_for('users_list') }}" class="nav-link{% if request.endpoint == 'users_list' %} nav-link--active{% endif %}">Users</a>
+        {% endif %}
+        <a href="{{ url_for('tasks_list') }}" class="nav-link{% if request.endpoint == 'tasks_list' %} nav-link--active{% endif %}">Tasks</a>
+        {% if current_account_is_admin %}
+        <a href="{{ url_for('control_panel') }}" class="nav-link{% if request.endpoint and request.endpoint.startswith('control_') %} nav-link--active{% endif %}">Control panel</a>
+        {% endif %}
+      </nav>
+      {% if current_account %}
+      <div class="header-account">
+        <a href="{{ url_for('profile') }}" class="header-account-profile-link" title="Profile · {{ current_account.email }}{% if current_account.username %} · @{{ current_account.username }}{% endif %} · {{ role_labels.get(current_account.role, current_account.role) }}">
+          {% if current_account_avatar_url %}
+          <img src="{{ current_account_avatar_url }}" alt="" class="header-account-avatar" width="36" height="36" loading="lazy">
+          {% endif %}
+          <span class="header-account-name">{{ current_account.display_name }}</span>
+        </a>
+        <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+          <button type="submit" class="btn btn--small btn--ghost btn--header">Sign out</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+  <button type="button" class="site-nav-backdrop" id="site-nav-backdrop" tabindex="-1" aria-hidden="true" hidden></button>
+
+  <main class="wrap main">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flash-list" role="status">
+          {% for category, message in messages %}
+            <li class="flash flash--{{ category }}">{{ message }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <span>{{ app_name }} · staff workspace</span>
+    </div>
+  </footer>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+        form.addEventListener('submit', function (e) {
+          var msg = form.getAttribute('data-confirm');
+          if (!msg) return;
+          if (!window.confirm(msg)) e.preventDefault();
+        });
+      });
+      document.querySelectorAll('form.status-form').forEach(function (form) {
+        var sel = form.querySelector('select[name="status"]');
+        if (!sel) return;
+        sel.dataset.lastCommitted = sel.value;
+        sel.addEventListener('change', function () {
+          var label = (sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].text) || '';
+          label = label.replace(/^\s+|\s+$/g, '');
+          var prompt = 'Update task status to \u201c' + label + '\u201d?';
+          if (!window.confirm(prompt)) {
+            sel.value = sel.dataset.lastCommitted;
+            return;
+          }
+          sel.dataset.lastCommitted = sel.value;
+          form.submit();
+        });
+      });
+    });
+  </script>
+  {% if current_account %}
+  <div id="realtime-toast-host" class="realtime-toast-host" aria-live="polite" aria-relevant="additions" data-socket-token="{{ socket_connect_token }}"></div>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  <script src="{{ url_for('static', filename='js/realtime.js') }}" defer></script>
+  {% endif %}
+  <script src="{{ url_for('static', filename='js/site-nav.js') }}" defer></script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

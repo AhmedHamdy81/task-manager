@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% block title %}Projects · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Project management</h1>
+  <p class="muted">{% if current_account_is_elevated %}Create and track productions: title, type, production company, and director.{% else %}Projects you are on appear here. Ask an administrator or super user to add you to a project or to create a new one.{% endif %}</p>
+</div>
+
+{% if current_account_is_elevated %}
+<section class="panel">
+  <h2 class="panel-title">New project</h2>
+  <form class="form-stack project-form" method="post" action="{{ url_for('projects_create') }}">
+    <div class="form-row project-form-row">
+      <label class="field field--grow">
+        <span class="field-label">Project name</span>
+        <input type="text" name="name" required maxlength="200" placeholder="Working title or deliverable name" autocomplete="off">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Project type</span>
+        <input type="text" name="project_type" required maxlength="120" placeholder="e.g. Feature, Commercial, Series" list="project-type-suggestions" autocomplete="off">
+      </label>
+    </div>
+    <datalist id="project-type-suggestions">
+      <option value="Feature film">
+      <option value="Commercial">
+      <option value="TV series">
+      <option value="Documentary">
+      <option value="Music video">
+      <option value="Short film">
+    </datalist>
+    <div class="form-row project-form-row">
+      <label class="field field--grow">
+        <span class="field-label">Production house</span>
+        <input type="text" name="production_house" required maxlength="200" placeholder="Company or client production entity" autocomplete="organization">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Director</span>
+        <input type="text" name="director" required maxlength="200" placeholder="Director name" autocomplete="name">
+      </label>
+    </div>
+    <button type="submit" class="btn btn--primary">Create project</button>
+  </form>
+</section>
+{% endif %}
+
+<section class="panel panel--table panel--projects-directory">
+  {% if projects %}
+  <div class="projects-table-toolbar">
+    <div class="projects-toolbar-inner">
+      <div class="projects-toolbar-label">
+        <h2 class="projects-toolbar-title">All projects</h2>
+        <p class="projects-toolbar-hint muted">Filter and sort the list below.</p>
+      </div>
+      <div class="projects-search-field">
+        <svg class="projects-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"/>
+          <path d="M21 21l-4.3-4.3"/>
+        </svg>
+        <label class="sr-only" for="projects-search">Search by project name</label>
+        <input type="search" id="projects-search" class="projects-search-input" name="projects_q" placeholder="Search by name…" autocomplete="off" aria-controls="projects-data-table">
+      </div>
+    </div>
+  </div>
+  <div class="projects-table-scroll">
+  <table id="projects-data-table" class="data-table data-table--projects{% if current_account_is_elevated %} project-sortable{% endif %}">
+    <thead>
+      <tr>
+        {% if current_account_is_elevated %}
+        <th scope="col" class="col-drag"><span class="sr-only">Reorder</span></th>
+        {% endif %}
+        <th scope="col">
+          <button type="button" class="th-sort" data-sort="name">Project name<span class="sort-indicator" aria-hidden="true"></span></button>
+        </th>
+        <th scope="col">
+          <button type="button" class="th-sort" data-sort="type">Type<span class="sort-indicator" aria-hidden="true"></span></button>
+        </th>
+        <th scope="col">
+          <button type="button" class="th-sort" data-sort="production">Production house<span class="sort-indicator" aria-hidden="true"></span></button>
+        </th>
+        <th scope="col">
+          <button type="button" class="th-sort" data-sort="director">Director<span class="sort-indicator" aria-hidden="true"></span></button>
+        </th>
+        <th scope="col">
+          <button type="button" class="th-sort" data-sort="date">Added<span class="sort-indicator" aria-hidden="true"></span></button>
+        </th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in projects %}
+      <tr{% if current_account_is_elevated %} data-project-id="{{ p.id }}"{% endif %}>
+        {% if current_account_is_elevated %}
+        <td class="col-drag">
+          <span class="drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">⋮⋮</span>
+        </td>
+        {% endif %}
+        <td class="col-name"><strong><a href="{{ url_for('project_detail', project_id=p.id) }}">{{ p.name }}</a></strong></td>
+        <td class="col-type">{{ p.project_type }}</td>
+        <td class="col-production">{{ p.production_house }}</td>
+        <td class="col-director">{{ p.director }}</td>
+        <td class="col-date" data-sort="{{ p.created_at.strftime('%Y-%m-%d') }}"><span class="table-date">{{ p.created_at.strftime('%Y-%m-%d') }}</span></td>
+        <td class="actions">
+          <div class="projects-row-actions">
+            <a href="{{ url_for('project_completed_tasks', project_id=p.id) }}" class="btn btn--small btn--ghost">Completed tasks</a>
+            {% if current_account_is_admin %}
+            <form method="post" action="{{ url_for('projects_delete', project_id=p.id) }}" class="inline" data-confirm="{{ ('Are you sure you want to delete the project “' ~ p.name ~ '”? This cannot be undone.')|e }}">
+              <button type="submit" class="btn btn--small btn--danger">Delete</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="empty">{% if current_account_is_elevated %}No projects yet. Add one above.{% else %}You are not on any project yet. Ask an administrator or super user to add you to a team.{% endif %}</p>
+  {% endif %}
+</section>
+{% if projects %}
+<script>
+(function () {
+  var table = document.getElementById('projects-data-table');
+  if (!table) return;
+  var tbody = table.querySelector('tbody');
+  if (!tbody) return;
+
+  var searchInput = document.getElementById('projects-search');
+  var currentSortKey = null;
+  var currentAsc = true;
+
+  function getSortValue(row, key) {
+    if (key === 'date') {
+      var cell = row.querySelector('.col-date');
+      return (cell && cell.getAttribute('data-sort')) || '';
+    }
+    var sel = { name: '.col-name', type: '.col-type', production: '.col-production', director: '.col-director' }[key];
+    var el = sel ? row.querySelector(sel) : null;
+    return ((el && el.textContent) || '').trim().toLowerCase();
+  }
+
+  function applySearchFilter() {
+    var q = (searchInput && searchInput.value || '').trim().toLowerCase();
+    tbody.querySelectorAll('tr').forEach(function (row) {
+      var nameCell = row.querySelector('.col-name');
+      var name = ((nameCell && nameCell.textContent) || '').trim().toLowerCase();
+      row.hidden = !!(q && name.indexOf(q) === -1);
+    });
+  }
+
+  function updateSortIndicators() {
+    table.querySelectorAll('.th-sort').forEach(function (btn) {
+      var key = btn.getAttribute('data-sort');
+      var ind = btn.querySelector('.sort-indicator');
+      if (key === currentSortKey && ind) {
+        ind.textContent = currentAsc ? ' \u2191' : ' \u2193';
+        btn.setAttribute('aria-sort', currentAsc ? 'ascending' : 'descending');
+      } else {
+        if (ind) ind.textContent = '';
+        btn.removeAttribute('aria-sort');
+      }
+    });
+  }
+
+  function sortRows(key, asc) {
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+    rows.sort(function (a, b) {
+      var va = getSortValue(a, key);
+      var vb = getSortValue(b, key);
+      var cmp = va.localeCompare(vb, undefined, { numeric: true, sensitivity: 'base' });
+      return asc ? cmp : -cmp;
+    });
+    rows.forEach(function (r) {
+      tbody.appendChild(r);
+    });
+    applySearchFilter();
+  }
+
+  table.querySelectorAll('.th-sort').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var key = btn.getAttribute('data-sort');
+      if (!key) return;
+      if (currentSortKey === key) {
+        currentAsc = !currentAsc;
+      } else {
+        currentSortKey = key;
+        currentAsc = true;
+      }
+      sortRows(key, currentAsc);
+      updateSortIndicators();
+    });
+  });
+
+  if (searchInput) {
+    searchInput.addEventListener('input', applySearchFilter);
+  }
+
+  {% if current_account_is_elevated %}
+  function orderSnapshot() {
+    return Array.prototype.map.call(tbody.querySelectorAll('tr'), function (r) {
+      return r.getAttribute('data-project-id');
+    }).join(',');
+  }
+
+  function persistOrder() {
+    var ids = Array.prototype.map.call(tbody.querySelectorAll('tr'), function (r) {
+      return parseInt(r.getAttribute('data-project-id'), 10);
+    });
+    fetch('{{ url_for("projects_reorder") }}', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({ project_ids: ids })
+    }).then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok || !data.ok) throw new Error(data.error || 'failed');
+      });
+    }).catch(function () {
+      window.alert('Could not save project order. Refresh and try again.');
+    });
+  }
+
+  var dragSrcRow = null;
+  var orderBefore = null;
+
+  tbody.querySelectorAll('.drag-handle').forEach(function (handle) {
+    handle.addEventListener('dragstart', function (e) {
+      dragSrcRow = handle.closest('tr');
+      if (!dragSrcRow) return;
+      orderBefore = orderSnapshot();
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', dragSrcRow.getAttribute('data-project-id'));
+      dragSrcRow.classList.add('is-dragging');
+      try {
+        e.dataTransfer.setDragImage(dragSrcRow, 8, 16);
+      } catch (err) {}
+    });
+    handle.addEventListener('dragend', function () {
+      if (dragSrcRow) dragSrcRow.classList.remove('is-dragging');
+      if (dragSrcRow && orderBefore !== null && orderBefore !== orderSnapshot()) persistOrder();
+      dragSrcRow = null;
+      orderBefore = null;
+    });
+  });
+
+  tbody.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!dragSrcRow) return;
+    var target = e.target.closest('tr');
+    if (!target || target === dragSrcRow || !tbody.contains(target)) return;
+    var rect = target.getBoundingClientRect();
+    var mid = rect.top + rect.height / 2;
+    if (e.clientY < mid) {
+      tbody.insertBefore(dragSrcRow, target);
+    } else {
+      tbody.insertBefore(dragSrcRow, target.nextSibling);
+    }
+  });
+
+  tbody.addEventListener('drop', function (e) {
+    e.preventDefault();
+  });
+  {% endif %}
+})();
+</script>
+{% endif %}
+{% endblock %}
