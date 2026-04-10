@@ -62,10 +62,10 @@
     </div>
   </div>
   <div class="projects-table-scroll">
-  <table id="projects-data-table" class="data-table data-table--projects{% if current_account_is_elevated %} project-sortable{% endif %}">
+  <table id="projects-data-table" class="data-table data-table--projects{% if current_account_is_admin %} project-sortable{% endif %}">
     <thead>
       <tr>
-        {% if current_account_is_elevated %}
+        {% if current_account_is_admin %}
         <th scope="col" class="col-drag"><span class="sr-only">Reorder</span></th>
         {% endif %}
         <th scope="col">
@@ -88,8 +88,8 @@
     </thead>
     <tbody>
       {% for p in projects %}
-      <tr{% if current_account_is_elevated %} data-project-id="{{ p.id }}"{% endif %}>
-        {% if current_account_is_elevated %}
+      <tr{% if current_account_is_admin %} data-project-id="{{ p.id }}"{% endif %}>
+        {% if current_account_is_admin %}
         <td class="col-drag">
           <span class="drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">⋮⋮</span>
         </td>
@@ -196,7 +196,7 @@
     searchInput.addEventListener('input', applySearchFilter);
   }
 
-  {% if current_account_is_elevated %}
+  {% if current_account_is_admin %}
   function orderSnapshot() {
     return Array.prototype.map.call(tbody.querySelectorAll('tr'), function (r) {
       return r.getAttribute('data-project-id');

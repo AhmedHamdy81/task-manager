@@ -7,7 +7,8 @@ import os
 import re
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from typing import Sequence
+from datetime import date, datetime, timezone
 from flask import (
     Flask,
     Response,
@@ -29,6 +30,8 @@ from werkzeug.utils import secure_filename
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask_socketio import SocketIO, join_room, leave_room
 
+from booking import booking_bp
+
 db = SQLAlchemy()
 SOCKET_AUTH_SALT = "tm-socket"
 SOCKET_AUTH_MAX_AGE = 86400  # 24h; page refresh issues a new token
@@ -45,6 +48,8 @@ CHAT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 CHAT_ALLOWED_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 CHAT_AUDIO_MAX_BYTES = 15 * 1024 * 1024
 CHAT_AUDIO_EXT = frozenset({".webm", ".ogg", ".opus", ".mp3", ".m4a", ".wav", ".mp4"})
+CHAT_REACTION_EMOJIS = frozenset({"👍", "❤️", "😂", "😮"})
+
 CHAT_AUDIO_MIME_TO_EXT = {
     "audio/webm": ".webm",
     "video/webm": ".webm",
@@ -219,6 +224,44 @@ def create_app() -> Flask:
         job_title = db.relationship("JobTitle", backref=db.backref("users", lazy=True))
         tasks = db.relationship("Task", backref="assignee", lazy=True, cascade="all, delete-orphan")
 
+    class EditSuite(db.Model):
+        """Post-production edit / color suite (bookable room)."""
+
+        __tablename__ = "edit_suites"
+
+        id = db.Column(db.Integer, primary_key=True)
+        name = db.Column(db.String(200), nullable=False)
+        is_active = db.Column(db.Boolean, nullable=False, default=True)
+
+    class Booking(db.Model):
+        """Time-based reservation of an edit suite, scoped to a project and people."""
+
+        __tablename__ = "bookings"
+
+        id = db.Column(db.Integer, primary_key=True)
+        edit_suite_id = db.Column(db.Integer, db.ForeignKey("edit_suites.id"), nullable=False)
+        # Legacy SQLite rows: NOT NULL user_id predates booked_by_id; ORM must set on insert.
+        user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False)
+        booked_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+        booked_for_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+        booking_date = db.Column(db.Date, nullable=False)
+        start_time = db.Column(db.Time, nullable=False)
+        end_time = db.Column(db.Time, nullable=False)
+        is_full_day = db.Column(db.Boolean, nullable=False, default=False)
+        notes = db.Column(db.Text, nullable=False, default="")
+        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        is_active = db.Column(db.Boolean, nullable=False, default=True)
+
+        edit_suite = db.relationship("EditSuite", backref=db.backref("bookings", lazy=True))
+        project = db.relationship("Project", backref=db.backref("suite_bookings", lazy=True))
+        booked_by_user = db.relationship(
+            "User", foreign_keys=[booked_by_id], backref=db.backref("bookings_created", lazy=True)
+        )
+        booked_for_user = db.relationship(
+            "User", foreign_keys=[booked_for_id], backref=db.backref("bookings_assigned", lazy=True)
+        )
+
     class TaskGroup(db.Model):
         __tablename__ = "task_groups"
 
@@ -240,6 +283,13 @@ def create_app() -> Flask:
 
         group = db.relationship("TaskGroup", backref=db.backref("title_presets", lazy=True))
 
+    class TaskPriority(db.Model):
+        __tablename__ = "task_priorities"
+
+        id = db.Column(db.Integer, primary_key=True)
+        name = db.Column(db.String(80), nullable=False, unique=True)
+        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
     class Task(db.Model):
         __tablename__ = "tasks"
 
@@ -247,6 +297,7 @@ def create_app() -> Flask:
         title = db.Column(db.String(200), nullable=False)
         description = db.Column(db.Text, default="")
         status = db.Column(db.String(32), nullable=False, default="open")
+        priority = db.Column(db.String(16), nullable=False, default="medium")
         user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
         group_id = db.Column(db.Integer, db.ForeignKey("task_groups.id"), nullable=True)
         project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True)
@@ -281,6 +332,49 @@ def create_app() -> Flask:
             cascade="all, delete-orphan",
             lazy=True,
         )
+        shooting_days = db.relationship(
+            "ShootingDay",
+            back_populates="project",
+            cascade="all, delete-orphan",
+            lazy=True,
+            order_by="ShootingDay.shooting_date, ShootingDay.id",
+        )
+
+    class ShootingDay(db.Model):
+        """Flat shooting day per project (spreadsheet-style scene rows)."""
+
+        __tablename__ = "shooting_days_flat"
+
+        id = db.Column(db.Integer, primary_key=True)
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+        shooting_date = db.Column(db.Date, nullable=False)
+
+        project = db.relationship("Project", back_populates="shooting_days")
+        scene_rows = db.relationship(
+            "SceneRow",
+            back_populates="shooting_day",
+            cascade="all, delete-orphan",
+            lazy=True,
+            order_by="SceneRow.sort_order, SceneRow.id",
+        )
+
+    class SceneRow(db.Model):
+        __tablename__ = "scene_rows"
+
+        id = db.Column(db.Integer, primary_key=True)
+        shooting_day_id = db.Column(
+            db.Integer, db.ForeignKey("shooting_days_flat.id"), nullable=False, index=True
+        )
+        episode = db.Column(db.String(120), nullable=False, default="")
+        scene = db.Column(db.String(120), nullable=False, default="")
+        sync = db.Column(db.Boolean, nullable=False, default=False)
+        first_edit = db.Column(db.Boolean, nullable=False, default=False)
+        final_edit = db.Column(db.Boolean, nullable=False, default=False)
+        duration_seconds = db.Column(db.Integer, nullable=False, default=0)
+        notes = db.Column(db.Text, nullable=False, default="")
+        sort_order = db.Column(db.Integer, nullable=False, default=0)
+
+        shooting_day = db.relationship("ShootingDay", back_populates="scene_rows")
 
     class ProjectMember(db.Model):
         __tablename__ = "project_members"
@@ -303,9 +397,32 @@ def create_app() -> Flask:
         image_path = db.Column(db.String(255), nullable=True)
         audio_path = db.Column(db.String(255), nullable=True)
         created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        is_deleted = db.Column(db.Boolean, nullable=False, default=False)
+        deleted_at = db.Column(db.DateTime, nullable=True)
 
         project = db.relationship("Project", back_populates="chat_messages")
         user = db.relationship("User", backref=db.backref("chat_messages", lazy=True))
+
+    class ChatMessageReaction(db.Model):
+        __tablename__ = "chat_message_reactions"
+
+        id = db.Column(db.Integer, primary_key=True)
+        message_id = db.Column(db.Integer, db.ForeignKey("chat_messages.id"), nullable=False, index=True)
+        user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+        emoji = db.Column(db.String(16), nullable=False)
+        __table_args__ = (
+            db.UniqueConstraint("message_id", "user_id", name="uq_chat_reaction_msg_user"),
+        )
+
+        message = db.relationship(
+            "ChatMessage",
+            backref=db.backref(
+                "reactions",
+                lazy=True,
+                cascade="all, delete-orphan",
+            ),
+        )
+        user = db.relationship("User", backref=db.backref("chat_message_reactions", lazy=True))
 
     class ProjectChatReadState(db.Model):
         """Per-account last seen message id per project (for unread counts)."""
@@ -321,6 +438,47 @@ def create_app() -> Flask:
         )
 
     Task.project = db.relationship("Project", back_populates="tasks")
+
+    def shooting_day_total_seconds(day: ShootingDay) -> int:
+        return sum(int(r.duration_seconds or 0) for r in day.scene_rows)
+
+    def format_duration_mmss(seconds: int) -> str:
+        sec = max(0, int(seconds or 0))
+        m, s = divmod(sec, 60)
+        return f"{m:02d}:{s:02d}"
+
+    def format_duration_day_total(seconds: int) -> str:
+        sec = max(0, int(seconds or 0))
+        m, s = divmod(sec, 60)
+        return f"{m}:{s:02d}"
+
+    def parse_duration_input(raw: str | None) -> int | None:
+        s = (raw or "").strip()
+        if not s:
+            return None
+        if s.isdigit():
+            return max(0, int(s))
+        parts = [p.strip() for p in s.split(":") if p.strip() != ""]
+        try:
+            if len(parts) == 2:
+                return max(0, int(parts[0]) * 60 + int(parts[1]))
+            if len(parts) == 3:
+                return max(0, int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
+        except ValueError:
+            return None
+        return None
+
+    def scene_row_to_dict(r: SceneRow) -> dict:
+        return {
+            "id": r.id,
+            "episode": r.episode or "",
+            "scene": r.scene or "",
+            "sync": bool(r.sync),
+            "first_edit": bool(r.first_edit),
+            "final_edit": bool(r.final_edit),
+            "duration_seconds": int(r.duration_seconds or 0),
+            "notes": r.notes or "",
+        }
 
     PRESET_AVATAR_IDS = tuple(f"{i:02d}" for i in range(1, AVATAR_PRESET_COUNT + 1))
 
@@ -590,6 +748,23 @@ def create_app() -> Flask:
         with db.engine.begin() as conn:
             conn.execute(text("ALTER TABLE chat_messages ADD COLUMN audio_path VARCHAR(255)"))
 
+    def ensure_sqlite_chat_messages_soft_delete_columns() -> None:
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        if "chat_messages" not in insp.get_table_names():
+            return
+        col_names = {c["name"] for c in insp.get_columns("chat_messages")}
+        with db.engine.begin() as conn:
+            if "is_deleted" not in col_names:
+                conn.execute(
+                    text(
+                        "ALTER TABLE chat_messages ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            if "deleted_at" not in col_names:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN deleted_at DATETIME"))
+
     def ensure_sqlite_tasks_completed_archived_columns() -> None:
         if db.engine.dialect.name != "sqlite":
             return
@@ -613,6 +788,54 @@ def create_app() -> Flask:
                     )
                 )
 
+    def ensure_sqlite_tasks_priority_column() -> None:
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        if "tasks" not in insp.get_table_names():
+            return
+        col_names = {c["name"] for c in insp.get_columns("tasks")}
+        if "priority" in col_names:
+            return
+        with db.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN priority VARCHAR(16) NOT NULL DEFAULT 'medium'"))
+            conn.execute(text("UPDATE tasks SET priority = 'medium' WHERE priority IS NULL OR priority = ''"))
+
+    def ensure_sqlite_bookings_v2_columns() -> None:
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        if "bookings" not in insp.get_table_names():
+            return
+        col_names = {c["name"] for c in insp.get_columns("bookings")}
+        with db.engine.begin() as conn:
+            if "project_id" not in col_names:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN project_id INTEGER"))
+            if "booked_by_id" not in col_names:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN booked_by_id INTEGER"))
+            if "booked_for_id" not in col_names:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN booked_for_id INTEGER"))
+            if "notes" not in col_names:
+                conn.execute(text("ALTER TABLE bookings ADD COLUMN notes TEXT NOT NULL DEFAULT ''"))
+        col_names = {c["name"] for c in insp.get_columns("bookings")}
+        if "user_id" in col_names:
+            with db.engine.begin() as conn:
+                conn.execute(text("UPDATE bookings SET booked_by_id = user_id WHERE booked_by_id IS NULL"))
+                conn.execute(text("UPDATE bookings SET booked_for_id = user_id WHERE booked_for_id IS NULL"))
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE bookings SET project_id = (SELECT MIN(id) FROM projects) "
+                    "WHERE project_id IS NULL AND EXISTS (SELECT 1 FROM projects)"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE bookings SET user_id = booked_by_id "
+                    "WHERE user_id IS NULL AND booked_by_id IS NOT NULL"
+                )
+            )
+
     with app.app_context():
         db.create_all()
         ensure_sqlite_tasks_group_column()
@@ -627,6 +850,9 @@ def create_app() -> Flask:
         ensure_all_accounts_have_directory_users()
         ensure_task_groups_and_editing_tasks()
         ensure_sqlite_chat_messages_audio_path()
+        ensure_sqlite_chat_messages_soft_delete_columns()
+        ensure_sqlite_tasks_priority_column()
+        ensure_sqlite_bookings_v2_columns()
 
     PUBLIC_ENDPOINTS = frozenset({"login", "register", "logout", "static"})
 
@@ -712,6 +938,7 @@ def create_app() -> Flask:
             "role_labels": ROLE_LABELS,
             "account_roles": ACCOUNT_ROLES,
             "socket_connect_token": socket_token,
+            "directory_chat_user_id": du.id if du else None,
         }
 
     def directory_user_id_for_account(acc: Account | None) -> int | None:
@@ -721,10 +948,10 @@ def create_app() -> Flask:
         return u.id if u else None
 
     def visible_project_ids_for_account(acc: Account | None) -> set[int] | None:
-        """None means no filter (admin / super user). Otherwise project IDs the account may access."""
+        """None means no filter (administrator only). Otherwise project IDs the account may access (team membership)."""
         if acc is None:
             return set()
-        if account_is_elevated(acc):
+        if acc.is_admin:
             return None
         uid = directory_user_id_for_account(acc)
         if uid is None:
@@ -738,6 +965,21 @@ def create_app() -> Flask:
         if allowed is None:
             return True
         return project_id in allowed
+
+    app.extensions["booking"] = {
+        "db": db,
+        "Account": Account,
+        "User": User,
+        "Project": Project,
+        "EditSuite": EditSuite,
+        "Booking": Booking,
+        "account_from_session": account_from_session,
+        "account_can_access_admin_settings": account_can_access_admin_settings,
+        "directory_user_id_for_account": directory_user_id_for_account,
+        "visible_project_ids_for_account": visible_project_ids_for_account,
+        "account_can_access_project": account_can_access_project,
+    }
+    app.register_blueprint(booking_bp)
 
     def account_may_use_project_chat(acc: Account | None, project_id: int) -> bool:
         """Only directory users listed on the project team may use chat (same scope as task assignees)."""
@@ -807,6 +1049,80 @@ def create_app() -> Flask:
             state.last_read_message_id = mid
             db.session.commit()
 
+    def eligible_chat_project_ids(acc: Account | None) -> list[int]:
+        """Projects where the account has team chat (directory user on project team)."""
+        uid = directory_user_id_for_account(acc)
+        if uid is None:
+            return []
+        return [
+            pm.project_id
+            for pm in ProjectMember.query.filter_by(user_id=uid)
+            .order_by(ProjectMember.project_id.asc())
+            .all()
+        ]
+
+    def build_chat_threads_for_dashboard(acc: Account | None) -> list[dict]:
+        """Metadata for dashboard chat sidebar: one row per eligible project."""
+        pids = eligible_chat_project_ids(acc)
+        if not pids:
+            return []
+        projects = Project.query.filter(Project.id.in_(pids)).all()
+        pmap = {p.id: p for p in projects}
+        agg_rows = (
+            db.session.query(
+                ChatMessage.project_id.label("pid"),
+                db.func.max(ChatMessage.id).label("mid"),
+            )
+            .filter(ChatMessage.project_id.in_(pids))
+            .group_by(ChatMessage.project_id)
+            .all()
+        )
+        mid_by_pid = {r.pid: int(r.mid) for r in agg_rows}
+        last_msg_by_pid: dict[int, ChatMessage] = {}
+        if mid_by_pid:
+            lids = list(mid_by_pid.values())
+            for m in ChatMessage.query.filter(ChatMessage.id.in_(lids)).all():
+                last_msg_by_pid[m.project_id] = m
+        enriched: list[tuple[float, dict]] = []
+        for pid in pids:
+            p = pmap.get(pid)
+            if p is None:
+                continue
+            m = last_msg_by_pid.get(pid)
+            preview = "No messages yet"
+            last_at_iso: str | None = None
+            last_sort = 0.0
+            if m is not None:
+                last_at_iso = m.created_at.isoformat() if m.created_at else None
+                if m.created_at:
+                    last_sort = m.created_at.timestamp()
+                txt = (m.message or "").strip()
+                if txt:
+                    preview = (txt[:100] + "…") if len(txt) > 100 else txt
+                elif m.image_path:
+                    preview = "Photo"
+                elif m.audio_path:
+                    preview = "Voice message"
+            unread = chat_unread_count_for_account(acc, pid)
+            enriched.append(
+                (
+                    last_sort,
+                    {
+                        "project_id": pid,
+                        "name": (p.name or "").strip() or "Project",
+                        "last_preview": preview,
+                        "last_at": last_at_iso,
+                        "unread": unread,
+                        "messages_url": url_for("project_chat_messages", project_id=pid),
+                        "unread_url": url_for("project_chat_unread_count", project_id=pid),
+                        "mark_read_url": url_for("project_chat_mark_read", project_id=pid),
+                        "detail_url": url_for("project_detail", project_id=pid),
+                    },
+                )
+            )
+        enriched.sort(key=lambda t: (-t[0], t[1]["name"].lower()))
+        return [t[1] for t in enriched]
+
     def find_project_mentions_for_text(project_id: int, text: str | None) -> list[User]:
         """Resolve @DisplayName tokens against project members (longest name first)."""
         if not text:
@@ -847,7 +1163,45 @@ def create_app() -> Flask:
                 pos = at + 1
         return list(found.values())
 
-    def chat_message_json(m: ChatMessage, viewer_dir_user_id: int | None) -> dict:
+    def summarize_chat_reactions(
+        reaction_rows: Sequence[ChatMessageReaction],
+        viewer_dir_user_id: int | None,
+    ) -> list[dict]:
+        counts: dict[str, int] = defaultdict(int)
+        viewer_emoji: str | None = None
+        for r in reaction_rows:
+            counts[r.emoji] += 1
+            if viewer_dir_user_id is not None and r.user_id == viewer_dir_user_id:
+                viewer_emoji = r.emoji
+        out: list[dict] = []
+        seen: set[str] = set()
+        for em in CHAT_REACTION_EMOJIS:
+            if em in counts:
+                out.append(
+                    {
+                        "emoji": em,
+                        "count": counts[em],
+                        "me": viewer_emoji == em,
+                    }
+                )
+                seen.add(em)
+        for em in sorted(counts.keys()):
+            if em not in seen:
+                out.append(
+                    {
+                        "emoji": em,
+                        "count": counts[em],
+                        "me": viewer_emoji == em,
+                    }
+                )
+        return out
+
+    def chat_message_json(
+        m: ChatMessage,
+        viewer_dir_user_id: int | None,
+        *,
+        reactions: Sequence[ChatMessageReaction] | None = None,
+    ) -> dict:
         u = m.user
         username = u.name if u is not None else "Unknown"
         avatar_initial = "?"
@@ -855,6 +1209,21 @@ def create_app() -> Flask:
             if ch.isalnum():
                 avatar_initial = ch.upper()
                 break
+        base_me = viewer_dir_user_id is not None and m.user_id == viewer_dir_user_id
+        created_iso = m.created_at.isoformat() if m.created_at else ""
+        if m.is_deleted:
+            return {
+                "id": m.id,
+                "username": username,
+                "message": "",
+                "image_url": None,
+                "audio_url": None,
+                "avatar_initial": avatar_initial,
+                "created_at": created_iso,
+                "is_me": base_me,
+                "is_deleted": True,
+                "reactions": [],
+            }
         image_url = None
         if (m.image_path or "").strip():
             image_url = url_for(
@@ -869,6 +1238,7 @@ def create_app() -> Flask:
                 project_id=m.project_id,
                 filename=m.audio_path.strip(),
             )
+        react_seq = reactions if reactions is not None else []
         return {
             "id": m.id,
             "username": username,
@@ -876,8 +1246,10 @@ def create_app() -> Flask:
             "image_url": image_url,
             "audio_url": audio_url,
             "avatar_initial": avatar_initial,
-            "created_at": m.created_at.isoformat() if m.created_at else "",
-            "is_me": viewer_dir_user_id is not None and m.user_id == viewer_dir_user_id,
+            "created_at": created_iso,
+            "is_me": base_me,
+            "is_deleted": False,
+            "reactions": summarize_chat_reactions(react_seq, viewer_dir_user_id),
         }
 
     def emit_notification_to_account(account_id: int, payload: dict, event: str = "notification") -> None:
@@ -887,14 +1259,12 @@ def create_app() -> Flask:
     def task_visible_to_account(t: Task, acc: Account | None) -> bool:
         if acc is None:
             return False
-        if account_is_elevated(acc):
+        if acc.is_admin:
             return True
         allowed = visible_project_ids_for_account(acc)
-        if allowed is None:
-            return True
         if t.project_id is None:
             return False
-        return t.project_id in allowed
+        return bool(allowed and t.project_id in allowed)
 
     def account_may_update_task_status(t: Task, acc: Account | None) -> bool:
         """Only the logged-in account's directory user, when they are the task assignee, may set status."""
@@ -925,6 +1295,145 @@ def create_app() -> Flask:
     def can_delete_task(task: Task) -> bool:
         acc = Account.query.get(session.get("account_id"))
         return task_visible_to_account(task, acc)
+
+    @app.template_filter("fmt_duration_mmss")
+    def fmt_duration_mmss_filter(seconds: int | None) -> str:
+        return format_duration_mmss(int(seconds or 0))
+
+    @app.template_filter("fmt_duration_total")
+    def fmt_duration_total_filter(seconds: int | None) -> str:
+        return format_duration_day_total(int(seconds or 0))
+
+    def _production_redirect(project_id: int) -> Response:
+        return redirect(url_for("project_production", project_id=project_id))
+
+    def shooting_day_in_project(day_id: int, project_id: int) -> ShootingDay | None:
+        d = db.session.get(ShootingDay, day_id)
+        if d is None or d.project_id != project_id:
+            return None
+        return d
+
+    def scene_row_in_project(row_id: int, project_id: int) -> SceneRow | None:
+        r = db.session.get(SceneRow, row_id)
+        if r is None:
+            return None
+        d = r.shooting_day
+        if d is None or d.project_id != project_id:
+            return None
+        return r
+
+    @app.route("/projects/<int:project_id>/shooting-days", methods=["POST"])
+    def shooting_day_create(project_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        raw = (request.form.get("shooting_date") or "").strip()
+        try:
+            sd = datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            flash("Use a valid shooting date.", "error")
+            next_url = (request.form.get("next") or "").strip()
+            if next_url.startswith("/") and not next_url.startswith("//"):
+                return redirect(next_url)
+            return _production_redirect(project_id)
+        day = ShootingDay(project_id=p.id, shooting_date=sd)
+        db.session.add(day)
+        db.session.commit()
+        flash("Shooting day added.", "success")
+        next_url = (request.form.get("next") or "").strip()
+        if next_url.startswith("/") and not next_url.startswith("//"):
+            return redirect(next_url)
+        return redirect(url_for("project_production_day", project_id=project_id, day_id=day.id))
+
+    @app.route("/projects/<int:project_id>/production/days/<int:day_id>/delete", methods=["POST"])
+    def production_day_delete(project_id: int, day_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        d = shooting_day_in_project(day_id, project_id)
+        if d is None:
+            abort(404)
+        if not account_can_access_project(acc, project_id):
+            flash("You cannot delete this day.", "error")
+            return redirect(url_for("projects_list"))
+        db.session.delete(d)
+        db.session.commit()
+        flash("Shooting day removed.", "success")
+        return _production_redirect(project_id)
+
+    @app.route("/projects/<int:project_id>/production/day/<int:day_id>/rows", methods=["POST"])
+    def production_scene_row_create(project_id: int, day_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"error": "forbidden"}), 403
+        d = shooting_day_in_project(day_id, project_id)
+        if d is None:
+            return jsonify({"error": "not_found"}), 404
+        mx = (
+            db.session.query(db.func.max(SceneRow.sort_order))
+            .filter_by(shooting_day_id=d.id)
+            .scalar()
+        )
+        nxt = (int(mx) if mx is not None else -1) + 1
+        row = SceneRow(shooting_day_id=d.id, sort_order=nxt)
+        db.session.add(row)
+        db.session.commit()
+        db.session.refresh(d)
+        return jsonify(
+            {"row": scene_row_to_dict(row), "total_seconds": shooting_day_total_seconds(d)}
+        )
+
+    @app.route(
+        "/projects/<int:project_id>/production/scene-rows/<int:row_id>",
+        methods=["PATCH", "DELETE"],
+    )
+    def production_scene_row_mutate(project_id: int, row_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"error": "forbidden"}), 403
+        r = scene_row_in_project(row_id, project_id)
+        if r is None:
+            return jsonify({"error": "not_found"}), 404
+        if request.method == "DELETE":
+            day_pk = r.shooting_day_id
+            db.session.delete(r)
+            db.session.commit()
+            d = db.session.get(ShootingDay, day_pk)
+            return jsonify(
+                {
+                    "ok": True,
+                    "total_seconds": shooting_day_total_seconds(d) if d is not None else 0,
+                }
+            )
+        if not request.is_json:
+            return jsonify({"error": "json"}), 400
+        body = request.get_json(silent=True) or {}
+        if "episode" in body:
+            r.episode = str(body.get("episode") or "")[:120]
+        if "scene" in body:
+            r.scene = str(body.get("scene") or "")[:120]
+        if "sync" in body:
+            r.sync = bool(body.get("sync"))
+        if "first_edit" in body:
+            r.first_edit = bool(body.get("first_edit"))
+        if "final_edit" in body:
+            r.final_edit = bool(body.get("final_edit"))
+        if "duration_seconds" in body:
+            try:
+                r.duration_seconds = max(0, int(body.get("duration_seconds")))
+            except (TypeError, ValueError):
+                pass
+        if "duration" in body:
+            ds = parse_duration_input(str(body.get("duration")))
+            if ds is not None:
+                r.duration_seconds = ds
+        if "notes" in body:
+            r.notes = str(body.get("notes") or "")[:8000]
+        db.session.commit()
+        d = r.shooting_day
+        return jsonify(
+            {"row": scene_row_to_dict(r), "total_seconds": shooting_day_total_seconds(d)}
+        )
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -1173,28 +1682,89 @@ def create_app() -> Flask:
         vis = visible_project_ids_for_account(acc)
         user_count = User.query.count()
         if vis is None:
+            # Administrator: all projects, original dashboard semantics
             task_count = Task.query.filter_by(archived=False).count()
             open_tasks = Task.query.filter_by(status="open", archived=False).count()
-            project_count = Project.query.count()
         elif not vis:
             task_count = 0
             open_tasks = 0
+        else:
+            uid = directory_user_id_for_account(acc)
+            if uid is None:
+                task_count = 0
+                open_tasks = 0
+            else:
+                # Team-member projects only: "My Open Tasks" + "All Tasks" (all open in those projects)
+                open_tasks = (
+                    Task.query.filter(
+                        Task.project_id.in_(vis),
+                        Task.archived.is_(False),
+                        Task.status == "open",
+                        Task.user_id == uid,
+                    ).count()
+                )
+                task_count = (
+                    Task.query.filter(
+                        Task.project_id.in_(vis),
+                        Task.archived.is_(False),
+                        Task.status == "open",
+                    ).count()
+                )
+
+        # Dashboard "Number of projects": admins = all rows; others = team membership only
+        if acc is not None and acc.is_admin:
+            project_count = Project.query.count()
+        elif not vis:
             project_count = 0
         else:
-            task_count = Task.query.filter(
-                Task.project_id.in_(vis), Task.archived == False
-            ).count()
-            open_tasks = Task.query.filter(
-                Task.project_id.in_(vis), Task.status == "open", Task.archived == False
-            ).count()
             project_count = len(vis)
+
+        booking_today_card = None
+        if acc is not None:
+            uid_bt = directory_user_id_for_account(acc)
+            if uid_bt is not None:
+                bt = (
+                    Booking.query.options(
+                        joinedload(Booking.edit_suite),
+                        joinedload(Booking.project),
+                        joinedload(Booking.booked_for_user),
+                    )
+                    .filter(
+                        Booking.booked_for_id == uid_bt,
+                        Booking.booking_date == date.today(),
+                        Booking.is_active.is_(True),
+                    )
+                    .order_by(Booking.start_time.asc())
+                    .first()
+                )
+                if bt is not None:
+                    sn = bt.edit_suite.name if bt.edit_suite is not None else "Room"
+                    pn = bt.project.name if bt.project is not None else ""
+                    bf = bt.booked_for_user
+                    bf_name = (bf.name or bf.email or "").strip() if bf is not None else ""
+                    booking_today_card = {
+                        "suite_name": sn,
+                        "project_name": pn,
+                        "time_label": f"{bt.start_time.strftime('%H:%M')}–{bt.end_time.strftime('%H:%M')}",
+                        "booked_for_name": bf_name,
+                        "is_full_day": bool(bt.is_full_day),
+                    }
+
         return render_template(
             "index.html",
             user_count=user_count,
             task_count=task_count,
             open_tasks=open_tasks,
             project_count=project_count,
+            booking_today_card=booking_today_card,
         )
+
+    @app.route("/chat/threads", methods=["GET"])
+    def chat_threads_api():
+        acc = Account.query.get(session.get("account_id"))
+        if acc is None:
+            return jsonify({"error": "forbidden"}), 403
+        return jsonify({"threads": build_chat_threads_for_dashboard(acc)})
 
     @app.route("/projects")
     def projects_list():
@@ -1224,23 +1794,27 @@ def create_app() -> Flask:
             return redirect(url_for("projects_list"))
         mx = db.session.query(db.func.max(Project.sort_order)).scalar()
         next_ord = (mx if mx is not None else -1) + 1
-        db.session.add(
-            Project(
-                name=name,
-                project_type=project_type,
-                production_house=production_house,
-                director=director,
-                sort_order=next_ord,
-            )
+        p = Project(
+            name=name,
+            project_type=project_type,
+            production_house=production_house,
+            director=director,
+            sort_order=next_ord,
         )
+        db.session.add(p)
         db.session.commit()
+        creator_uid = directory_user_id_for_account(actor)
+        if creator_uid is not None:
+            if ProjectMember.query.filter_by(project_id=p.id, user_id=creator_uid).first() is None:
+                db.session.add(ProjectMember(project_id=p.id, user_id=creator_uid))
+                db.session.commit()
         flash("Project created.", "success")
         return redirect(url_for("projects_list"))
 
     @app.route("/projects/reorder", methods=["POST"])
     def projects_reorder():
         actor = Account.query.get(session.get("account_id"))
-        if actor is None or not account_is_elevated(actor):
+        if actor is None or not actor.is_admin:
             return jsonify({"ok": False, "error": "forbidden"}), 403
         data = request.get_json(silent=True) or {}
         raw_ids = data.get("project_ids")
@@ -1293,20 +1867,30 @@ def create_app() -> Flask:
             member_users.sort(key=lambda u: u.name.lower())
         else:
             member_users = []
-        all_users = User.query.order_by(User.name).all()
-        available_to_add = [u for u in all_users if u.id not in member_ids]
-        chat_allowed = account_may_use_project_chat(acc, p.id)
-        chat_unread_count = (
-            chat_unread_count_for_account(acc, p.id) if chat_allowed else 0
+
+        def _exclude_from_team_picker(u: User) -> bool:
+            """Omit admin accounts and literal Admin identity from add-member picker."""
+            if (u.name or "").strip().lower() == "admin":
+                return True
+            acc = u.account
+            if acc is None:
+                return False
+            if acc.is_admin:
+                return True
+            if (acc.username or "").strip().lower() == "admin":
+                return True
+            return False
+
+        all_users = (
+            User.query.options(joinedload(User.job_title), joinedload(User.account))
+            .order_by(User.name)
+            .all()
         )
-        chat_team_mentions = [
-            {"id": u.id, "name": (u.name or "").strip()}
-            for u in member_users
-            if (u.name or "").strip()
+        available_to_add = [
+            u
+            for u in all_users
+            if u.id not in member_ids and not _exclude_from_team_picker(u)
         ]
-        chat_viewer_user_id = (
-            directory_user_id_for_account(acc) if chat_allowed else None
-        )
         task_groups = TaskGroup.query.order_by(
             TaskGroup.sort_order, TaskGroup.name
         ).all()
@@ -1319,20 +1903,22 @@ def create_app() -> Flask:
         user_project_ids: dict[int, list[int]] = defaultdict(list)
         for pm in ProjectMember.query.all():
             user_project_ids[pm.user_id].append(pm.project_id)
+        project_shooting_days = (
+            ShootingDay.query.filter_by(project_id=p.id)
+            .order_by(ShootingDay.shooting_date.asc(), ShootingDay.id.asc())
+            .all()
+        )
         return render_template(
             "project_detail.html",
             project=p,
             active_tasks=active_tasks,
             member_users=member_users,
             available_to_add=available_to_add,
-            chat_allowed=chat_allowed,
-            chat_unread_count=chat_unread_count,
-            chat_team_mentions=chat_team_mentions,
-            chat_viewer_user_id=chat_viewer_user_id,
             task_groups=task_groups,
             titles_by_group=dict(titles_by_group),
             has_title_presets=has_title_presets,
             user_project_ids=dict(user_project_ids),
+            project_shooting_days=project_shooting_days,
         )
 
     @app.route("/projects/<int:project_id>/completed")
@@ -1357,6 +1943,83 @@ def create_app() -> Flask:
             completed_tasks=completed_tasks,
         )
 
+    @app.route("/projects/<int:project_id>/production")
+    def project_production(project_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        shooting_days = (
+            ShootingDay.query.filter_by(project_id=p.id)
+            .options(joinedload(ShootingDay.scene_rows))
+            .order_by(ShootingDay.shooting_date.asc(), ShootingDay.id.asc())
+            .all()
+        )
+        production_day_totals = {
+            d.id: shooting_day_total_seconds(d) for d in shooting_days
+        }
+        return render_template(
+            "project_production.html",
+            project=p,
+            production_section="days",
+            shooting_days=shooting_days,
+            production_day_totals=production_day_totals,
+        )
+
+    @app.route("/projects/<int:project_id>/production/day/<int:day_id>")
+    def project_production_day(project_id: int, day_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        day = (
+            ShootingDay.query.options(joinedload(ShootingDay.scene_rows))
+            .filter_by(id=day_id, project_id=p.id)
+            .first()
+        )
+        if day is None:
+            abort(404)
+        ordered_ids = (
+            db.session.query(ShootingDay.id)
+            .filter_by(project_id=p.id)
+            .order_by(ShootingDay.shooting_date.asc(), ShootingDay.id.asc())
+            .all()
+        )
+        id_list = [int(r[0]) for r in ordered_ids]
+        day_display_index = id_list.index(day_id) + 1
+        scene_rows = list(day.scene_rows)
+        total_seconds = shooting_day_total_seconds(day)
+        rows_create_url = url_for(
+            "production_scene_row_create", project_id=p.id, day_id=day.id
+        )
+        return render_template(
+            "project_production_day.html",
+            project=p,
+            production_section="days",
+            production_day=day,
+            day_display_index=day_display_index,
+            scene_rows=scene_rows,
+            total_seconds=total_seconds,
+            rows_create_url=rows_create_url,
+        )
+
+    @app.route("/projects/<int:project_id>/production/vfx")
+    def project_production_vfx(project_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        return render_template(
+            "project_production.html",
+            project=p,
+            production_section="vfx",
+            shooting_days=[],
+            production_day_totals={},
+        )
+
     @app.route("/projects/<int:project_id>/chat/messages", methods=["GET", "POST"])
     def project_chat_messages(project_id: int):
         acc = Account.query.get(session.get("account_id"))
@@ -1370,9 +2033,21 @@ def create_app() -> Flask:
                 .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
                 .all()
             )
+            ids = [m.id for m in rows]
+            react_by_mid: dict[int, list[ChatMessageReaction]] = defaultdict(list)
+            if ids:
+                for r in ChatMessageReaction.query.filter(
+                    ChatMessageReaction.message_id.in_(ids)
+                ).all():
+                    react_by_mid[r.message_id].append(r)
             return jsonify(
                 {
-                    "messages": [chat_message_json(m, viewer_uid) for m in rows],
+                    "messages": [
+                        chat_message_json(
+                            m, viewer_uid, reactions=react_by_mid.get(m.id, [])
+                        )
+                        for m in rows
+                    ],
                 }
             )
 
@@ -1486,7 +2161,7 @@ def create_app() -> Flask:
             pname = (proj.name or "Project").strip() if proj else "Project"
             sender_u = User.query.get(uid)
             sender_label = (sender_u.name or "Someone").strip() if sender_u else "Someone"
-            chat_href = url_for("project_detail", project_id=project_id) + "#project-chat"
+            chat_href = url_for("index") + "#gchat-" + str(project_id)
             for mentioned in find_project_mentions_for_text(project_id, msg_text):
                 if mentioned.id == uid:
                     continue
@@ -1502,7 +2177,113 @@ def create_app() -> Flask:
                     },
                 )
 
-        return jsonify({"message": chat_message_json(cm, viewer_uid)}), 201
+        return jsonify({"message": chat_message_json(cm, viewer_uid, reactions=[])}), 201
+
+    @app.route("/projects/<int:project_id>/chat/messages/<int:message_id>", methods=["DELETE"])
+    def project_chat_message_delete(project_id: int, message_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        if not account_may_use_project_chat(acc, project_id):
+            return jsonify({"error": "forbidden"}), 403
+        uid = directory_user_id_for_account(acc)
+        if uid is None:
+            return jsonify({"error": "no_profile"}), 403
+        m = ChatMessage.query.filter_by(id=message_id, project_id=project_id).first()
+        if m is None:
+            return jsonify({"error": "not_found"}), 404
+        if m.user_id != uid:
+            return (
+                jsonify(
+                    {
+                        "error": "forbidden",
+                        "detail": "Only the sender can delete this message.",
+                    }
+                ),
+                403,
+            )
+        if not m.is_deleted:
+            m.is_deleted = True
+            m.deleted_at = datetime.now(timezone.utc)
+            db.session.commit()
+            socketio.emit(
+                "chat_updated",
+                {
+                    "project_id": project_id,
+                    "message_id": m.id,
+                    "user_id": uid,
+                    "kind": "delete",
+                },
+                room=f"project_{project_id}",
+            )
+        return (
+            jsonify(
+                {
+                    "ok": True,
+                    "message": chat_message_json(m, uid, reactions=[]),
+                }
+            ),
+            200,
+        )
+
+    @app.route("/projects/<int:project_id>/chat/messages/<int:message_id>/reaction", methods=["POST"])
+    def project_chat_message_reaction(project_id: int, message_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        if not account_may_use_project_chat(acc, project_id):
+            return jsonify({"error": "forbidden"}), 403
+        uid = directory_user_id_for_account(acc)
+        if uid is None:
+            return jsonify({"error": "no_profile"}), 403
+        m = ChatMessage.query.filter_by(id=message_id, project_id=project_id).first()
+        if m is None:
+            return jsonify({"error": "not_found"}), 404
+        if m.is_deleted:
+            return (
+                jsonify(
+                    {"error": "gone", "detail": "Message was deleted."},
+                ),
+                410,
+            )
+        body = request.get_json(silent=True) or {}
+        emoji = (body.get("emoji") or "").strip()
+        if emoji not in CHAT_REACTION_EMOJIS:
+            return (
+                jsonify(
+                    {
+                        "error": "bad_emoji",
+                        "detail": "Use one of the supported reaction emoji.",
+                    }
+                ),
+                400,
+            )
+        existing = ChatMessageReaction.query.filter_by(
+            message_id=m.id, user_id=uid
+        ).first()
+        if existing:
+            if existing.emoji == emoji:
+                db.session.delete(existing)
+            else:
+                existing.emoji = emoji
+        else:
+            db.session.add(
+                ChatMessageReaction(message_id=m.id, user_id=uid, emoji=emoji)
+            )
+        try:
+            db.session.commit()
+        except sa_exc.IntegrityError:
+            db.session.rollback()
+            return jsonify({"error": "conflict"}), 409
+        rows = ChatMessageReaction.query.filter_by(message_id=m.id).all()
+        summaries = summarize_chat_reactions(rows, uid)
+        socketio.emit(
+            "chat_updated",
+            {
+                "project_id": project_id,
+                "message_id": m.id,
+                "user_id": uid,
+                "kind": "reaction",
+            },
+            room=f"project_{project_id}",
+        )
+        return jsonify({"reactions": summaries}), 200
 
     @app.route("/projects/<int:project_id>/chat/attachments/<path:filename>")
     def project_chat_attachment(project_id: int, filename: str):
@@ -1514,6 +2295,7 @@ def create_app() -> Flask:
         ok = (
             ChatMessage.query.filter(
                 ChatMessage.project_id == project_id,
+                ChatMessage.is_deleted.is_(False),
                 or_(
                     ChatMessage.image_path == filename,
                     ChatMessage.audio_path == filename,
@@ -1538,6 +2320,29 @@ def create_app() -> Flask:
         return send_from_directory(
             chat_upload_root, filename, mimetype=mt or "application/octet-stream"
         )
+
+    @app.route("/projects/<int:project_id>/chat/team", methods=["GET"])
+    def project_chat_team(project_id: int):
+        acc = Account.query.get(session.get("account_id"))
+        if not account_may_use_project_chat(acc, project_id):
+            return jsonify({"error": "forbidden"}), 403
+        member_ids = {
+            m.user_id for m in ProjectMember.query.filter_by(project_id=project_id).all()
+        }
+        if not member_ids:
+            return jsonify({"team": []})
+        users = (
+            User.query.options(joinedload(User.job_title))
+            .filter(User.id.in_(member_ids))
+            .order_by(User.name)
+            .all()
+        )
+        team = [
+            {"id": u.id, "name": (u.name or "").strip()}
+            for u in users
+            if (u.name or "").strip()
+        ]
+        return jsonify({"team": team})
 
     @app.route("/projects/<int:project_id>/chat/unread-count")
     def project_chat_unread_count(project_id: int):
@@ -1811,36 +2616,32 @@ def create_app() -> Flask:
         vis = visible_project_ids_for_account(acc)
         task_groups = TaskGroup.query.order_by(TaskGroup.sort_order, TaskGroup.name).all()
         uid = directory_user_id_for_account(acc)
+        selected_sort = (request.args.get("sort") or "").strip().lower()
+        if selected_sort not in ("", "newest", "priority"):
+            selected_sort = ""
+
+        # Tasks page filters are client-side; load full visible set (JSON APIs unchanged).
         if vis is None:
-            all_tasks = (
-                Task.query.filter_by(archived=False)
-                .order_by(Task.created_at.desc())
-                .all()
-            )
+            q = Task.query.filter(Task.archived.is_(False))
         elif not vis:
             if uid is None:
-                all_tasks = []
+                q = Task.query.filter(text("1=0"))
             else:
-                all_tasks = (
-                    Task.query.filter(Task.user_id == uid, Task.archived == False)
-                    .order_by(Task.created_at.desc())
-                    .all()
-                )
+                q = Task.query.filter(Task.user_id == uid, Task.archived.is_(False))
         elif uid is not None:
-            all_tasks = (
-                Task.query.filter(
-                    or_(Task.project_id.in_(vis), Task.user_id == uid),
-                    Task.archived == False,
-                )
-                .order_by(Task.created_at.desc())
-                .all()
+            q = Task.query.filter(
+                or_(Task.project_id.in_(vis), Task.user_id == uid),
+                Task.archived.is_(False),
             )
         else:
-            all_tasks = (
-                Task.query.filter(Task.project_id.in_(vis), Task.archived == False)
-                .order_by(Task.created_at.desc())
-                .all()
-            )
+            q = Task.query.filter(Task.project_id.in_(vis), Task.archived.is_(False))
+
+        all_tasks = (
+            q.options(joinedload(Task.assignee), joinedload(Task.project))
+            .order_by(Task.created_at.desc())
+            .all()
+        )
+
         tasks_by_group: dict[int | None, list[Task]] = defaultdict(list)
         for t in all_tasks:
             tasks_by_group[t.group_id].append(t)
@@ -1880,6 +2681,71 @@ def create_app() -> Flask:
             projects=projects,
             has_title_presets=has_title_presets,
             user_project_ids=dict(user_project_ids),
+            selected_sort=(selected_sort or "newest"),
+        )
+
+    @app.route("/api/tasks", methods=["GET"])
+    def api_tasks_all():
+        """Admin-only REST endpoint: all tasks across all projects/users."""
+        actor = account_from_session()
+        if actor is None or not actor.is_admin:
+            return jsonify({"error": "forbidden"}), 403
+
+        status = (request.args.get("status") or "").strip().lower()
+        if status not in ("", "open", "in_progress", "done"):
+            status = ""
+
+        search = (request.args.get("search") or "").strip()
+
+        project_id = request.args.get("project_id", type=int)
+        user_id = request.args.get("user_id", type=int)
+        limit = request.args.get("limit", type=int) or 200
+        offset = request.args.get("offset", type=int) or 0
+        limit = max(1, min(int(limit), 1000))
+        offset = max(0, int(offset))
+
+        q = Task.query.options(joinedload(Task.project), joinedload(Task.assignee))
+        if status:
+            q = q.filter(Task.status == status)
+        if search:
+            like = f"%{search}%"
+            q = (
+                q.join(Project, Task.project_id == Project.id, isouter=True)
+                .join(User, Task.user_id == User.id, isouter=True)
+                .filter(or_(Project.name.ilike(like), User.name.ilike(like)))
+            )
+        if project_id:
+            q = q.filter(Task.project_id == project_id)
+        if user_id:
+            q = q.filter(Task.user_id == user_id)
+
+        total = q.count()
+        rows = q.order_by(Task.created_at.desc(), Task.id.desc()).offset(offset).limit(limit).all()
+
+        def _task_json(t: Task) -> dict:
+            p = t.project
+            u = t.assignee
+            return {
+                "id": t.id,
+                "title": t.title,
+                "description": t.description or "",
+                "status": t.status,
+                "priority": (t.priority or "medium"),
+                "archived": bool(t.archived),
+                "created_at": t.created_at.isoformat() if t.created_at else "",
+                "completed_at": t.completed_at.isoformat() if t.completed_at else "",
+                "project": {"id": p.id, "name": p.name} if p is not None else None,
+                "user": {"id": u.id, "name": u.name} if u is not None else None,
+            }
+
+        return jsonify(
+            {
+                "ok": True,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "tasks": [_task_json(t) for t in rows],
+            }
         )
 
     def _redirect_after_task_action() -> Response:
@@ -1894,6 +2760,7 @@ def create_app() -> Flask:
         group_id = request.form.get("group_id", type=int)
         project_id = request.form.get("project_id", type=int)
         user_id = request.form.get("user_id", type=int)
+        priority_raw = (request.form.get("priority") or "").strip().lower()
         extra_description = (request.form.get("description") or "").strip()
 
         preset = TaskGroupTitle.query.get(preset_id) if preset_id else None
@@ -1930,6 +2797,9 @@ def create_app() -> Flask:
         if extra_description:
             description = f"{description}\n{extra_description}".strip() if description else extra_description
 
+        if priority_raw not in ("low", "medium", "high"):
+            priority_raw = "medium"
+
         t = Task(
             title=preset.title,
             description=description,
@@ -1937,6 +2807,7 @@ def create_app() -> Flask:
             group_id=preset.group_id,
             project_id=project.id,
             status="open",
+            priority=priority_raw,
         )
         db.session.add(t)
         db.session.commit()
@@ -2025,6 +2896,61 @@ def create_app() -> Flask:
         flash("Task deleted.", "success")
         return _redirect_after_task_action()
 
+    @app.route("/debug/priorities", methods=["GET", "POST"])
+    def debug_priorities():
+        actor = account_from_session()
+        if actor is None or not actor.is_admin:
+            abort(403)
+
+        action = (request.form.get("action") or "").strip().lower()
+        if request.method == "POST" and action:
+            if action == "create":
+                name = (request.form.get("name") or "").strip()
+                if not name:
+                    flash("Name is required.", "error")
+                    return redirect(url_for("debug_priorities"))
+                db.session.add(TaskPriority(name=name))
+                try:
+                    db.session.commit()
+                    flash("Priority added.", "success")
+                except sa_exc.IntegrityError:
+                    db.session.rollback()
+                    flash("That priority already exists.", "error")
+                return redirect(url_for("debug_priorities"))
+
+            if action == "update":
+                pid = request.form.get("id", type=int)
+                row = TaskPriority.query.get(pid) if pid else None
+                if row is None:
+                    flash("Priority not found.", "error")
+                    return redirect(url_for("debug_priorities"))
+                name = (request.form.get("name") or "").strip()
+                if not name:
+                    flash("Name is required.", "error")
+                    return redirect(url_for("debug_priorities"))
+                row.name = name
+                try:
+                    db.session.commit()
+                    flash("Priority updated.", "success")
+                except sa_exc.IntegrityError:
+                    db.session.rollback()
+                    flash("That priority already exists.", "error")
+                return redirect(url_for("debug_priorities"))
+
+            if action == "delete":
+                pid = request.form.get("id", type=int)
+                row = TaskPriority.query.get(pid) if pid else None
+                if row is None:
+                    flash("Priority not found.", "error")
+                    return redirect(url_for("debug_priorities"))
+                db.session.delete(row)
+                db.session.commit()
+                flash("Priority deleted.", "success")
+                return redirect(url_for("debug_priorities"))
+
+        rows = TaskPriority.query.order_by(TaskPriority.name.asc(), TaskPriority.id.asc()).all()
+        return render_template("debug_priorities.html", rows=rows)
+
     @app.route("/control")
     def control_panel():
         actor = account_from_session()
@@ -2036,12 +2962,143 @@ def create_app() -> Flask:
         for pt in TaskGroupTitle.query.order_by(TaskGroupTitle.sort_order, TaskGroupTitle.id).all():
             presets_by_group[pt.group_id].append(pt)
         job_titles = JobTitle.query.order_by(JobTitle.name).all()
+        admin_tasks: list[Task] = []
+        admin_tasks_total = 0
+        admin_tasks_page = 1
+        admin_tasks_per_page = 20
+        admin_tasks_page_count = 1
+        admin_task_status = ""
+        admin_tasks_search = ""
+        admin_sort = ""
+        admin_sort_direction = "asc"
+        if actor is not None and actor.is_admin:
+            admin_task_status = (request.args.get("task_status") or "").strip().lower()
+            if admin_task_status not in ("", "open", "in_progress", "done"):
+                admin_task_status = ""
+            admin_tasks_search = (request.args.get("search") or "").strip()
+            admin_tasks_page = request.args.get("page", type=int) or 1
+            admin_tasks_page = max(1, int(admin_tasks_page))
+            admin_sort = (request.args.get("sort") or "").strip().lower()
+            if admin_sort not in ("task", "project", "user", "status", "priority"):
+                admin_sort = ""
+            admin_sort_direction = (request.args.get("direction") or "asc").strip().lower()
+            if admin_sort_direction not in ("asc", "desc"):
+                admin_sort_direction = "asc"
+
+            q = Task.query.options(joinedload(Task.project), joinedload(Task.assignee))
+            if admin_task_status:
+                q = q.filter(Task.status == admin_task_status)
+            if admin_tasks_search:
+                like = f"%{admin_tasks_search}%"
+                q = (
+                    q.join(Project, Task.project_id == Project.id, isouter=True)
+                    .join(User, Task.user_id == User.id, isouter=True)
+                    .filter(or_(Project.name.ilike(like), User.name.ilike(like)))
+                )
+            admin_tasks_total = q.count()
+            if admin_tasks_total == 0:
+                admin_tasks_page_count = 1
+                admin_tasks_page = 1
+            else:
+                admin_tasks_page_count = (admin_tasks_total + admin_tasks_per_page - 1) // admin_tasks_per_page
+                admin_tasks_page = min(admin_tasks_page, admin_tasks_page_count)
+            admin_tasks = (
+                q.order_by(Task.created_at.desc(), Task.id.desc())
+                .offset((admin_tasks_page - 1) * admin_tasks_per_page)
+                .limit(admin_tasks_per_page)
+                .all()
+            )
+        admin_all_tasks_boot: dict | None = None
+        if actor is not None and actor.is_admin:
+            boot_tasks: list[dict] = []
+            for t in admin_tasks:
+                p = t.project
+                u = t.assignee
+                boot_tasks.append(
+                    {
+                        "id": t.id,
+                        "title": t.title or "",
+                        "status": t.status,
+                        "priority": t.priority or "medium",
+                        "projectName": p.name if p else "No project",
+                        "userName": u.name if u else "",
+                        "updateUrl": url_for("control_task_update", task_id=t.id),
+                        "deleteUrl": url_for("control_task_delete", task_id=t.id),
+                    }
+                )
+            admin_all_tasks_boot = {
+                "apiUrl": url_for("api_tasks_all"),
+                "controlPanelPath": url_for("control_panel"),
+                "perPage": admin_tasks_per_page,
+                "taskStatus": admin_task_status,
+                "search": admin_tasks_search,
+                "page": admin_tasks_page,
+                "total": admin_tasks_total,
+                "pageCount": admin_tasks_page_count,
+                "sort": admin_sort,
+                "direction": admin_sort_direction,
+                "tasks": boot_tasks,
+            }
         return render_template(
             "control_panel.html",
             groups=groups,
             presets_by_group=dict(presets_by_group),
             job_titles=job_titles,
+            admin_tasks=admin_tasks,
+            admin_tasks_total=admin_tasks_total,
+            admin_tasks_page=admin_tasks_page,
+            admin_tasks_per_page=admin_tasks_per_page,
+            admin_tasks_page_count=admin_tasks_page_count,
+            admin_task_status=admin_task_status,
+            admin_tasks_search=admin_tasks_search,
+            admin_sort=admin_sort,
+            admin_sort_direction=admin_sort_direction,
+            admin_all_tasks_boot=admin_all_tasks_boot,
         )
+
+    @app.route("/control/tasks/<int:task_id>/update", methods=["POST"])
+    def control_task_update(task_id: int):
+        actor = account_from_session()
+        if actor is None or not actor.is_admin:
+            abort(403)
+        t = Task.query.get_or_404(task_id)
+        title = (request.form.get("title") or "").strip()
+        status = (request.form.get("status") or "").strip().lower()
+        priority = (request.form.get("priority") or "").strip().lower()
+        if not title:
+            flash("Title is required.", "error")
+        elif status not in ("open", "in_progress", "done"):
+            flash("Invalid status.", "error")
+        elif priority not in ("low", "medium", "high"):
+            flash("Invalid priority.", "error")
+        else:
+            t.title = title
+            t.status = status
+            t.priority = priority
+            if status == "done" and t.completed_at is None:
+                t.completed_at = datetime.now(timezone.utc)
+            if status != "done":
+                t.completed_at = None
+            db.session.commit()
+            flash("Task updated.", "success")
+        raw_next = (request.form.get("next") or "").strip()
+        if raw_next.startswith("/") and not raw_next.startswith("//"):
+            return redirect(raw_next)
+        return redirect(url_for("control_panel", section="all-tasks"))
+
+    @app.route("/control/tasks/<int:task_id>/delete", methods=["POST"])
+    def control_task_delete(task_id: int):
+        actor = account_from_session()
+        if actor is None or not actor.is_admin:
+            abort(403)
+        t = Task.query.get_or_404(task_id)
+        db.session.delete(t)
+        db.session.commit()
+        flash("Task deleted.", "success")
+        raw_next = (request.form.get("next") or "").strip()
+        if raw_next.startswith("/") and not raw_next.startswith("//"):
+            return redirect(raw_next)
+        return redirect(url_for("control_panel", section="all-tasks"))
 
     @app.route("/control/groups/new", methods=["POST"])
     def control_groups_new():
@@ -2223,6 +3280,35 @@ def create_app() -> Flask:
             leave_room(f"project_{prev}")
         join_room(f"project_{pid}")
         session["socket_chat_project_id"] = pid
+        session.modified = True
+
+    @socketio.on("sync_chat_rooms")
+    def _socket_sync_chat_rooms(data):
+        """Subscribe to chat_updated for multiple projects (dashboard chat hub)."""
+        if not isinstance(data, dict):
+            return
+        raw = data.get("project_ids")
+        if not isinstance(raw, list):
+            return
+        acc = Account.query.get(session.get("account_id"))
+        if acc is None:
+            return
+        validated: list[int] = []
+        for x in raw:
+            try:
+                pid = int(x)
+            except (TypeError, ValueError):
+                continue
+            if account_may_use_project_chat(acc, pid):
+                validated.append(pid)
+        prev_list = session.get("socket_chat_room_set") or []
+        prev_set = {int(x) for x in prev_list if x is not None}
+        new_set = set(validated)
+        for pid in prev_set - new_set:
+            leave_room(f"project_{pid}")
+        for pid in new_set - prev_set:
+            join_room(f"project_{pid}")
+        session["socket_chat_room_set"] = list(new_set)
         session.modified = True
 
     @socketio.on("leave_project")

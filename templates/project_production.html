@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Production · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="production-page">
+  <div class="page-head production-page-head">
+    <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
+    <h1>Production</h1>
+    <p class="muted">{{ project.name }}</p>
+  </div>
+
+  <div class="production-layout">
+    <aside class="production-sidebar" aria-label="Production navigation">
+      <h2 class="production-sidebar-title">Production</h2>
+      <nav class="production-sidebar-nav">
+        <a href="{{ url_for('project_production', project_id=project.id) }}" class="production-sidebar-link{% if production_section == 'days' %} production-sidebar-link--active{% endif %}">Shooting Days</a>
+        <a href="{{ url_for('project_production_vfx', project_id=project.id) }}" class="production-sidebar-link{% if production_section == 'vfx' %} production-sidebar-link--active{% endif %}">VFX Management</a>
+      </nav>
+    </aside>
+    <div class="production-main">
+      {% if production_section == 'days' %}
+      {% include 'partials/production_section.html' %}
+      {% else %}
+      <section class="panel production-vfx-placeholder">
+        <h2 class="panel-title">VFX Management</h2>
+        <p class="muted production-vfx-soon">Coming soon</p>
+      </section>
+      {% endif %}
+    </div>
+  </div>
+
+  <p class="panel-after-link"><a href="{{ url_for('project_detail', project_id=project.id) }}">← Back to project</a></p>
+</div>
+{% endblock %}

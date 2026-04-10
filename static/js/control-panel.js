@@ -2,7 +2,13 @@
   "use strict";
 
   var STORAGE_KEY = "tm-admin-control-section";
-  var VALID = { "task-groups": true, "task-titles": true, "job-titles": true };
+  var VALID = {
+    "task-groups": true,
+    "task-titles": true,
+    "job-titles": true,
+    "edit-suites": true,
+    "all-tasks": true,
+  };
 
   document.addEventListener("DOMContentLoaded", function () {
     var nav = document.querySelectorAll("[data-admin-nav]");
@@ -89,10 +95,21 @@
     });
 
     var initial = "task-groups";
+    var forced = "";
     try {
-      initial = sessionStorage.getItem(STORAGE_KEY) || "task-groups";
-    } catch (e2) {
-      initial = "task-groups";
+      var params = new URLSearchParams(window.location.search || "");
+      forced = (params.get("section") || "").trim();
+    } catch (e0) {
+      forced = "";
+    }
+    if (forced && VALID[forced]) {
+      initial = forced;
+    } else {
+      try {
+        initial = sessionStorage.getItem(STORAGE_KEY) || "task-groups";
+      } catch (e2) {
+        initial = "task-groups";
+      }
     }
     if (!VALID[initial]) initial = "task-groups";
     show(initial);

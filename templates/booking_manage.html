@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Manage booking · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="booking-page booking-page--manage">
+  <header class="booking-page-head">
+    <h1 class="booking-page-title">Manage booking</h1>
+    <p class="muted booking-page-lead">Edit or cancel reservations you created or that others assigned to you.</p>
+  </header>
+
+  <div
+    class="booking-page-root"
+    id="booking-page-root"
+    data-list-url="{{ url_for('booking.booking_home') }}"
+    data-suites-url="{{ url_for('booking.edit_suites_list') }}"
+    data-projects-url="{{ url_for('booking.booking_projects_json') }}"
+    data-users-url="{{ url_for('booking.booking_users_json') }}"
+    data-today-url="{{ url_for('booking.booking_today_json') }}"
+    data-manage-url="{{ url_for('booking.booking_manage_page') }}"
+  >
+    <p class="booking-manage-toolbar">
+      <a class="btn btn--primary" href="{{ url_for('booking.booking_home') }}">Create booking</a>
+    </p>
+    {% include "_booking_lists.html" %}
+  </div>
+</section>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
+{% endblock %}

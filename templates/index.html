@@ -1,37 +1,76 @@
 {% extends "base.html" %}
 {% block title %}Overview · {{ app_name }}{% endblock %}
 {% block content %}
-<section class="hero">
-  <h1>{{ app_name }}</h1>
-  <p class="lede">Post-production pipeline: directory, assignments, and task groups.</p>
-</section>
+<div class="shell-dash">
+  <header class="shell-dash-hero">
+    <h1>{{ app_name }}</h1>
+    <p class="lede">Post-production pipeline — directory, assignments, and task groups.</p>
+  </header>
 
-<section class="cards">
-  <article class="card card--accent">
-    <h2>Projects</h2>
-    <p class="card-stat">{{ project_count }}</p>
-    <p class="card-meta">productions on file</p>
-    <a class="btn btn--ghost" href="{{ url_for('projects_list') }}">Manage projects</a>
-  </article>
-  {% if current_account_is_admin %}
-  <article class="card">
-    <h2>Users</h2>
-    <p class="card-stat">{{ user_count }}</p>
-    <p class="card-meta">people in the directory</p>
-    <a class="btn btn--ghost" href="{{ url_for('users_list') }}">Manage users</a>
-  </article>
-  {% endif %}
-  <article class="card">
-    <h2>Open</h2>
-    <p class="card-stat">{{ open_tasks }}</p>
-    <p class="card-meta">still open</p>
-    <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">Triage</a>
-  </article>
-  <article class="card">
-    <h2>Tasks</h2>
-    <p class="card-stat">{{ task_count }}</p>
-    <p class="card-meta">total tasks</p>
-    <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">View tasks</a>
-  </article>
-</section>
+  <div class="shell-dash-grid">
+    <div class="shell-widget">
+      <h2>Projects</h2>
+      <p class="shell-widget-stat">{{ project_count }}</p>
+      <p class="shell-widget-meta">On file</p>
+      <a class="btn btn--ghost" href="{{ url_for('projects_list') }}">Open</a>
+    </div>
+    {% if current_account_is_admin %}
+    <div class="shell-widget">
+      <h2>Users</h2>
+      <p class="shell-widget-stat">{{ user_count }}</p>
+      <p class="shell-widget-meta">Directory</p>
+      <a class="btn btn--ghost" href="{{ url_for('users_list') }}">Manage</a>
+    </div>
+    {% endif %}
+    <div class="shell-widget shell-widget--booking" id="dashboard-booking-card" data-today-url="{{ url_for('booking.booking_today_json') }}">
+      <h2>My booking</h2>
+      <div class="dashboard-booking-slot">
+        <div class="dashboard-booking-filled" id="dashboard-booking-filled" {% if not booking_today_card %}hidden{% endif %}>
+          <div class="dashboard-booking-body">
+            <p class="dashboard-booking-suite" id="db-booking-suite">{{ booking_today_card.suite_name if booking_today_card else "" }}</p>
+            <p class="dashboard-booking-meta" id="db-booking-time">{% if booking_today_card %}{{ booking_today_card.time_label }}{% if booking_today_card.is_full_day %} · Full day{% endif %}{% endif %}</p>
+            <p class="dashboard-booking-meta" id="db-booking-project">{% if booking_today_card and booking_today_card.project_name %}{{ booking_today_card.project_name }}{% endif %}</p>
+            <p class="dashboard-booking-for" id="db-booking-for">{% if booking_today_card and booking_today_card.booked_for_name %}For {{ booking_today_card.booked_for_name }}{% endif %}</p>
+          </div>
+          <div class="dashboard-booking-actions">
+            <a class="btn btn--ghost" href="{{ url_for('booking.booking_manage_page') }}">Manage</a>
+          </div>
+        </div>
+        <div class="dashboard-booking-empty" id="dashboard-booking-empty" {% if booking_today_card %}hidden{% endif %}>
+          <div class="dashboard-booking-empty-inner">
+            <p class="dashboard-booking-empty-title">No booking today</p>
+            <p class="dashboard-booking-empty-sub">Plan your schedule</p>
+            <div class="dashboard-booking-empty-actions">
+              <a class="btn btn--ghost" href="{{ url_for('booking.booking_manage_page') }}">Manage</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="shell-widget">
+      <h2>{% if current_account_is_admin %}Open tasks{% else %}My open{% endif %}</h2>
+      <p class="shell-widget-stat">{{ open_tasks }}</p>
+      <p class="shell-widget-meta">{% if current_account_is_admin %}Open{% else %}Assigned to you{% endif %}</p>
+      <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">Triage</a>
+    </div>
+    <div class="shell-widget">
+      <h2>{% if current_account_is_admin %}All open{% else %}Team open{% endif %}</h2>
+      <p class="shell-widget-stat">{{ task_count }}</p>
+      <p class="shell-widget-meta">{% if current_account_is_admin %}Total open{% else %}On your projects{% endif %}</p>
+      <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">Tasks</a>
+    </div>
+  </div>
+
+  <div class="shell-widget shell-widget--flat">
+    <h2>Quick actions</h2>
+    <div class="shell-widget-actions">
+      <a class="btn btn--primary" href="{{ url_for('tasks_list') }}#task-create">New task</a>
+      <a class="btn btn--ghost" href="{{ url_for('booking.booking_home') }}">Booking</a>
+      <a class="btn btn--ghost" href="{{ url_for('projects_list') }}">Projects</a>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
 {% endblock %}

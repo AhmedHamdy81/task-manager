@@ -13,6 +13,8 @@
       <button type="button" class="admin-nav-item" data-admin-nav="task-titles">Task titles</button>
       <button type="button" class="admin-nav-item" data-admin-nav="job-titles">Job titles</button>
       {% if current_account_is_admin %}
+      <button type="button" class="admin-nav-item" data-admin-nav="edit-suites">Edit suites</button>
+      <button type="button" class="admin-nav-item" data-admin-nav="all-tasks">List All tasks</button>
       <a href="{{ url_for('users_list') }}" class="admin-nav-item admin-nav-item--link">Users</a>
       {% endif %}
       <span class="admin-nav-item admin-nav-item--placeholder" aria-disabled="true">Settings <span class="admin-nav-soon">Soon</span></span>
@@ -20,13 +22,6 @@
   </aside>
 
   <div class="admin-main">
-    <div class="admin-main-toolbar">
-      <button type="button" class="admin-sidebar-toggle" id="admin-sidebar-toggle" aria-expanded="false" aria-controls="admin-sidebar">
-        <span class="admin-sidebar-toggle-icon" aria-hidden="true"></span>
-        <span class="sr-only">Sections menu</span>
-      </button>
-      <a class="admin-back-link" href="{{ url_for('tasks_list') }}">← Back to Tasks</a>
-    </div>
 
     <div class="admin-panel-stack" id="admin-panel-stack">
       {# —— Task groups —— #}
@@ -173,11 +168,148 @@
           </form>
         </section>
       </div>
+
+      {% if current_account_is_admin %}
+      <div class="admin-section" data-admin-panel="edit-suites" hidden>
+        <header class="admin-section-head">
+          <h1 class="admin-section-title">Edit suites</h1>
+          <p class="muted admin-section-lead">Rooms users can reserve on the Booking page. Deactivate a suite to hide it from new bookings (existing rows stay in history).</p>
+        </header>
+        <section class="panel admin-card">
+          <div class="booking-edit-suites-head">
+            <button
+              type="button"
+              class="btn btn--primary"
+              id="edit-suite-add-btn"
+              data-api-base="{{ url_for('booking.edit_suites_list') }}"
+            >+ Add suite</button>
+          </div>
+          <div class="booking-suite-head-row" aria-hidden="true">
+            <span>Suite name</span>
+            <span>Status</span>
+            <span class="booking-suite-head-actions">Actions</span>
+          </div>
+          <ul id="edit-suites-list" class="booking-suite-list booking-suite-list--admin" role="list"></ul>
+          <p id="edit-suites-empty" class="empty empty--tight" hidden>No edit suites yet.</p>
+          <p id="edit-suites-error" class="form-error" hidden></p>
+        </section>
+
+        <dialog class="booking-suite-dialog" id="edit-suite-modal" aria-labelledby="edit-suite-modal-title">
+          <div class="booking-suite-dialog-inner">
+            <h2 id="edit-suite-modal-title" class="booking-suite-dialog-title">Add suite</h2>
+            <label class="field booking-field booking-field--grow">
+              <span class="field-label">Suite name</span>
+              <input type="text" id="edit-suite-name" maxlength="200" class="booking-input" placeholder="e.g. Color 1" autocomplete="off">
+            </label>
+            <div class="booking-suite-dialog-actions">
+              <button type="button" class="btn btn--primary" id="edit-suite-save">Save</button>
+              <button type="button" class="btn btn--ghost" id="edit-suite-cancel">Cancel</button>
+            </div>
+          </div>
+        </dialog>
+      </div>
+
+      <div class="admin-section" data-admin-panel="all-tasks" hidden>
+        <header class="admin-section-head">
+          <h1 class="admin-section-title">All tasks</h1>
+          <p class="muted admin-section-lead">Admin view: all projects, all users, all statuses. Search, sort, edit, and delete.</p>
+        </header>
+
+        {% if admin_all_tasks_boot %}
+        <script type="application/json" id="admin-tasks-boot">{{ admin_all_tasks_boot | tojson | safe }}</script>
+        {% endif %}
+
+        <section class="panel admin-card">
+          <div id="task-filter-form" class="admin-tasks-filter-form" role="search" aria-label="Filter tasks">
+            <label class="field admin-tasks-filter-field admin-tasks-filter-field--status">
+              <span class="field-label">Status</span>
+              <select id="status-filter" class="admin-tasks-filter-select" aria-label="Task status">
+                <option value="" {% if not admin_task_status %}selected{% endif %}>All</option>
+                <option value="open" {% if admin_task_status == 'open' %}selected{% endif %}>Open</option>
+                <option value="in_progress" {% if admin_task_status == 'in_progress' %}selected{% endif %}>In progress</option>
+                <option value="done" {% if admin_task_status == 'done' %}selected{% endif %}>Done</option>
+              </select>
+            </label>
+            <label class="field admin-tasks-filter-field admin-tasks-filter-field--search">
+              <span class="field-label">Search</span>
+              <input
+                type="search"
+                id="search-input"
+                class="admin-tasks-filter-search"
+                placeholder="Project or user…"
+                autocomplete="off"
+                value="{{ request.args.get('search','') }}"
+                aria-label="Search by project or user">
+            </label>
+          </div>
+        </section>
+
+        <section class="panel admin-card admin-tasks-sortbar">
+          <div class="admin-tasks-sortbar-row">
+            <span class="muted admin-tasks-sortbar-label">Sort:</span>
+            <button type="button" class="sort-btn" data-field="task" data-direction="" aria-pressed="false">Task <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="project" data-direction="" aria-pressed="false">Project <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="user" data-direction="" aria-pressed="false">User <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="status" data-direction="" aria-pressed="false">Status <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="priority" data-direction="" aria-pressed="false">Priority <span class="arrow" aria-hidden="true"></span></button>
+          </div>
+        </section>
+
+        <section class="admin-tasks-list" id="admin-tasks-list" aria-live="polite">
+          <div id="admin-tasks-message" class="admin-tasks-message" hidden></div>
+          <div id="admin-tasks-rows" class="admin-tasks-rows"></div>
+        </section>
+
+        <div class="admin-tasks-list-meta" id="admin-tasks-meta">
+          <p id="admin-tasks-count" class="muted admin-tasks-count"></p>
+          <nav id="admin-tasks-pagination" class="admin-tasks-pagination" aria-label="Task list pages"></nav>
+        </div>
+
+        <dialog class="project-task-modal" id="admin-task-edit-modal">
+          <div class="project-task-modal-inner">
+            <div class="project-task-modal-head">
+              <h2 class="project-task-modal-title">Edit task</h2>
+              <button type="button" class="btn btn--small btn--ghost" id="admin-task-edit-close">Close</button>
+            </div>
+            <form method="post" id="admin-task-edit-form" class="form-stack">
+              <input type="hidden" name="next" id="admin-task-edit-next" value="">
+              <label class="field">
+                <span class="field-label">Task title</span>
+                <input type="text" name="title" id="admin-task-edit-title" required maxlength="200">
+              </label>
+              <label class="field">
+                <span class="field-label">Status</span>
+                <select name="status" id="admin-task-edit-status" required>
+                  <option value="open">Open</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="done">Done</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Priority</span>
+                <select name="priority" id="admin-task-edit-priority" required>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </label>
+              <button type="submit" class="btn btn--primary">Save</button>
+            </form>
+          </div>
+        </dialog>
+
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/core/state.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/core/api.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/components/tasks.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/components/filters.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/control-panel.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
 {% endblock %}

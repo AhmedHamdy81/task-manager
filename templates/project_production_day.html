@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Day {{ day_display_index }} · Production · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="production-page">
+  <div class="page-head production-page-head">
+    <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> / <a href="{{ url_for('project_production', project_id=project.id) }}">Production</a> /</p>
+    <h1>Shooting day {{ day_display_index }}</h1>
+    <p class="muted">{{ production_day.shooting_date.strftime('%Y-%m-%d') }}</p>
+  </div>
+
+  <div class="production-layout">
+    <aside class="production-sidebar" aria-label="Production navigation">
+      <h2 class="production-sidebar-title">Production</h2>
+      <nav class="production-sidebar-nav">
+        <a href="{{ url_for('project_production', project_id=project.id) }}" class="production-sidebar-link production-sidebar-link--active">Shooting Days</a>
+        <a href="{{ url_for('project_production_vfx', project_id=project.id) }}" class="production-sidebar-link">VFX Management</a>
+      </nav>
+    </aside>
+    <div class="production-main">
+      <div
+        id="production-day-app"
+        class="production-day-app"
+        data-project-id="{{ project.id }}"
+        data-day-id="{{ production_day.id }}"
+        data-rows-create-url="{{ rows_create_url }}"
+        data-initial-total="{{ total_seconds }}"
+      >
+        <div class="production-day-toolbar">
+          <form method="post" action="{{ url_for('production_day_delete', project_id=project.id, day_id=production_day.id) }}" class="inline" data-confirm="Delete this day and all rows?">
+            <button type="submit" class="btn btn--small btn--danger">Delete day</button>
+          </form>
+        </div>
+
+        <div class="production-scenes-table-wrap">
+          <table class="production-scenes-table" aria-label="Scene rows">
+            <thead>
+              <tr>
+                <th scope="col">EPS</th>
+                <th scope="col">Scene</th>
+                <th scope="col">Sync</th>
+                <th scope="col">1st Edit</th>
+                <th scope="col">Final Edit</th>
+                <th scope="col">Duration</th>
+                <th scope="col">Notes</th>
+                <th scope="col"><span class="sr-only">Remove</span></th>
+              </tr>
+            </thead>
+            <tbody id="production-scenes-tbody">
+              {% for row in scene_rows %}
+              <tr class="production-scene-tr" data-row-id="{{ row.id }}">
+                <td><input type="text" class="input input--table production-field" data-field="episode" value="{{ row.episode }}" maxlength="120" aria-label="Episode"></td>
+                <td><input type="text" class="input input--table production-field" data-field="scene" value="{{ row.scene }}" maxlength="120" aria-label="Scene"></td>
+                <td class="production-chk-cell"><input type="checkbox" class="production-chk" data-field="sync" {% if row.sync %}checked{% endif %} aria-label="Sync"></td>
+                <td class="production-chk-cell"><input type="checkbox" class="production-chk" data-field="first_edit" {% if row.first_edit %}checked{% endif %} aria-label="First edit"></td>
+                <td class="production-chk-cell"><input type="checkbox" class="production-chk" data-field="final_edit" {% if row.final_edit %}checked{% endif %} aria-label="Final edit"></td>
+                <td><input type="text" class="input input--table production-field production-duration-input" data-field="duration" value="{{ row.duration_seconds|fmt_duration_mmss }}" inputmode="numeric" placeholder="MM:SS" aria-label="Duration"></td>
+                <td><input type="text" class="input input--table production-field" data-field="notes" value="{{ row.notes }}" maxlength="8000" aria-label="Notes"></td>
+                <td><button type="button" class="btn btn--small btn--ghost production-row-remove" title="Remove row">×</button></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="8" class="production-scenes-total-cell">
+                  Total: <strong id="production-duration-total">{{ total_seconds|fmt_duration_total }}</strong>
+                  <button type="button" class="btn btn--small btn--primary production-add-row-btn" id="production-add-row-btn">+ Add row</button>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="panel-after-link"><a href="{{ url_for('project_production', project_id=project.id) }}">← All shooting days</a></p>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/production-day.js') }}" defer></script>
+{% endblock %}

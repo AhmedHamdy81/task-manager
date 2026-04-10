@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Booking · {{ app_name }}{% endblock %}
+{% block content %}
+<section class="booking-page booking-list-mode" id="booking-page-section">
+  <div class="shell-booking-head">
+    <div>
+      <h1 class="booking-page-title">Booking</h1>
+      <p class="muted booking-page-lead">Reserve a suite and view the schedule.</p>
+    </div>
+    <div class="shell-view-toggle" role="group" aria-label="View mode">
+      <button type="button" class="is-active" id="booking-view-list" aria-pressed="true">List</button>
+      <button type="button" id="booking-view-timeline" aria-pressed="false">Timeline</button>
+    </div>
+  </div>
+
+  <div
+    class="booking-page-root"
+    id="booking-page-root"
+    data-list-url="{{ url_for('booking.booking_home') }}"
+    data-suites-url="{{ url_for('booking.edit_suites_list') }}"
+    data-projects-url="{{ url_for('booking.booking_projects_json') }}"
+    data-users-url="{{ url_for('booking.booking_users_json') }}"
+    data-today-url="{{ url_for('booking.booking_today_json') }}"
+    data-manage-url="{{ url_for('booking.booking_manage_page') }}"
+  >
+    <form id="booking-form" class="booking-form shell-booking-form" autocomplete="off">
+      <div class="booking-form-row">
+        <label class="field booking-field booking-field--grow">
+          <span class="field-label">Room</span>
+          <select id="booking-suite" class="booking-input booking-select" required aria-label="Room"></select>
+        </label>
+        <label class="field booking-field booking-field--grow">
+          <span class="field-label">Project</span>
+          <select id="booking-project" class="booking-input booking-select" required aria-label="Project"></select>
+        </label>
+      </div>
+      <div class="booking-form-row">
+        <label class="field booking-field">
+          <span class="field-label">Date</span>
+          <input type="date" id="booking-date" class="booking-input booking-input--date" required>
+        </label>
+        <label class="field booking-field">
+          <span class="field-label">Start</span>
+          <input type="time" id="booking-start" class="booking-input booking-input--time" required>
+        </label>
+        <label class="field booking-field" id="booking-end-wrap">
+          <span class="field-label">End</span>
+          <input type="time" id="booking-end" class="booking-input booking-input--time" value="17:00">
+        </label>
+      </div>
+      <label class="booking-full-day">
+        <input type="checkbox" id="booking-full-day" class="booking-checkbox">
+        <span>To end of day</span>
+      </label>
+      <label class="field booking-field booking-field--grow">
+        <span class="field-label">Booked for</span>
+        <select id="booking-booked-for" class="booking-input booking-select" required aria-label="Booked for"></select>
+      </label>
+      <label class="field booking-field booking-field--grow">
+        <span class="field-label">Notes</span>
+        <textarea id="booking-notes" class="booking-input booking-textarea" rows="2" maxlength="10000" placeholder="Optional"></textarea>
+      </label>
+      <div class="booking-actions">
+        <button type="submit" class="btn btn--primary booking-submit" id="booking-submit">Book now</button>
+        <a class="btn btn--ghost" href="{{ url_for('booking.booking_manage_page') }}">Manage</a>
+      </div>
+      <p class="form-error booking-form-error" id="booking-form-error" hidden></p>
+      <p class="booking-form-success" id="booking-form-success" hidden></p>
+    </form>
+
+    <div class="booking-timeline-wrap" id="booking-timeline-wrap" aria-label="Schedule timeline" hidden>
+      <div class="booking-timeline" id="booking-timeline-inner"></div>
+    </div>
+
+    {% include "_booking_lists.html" %}
+  </div>
+</section>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
+{% endblock %}

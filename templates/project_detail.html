@@ -8,9 +8,12 @@
     <h1>{{ project.name }}</h1>
     <p class="muted">{{ project.project_type }} · {{ project.production_house }} · Director: {{ project.director }}</p>
   </div>
-  {% if current_account_is_elevated %}
-  <a class="btn btn--primary project-edit-btn" href="{{ url_for('project_edit', project_id=project.id) }}">Edit</a>
-  {% endif %}
+  <div class="project-detail-head-actions">
+    <a class="btn btn--ghost" href="{{ url_for('project_production', project_id=project.id) }}">Production</a>
+    {% if current_account_is_elevated %}
+    <a class="btn btn--primary project-edit-btn" href="{{ url_for('project_edit', project_id=project.id) }}">Edit</a>
+    {% endif %}
+  </div>
 </div>
 
 <section class="panel">
@@ -44,37 +47,39 @@
       <span class="field-label" id="project-user-picker-label">Add team member</span>
       <input type="hidden" name="user_id" id="project-add-user-id" value="">
       <div class="user-picker-box">
-        <input
-          type="search"
-          id="project-user-search"
-          class="user-picker-search"
-          placeholder="Search by name or email…"
-          autocomplete="off"
-          aria-labelledby="project-user-picker-label"
-          aria-controls="project-user-picker-list"
-          aria-expanded="false"
-          aria-autocomplete="list"
-          role="combobox">
+        <div class="user-picker-input-wrap">
+          <input
+            type="search"
+            id="project-user-search"
+            class="user-picker-search"
+            placeholder="Search by name or email…"
+            autocomplete="off"
+            aria-labelledby="project-user-picker-label"
+            aria-controls="project-user-picker-list"
+            aria-expanded="false"
+            aria-autocomplete="list"
+            role="combobox">
+          <button type="button" class="user-picker-clear" id="project-user-clear" aria-label="Clear selection" hidden>&times;</button>
+        </div>
         <ul id="project-user-picker-list" class="user-picker-list" role="listbox" aria-labelledby="project-user-picker-label" hidden>
           {% for u in available_to_add %}
+          {% set picker_job = (u.job_title.name.strip() if u.job_title and u.job_title.name else '') %}
           <li class="user-picker-item" role="none">
             <button type="button" class="user-picker-option" role="option"
               data-user-id="{{ u.id }}"
               data-user-name="{{ u.name|e }}"
-              data-user-email="{{ u.email|e }}">
-              <span class="user-picker-name">{{ u.name }}</span>
-              <span class="user-picker-email">{{ u.email }}</span>
+              data-user-email="{{ u.email|e }}"
+              data-user-meta="{{ (picker_job or 'No title')|e }}">
+              <div class="user-result">
+                <div class="user-name">{{ u.name }}</div>
+                <div class="user-meta">{{ picker_job or 'No title' }}</div>
+              </div>
             </button>
           </li>
           {% endfor %}
         </ul>
       </div>
       <p class="user-picker-empty muted" id="project-user-picker-empty" hidden>No users match your search.</p>
-      <p class="user-picker-selected" id="project-user-selected" hidden>
-        <span class="muted">Selected:</span>
-        <strong id="project-user-selected-label"></strong>
-        <button type="button" class="btn btn--small btn--ghost user-picker-change" id="project-user-clear">Change</button>
-      </p>
     </div>
     <button type="submit" class="btn btn--primary">Add to project</button>
   </form>
@@ -86,27 +91,36 @@
     var search = document.getElementById('project-user-search');
     var list = document.getElementById('project-user-picker-list');
     var emptyMsg = document.getElementById('project-user-picker-empty');
-    var selectedWrap = document.getElementById('project-user-selected');
-    var selectedLabel = document.getElementById('project-user-selected-label');
     var clearBtn = document.getElementById('project-user-clear');
     var items = list ? Array.prototype.slice.call(list.querySelectorAll('.user-picker-item')) : [];
+    var committedId = '';
+    var committedLabel = '';
 
     function norm(s) {
       return (s || '').toLowerCase().trim();
     }
 
+    function isShowingCommittedPick() {
+      return !!committedId && norm(search.value) === norm(committedLabel);
+    }
+
+    function syncClearBtn() {
+      if (clearBtn) clearBtn.hidden = !hiddenId || !hiddenId.value;
+    }
+
     function filterList() {
       var q = norm(search.value);
+      var filterQ = isShowingCommittedPick() ? '' : q;
       var any = false;
       items.forEach(function (li) {
         var btn = li.querySelector('.user-picker-option');
         if (!btn) return;
         var hay = norm(btn.getAttribute('data-user-name') + ' ' + btn.getAttribute('data-user-email'));
-        var show = !q || hay.indexOf(q) !== -1;
+        var show = !filterQ || hay.indexOf(filterQ) !== -1;
         li.hidden = !show;
         if (show) any = true;
       });
-      if (emptyMsg) emptyMsg.hidden = any || !q;
+      if (emptyMsg) emptyMsg.hidden = any || !filterQ;
     }
 
     function setListOpen(open) {
@@ -117,31 +131,45 @@
 
     function selectUser(id, label) {
       if (hiddenId) hiddenId.value = String(id);
-      if (selectedLabel) selectedLabel.textContent = label;
-      if (selectedWrap) selectedWrap.hidden = false;
-      if (search) {
-        search.value = '';
-        search.blur();
-      }
+      committedId = String(id);
+      committedLabel = label;
+      if (search) search.value = label;
+      syncClearBtn();
       setListOpen(false);
       filterList();
+      if (search) search.focus();
     }
 
     function clearSelection() {
       if (hiddenId) hiddenId.value = '';
-      if (selectedWrap) selectedWrap.hidden = true;
-      if (selectedLabel) selectedLabel.textContent = '';
-      if (search) search.focus();
+      committedId = '';
+      committedLabel = '';
+      if (search) search.value = '';
+      syncClearBtn();
       setListOpen(true);
       filterList();
+      if (search) search.focus();
     }
 
     if (search) {
       search.addEventListener('focus', function () {
         setListOpen(true);
         filterList();
+        if (hiddenId && hiddenId.value) {
+          requestAnimationFrame(function () {
+            try {
+              search.select();
+            } catch (err) {}
+          });
+        }
       });
       search.addEventListener('input', function () {
+        if (committedId && norm(search.value) !== norm(committedLabel)) {
+          if (hiddenId) hiddenId.value = '';
+          committedId = '';
+          committedLabel = '';
+        }
+        syncClearBtn();
         setListOpen(true);
         filterList();
       });
@@ -153,15 +181,19 @@
         if (!btn || !list.contains(btn)) return;
         var id = btn.getAttribute('data-user-id');
         var name = btn.getAttribute('data-user-name') || '';
-        var email = btn.getAttribute('data-user-email') || '';
+        var meta = btn.getAttribute('data-user-meta') || '';
         if (!id) return;
-        selectUser(id, name + (email ? ' (' + email + ')' : ''));
+        selectUser(id, name + (meta ? ' — ' + meta : ''));
       });
     }
 
-    if (clearBtn) clearBtn.addEventListener('click', function () {
-      clearSelection();
-    });
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        clearSelection();
+      });
+    }
 
     document.addEventListener('click', function (e) {
       if (!form.contains(e.target)) setListOpen(false);
@@ -179,13 +211,12 @@
         filterList();
       }
     });
+
+    syncClearBtn();
   })();
   </script>
   {% elif current_account_is_elevated %}
   <p class="empty empty--tight">Everyone in the directory is already on this project, or there are no other users.</p>
-  {% endif %}
-  {% if not chat_allowed %}
-  <p class="muted project-chat-locked-inline">Project chat is only available to people on the <strong>project team</strong> above.</p>
   {% endif %}
 </section>
 
@@ -253,98 +284,79 @@
 </dialog>
 {% endif %}
 
-<p class="panel-after-link"><a href="{{ url_for('projects_list') }}">← All projects</a></p>
-
-{% if chat_allowed %}
-<script type="application/json" id="project-chat-team-json">{{ chat_team_mentions | tojson }}</script>
-<aside
-  id="project-chat"
-  class="project-chat-dock project-chat-dock--collapsed"
-  data-project-id="{{ project.id }}"
-  data-chat-allowed="true"
-  data-directory-user-id="{{ chat_viewer_user_id }}"
-  data-notify-sound-url="{{ url_for('static', filename='sounds/chat-notify.wav') }}"
-  data-messages-url="{{ url_for('project_chat_messages', project_id=project.id) }}"
-  data-unread-url="{{ url_for('project_chat_unread_count', project_id=project.id) }}"
-  data-mark-read-url="{{ url_for('project_chat_mark_read', project_id=project.id) }}"
-  data-project-name="{{ project.name|e }}"
-  aria-label="{{ ('Messages · ' ~ project.name)|e }}">
-  <div class="project-chat-dock-inner" id="project-chat-dock-inner">
-    <div
-      class="project-chat-resize-handle"
-      id="project-chat-resize-handle"
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label="Drag to resize chat height"
-      tabindex="0"></div>
-    <button type="button" class="project-chat-dock-tab" id="project-chat-toggle" aria-expanded="false" aria-controls="project-chat-panel-body">
-      <span class="project-chat-dock-tab-title">{{ project.name }}</span>
-      <span id="project-chat-unread-badge" class="project-chat-unread-badge"{% if not chat_unread_count %} hidden{% endif %}>{% if chat_unread_count > 99 %}99+{% else %}{{ chat_unread_count }}{% endif %}</span>
-      <span class="project-chat-dock-chevron" aria-hidden="true"></span>
-    </button>
-    <div class="project-chat-dock-body" id="project-chat-panel-body">
-      <div class="project-chat-header">
-        <span class="project-chat-header-title">{{ project.name }}</span>
-        <button type="button" class="project-chat-icon-btn project-chat-sound-toggle" id="project-chat-sound-toggle" title="Mute notification sound" aria-label="Mute chat notification sound" aria-pressed="false">
-          <svg class="project-chat-sound-icon project-chat-sound-icon--on" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-          <svg class="project-chat-sound-icon project-chat-sound-icon--off" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
-        </button>
-      </div>
-      <p class="project-chat-hint muted">Team chat for this project only.</p>
-      <div id="project-chat-status" class="sr-only" aria-live="polite"></div>
-      <div id="project-chat-messages" class="project-chat-stream" role="log" aria-label="Chat messages"></div>
-      <form id="project-chat-form" class="project-chat-composer" method="post" enctype="multipart/form-data" action="{{ url_for('project_chat_messages', project_id=project.id) }}">
-        <div class="project-chat-composer-field">
-          <label class="sr-only" for="project-chat-input">Message</label>
-          <input type="text" id="project-chat-input" name="message" class="project-chat-composer-input" placeholder="Message… (use @ to mention)" maxlength="8000" autocomplete="off">
-          <ul id="project-chat-mention-list" class="project-chat-mention-suggestions" hidden role="listbox" aria-label="Mention teammate"></ul>
-        </div>
-        <div class="project-chat-composer-actions">
-          <button type="button" class="project-chat-icon-btn" id="project-chat-btn-gallery" title="Attach image" aria-label="Attach image from device">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-          </button>
-          <button type="button" class="project-chat-icon-btn" id="project-chat-btn-camera" title="Take a photo" aria-label="Take a photo with camera">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-          </button>
-          <button type="button" class="project-chat-icon-btn" id="project-chat-btn-mic" title="Voice note" aria-label="Record voice note">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-          </button>
-          <button type="submit" class="btn btn--primary project-chat-send" id="project-chat-send" aria-label="Send message">
-            <span class="project-chat-send-label">Send</span>
-            <span class="project-chat-send-spinner" aria-hidden="true"></span>
-          </button>
-        </div>
-        <input type="file" id="project-chat-file-gallery" class="sr-only" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp">
-        <input type="file" id="project-chat-file-camera" class="sr-only" accept="image/*" capture="environment">
-      </form>
-      <p id="project-chat-error" class="project-chat-error" role="alert" hidden></p>
-    </div>
+<section id="project-shooting-days" aria-labelledby="shooting-days-heading">
+  <h2 id="shooting-days-heading">Shooting Days</h2>
+  {% if project_shooting_days %}
+  {% set first_day = project_shooting_days[0] %}
+  {% set last_day = project_shooting_days[-1] %}
+  <div id="shooting-days-pagination-style" class="shooting-days-pagination" role="navigation" aria-label="Shooting days">
+    <a class="day-page" href="{{ url_for('project_production_day', project_id=project.id, day_id=first_day.id) }}" aria-label="First shooting day">&lt;</a>
+    {% for d in project_shooting_days %}
+    <a class="day-page" href="{{ url_for('project_production_day', project_id=project.id, day_id=d.id) }}" aria-label="Shooting day {{ loop.index }}">{{ loop.index }}</a>
+    {% endfor %}
+    <a class="day-page" href="{{ url_for('project_production_day', project_id=project.id, day_id=last_day.id) }}" aria-label="Last shooting day">&gt;</a>
   </div>
-</aside>
-{% endif %}
+  {% endif %}
+  <p><button type="button" id="project-shooting-day-add-open">+ Add Day</button></p>
+</section>
+
+<dialog class="project-task-modal" id="shooting-day-add-dialog" aria-labelledby="shooting-day-add-title">
+  <div class="project-task-modal-inner">
+    <div class="project-task-modal-head">
+      <h2 id="shooting-day-add-title" class="project-task-modal-title">Add shooting day</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-shooting-day-add-close aria-label="Close">Close</button>
+    </div>
+    <form class="form-stack" method="post" action="{{ url_for('shooting_day_create', project_id=project.id) }}">
+      <input type="hidden" name="next" value="{{ url_for('project_detail', project_id=project.id) }}#project-shooting-days">
+      <label class="field-label" for="shooting-day-modal-unit">Unit number</label>
+      <input id="shooting-day-modal-unit" type="text" name="unit_number" class="input" autocomplete="off" aria-label="Unit number">
+      <label class="field-label" for="shooting-day-modal-date">Shooting date</label>
+      <input id="shooting-day-modal-date" type="date" name="shooting_date" class="input" required aria-label="Shooting date">
+      <button type="submit" class="btn btn--primary">Save</button>
+      <button type="button" class="btn btn--ghost" data-shooting-day-add-close>Cancel</button>
+    </form>
+  </div>
+</dialog>
+
+<p class="panel-after-link"><a href="{{ url_for('projects_list') }}">← All projects</a></p>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
-{% if chat_allowed %}
-<script src="{{ url_for('static', filename='js/chat.js') }}" defer></script>
-{% endif %}
 <script>
 (function () {
   var dlg = document.getElementById('project-new-task-dialog');
-  if (!dlg || typeof dlg.showModal !== 'function') return;
-  function openNewTaskModal() {
-    dlg.showModal();
-    var first = dlg.querySelector('select:not([disabled]), textarea');
-    if (first) {
-      try { first.focus(); } catch (e) {}
+  if (dlg && typeof dlg.showModal === 'function') {
+    function openNewTaskModal() {
+      dlg.showModal();
+      var first = dlg.querySelector('select:not([disabled]), textarea');
+      if (first) {
+        try { first.focus(); } catch (e) {}
+      }
     }
+    var openBtn = document.getElementById('project-new-task-open');
+    if (openBtn) openBtn.addEventListener('click', openNewTaskModal);
+    dlg.querySelectorAll('[data-project-task-modal-close]').forEach(function (btn) {
+      btn.addEventListener('click', function () { dlg.close(); });
+    });
   }
-  var openBtn = document.getElementById('project-new-task-open');
-  if (openBtn) openBtn.addEventListener('click', openNewTaskModal);
-  dlg.querySelectorAll('[data-project-task-modal-close]').forEach(function (btn) {
-    btn.addEventListener('click', function () { dlg.close(); });
-  });
+
+  var addDlg = document.getElementById('shooting-day-add-dialog');
+  var addOpen = document.getElementById('project-shooting-day-add-open');
+  if (addDlg && addOpen && typeof addDlg.showModal === 'function') {
+    addOpen.addEventListener('click', function () {
+      addDlg.showModal();
+      var unitIn = document.getElementById('shooting-day-modal-unit');
+      var dateIn = document.getElementById('shooting-day-modal-date');
+      var first = unitIn || dateIn;
+      if (first) {
+        try { first.focus(); } catch (e) {}
+      }
+    });
+    addDlg.querySelectorAll('[data-shooting-day-add-close]').forEach(function (btn) {
+      btn.addEventListener('click', function () { addDlg.close(); });
+    });
+  }
 })();
 </script>
 {% endblock %}

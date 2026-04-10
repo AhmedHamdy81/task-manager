@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Debug · Priorities · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>TaskPriority (debug)</h1>
+  <p class="muted">Temporary admin-only page for viewing and editing task priority rows.</p>
+</div>
+
+<section class="panel">
+  <h2 class="panel-title">Add new</h2>
+  <form method="post" class="form-row">
+    <input type="hidden" name="action" value="create">
+    <label class="field field--grow">
+      <span class="field-label">Name</span>
+      <input name="name" required placeholder="e.g. Urgent">
+    </label>
+    <button type="submit" class="btn btn--primary">Add</button>
+  </form>
+</section>
+
+<section class="panel panel--table">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Name</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="muted">{{ r.id }}</td>
+          <td>
+            <form method="post" class="form-row form-row--tight">
+              <input type="hidden" name="action" value="update">
+              <input type="hidden" name="id" value="{{ r.id }}">
+              <input name="name" value="{{ r.name }}" required>
+              <button type="submit" class="btn btn--small btn--ghost">Save</button>
+            </form>
+          </td>
+          <td class="muted">{{ r.created_at.isoformat() if r.created_at else '' }}</td>
+          <td>
+            <form method="post" class="inline" data-confirm="Delete priority “{{ r.name|e }}”?">
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="id" value="{{ r.id }}">
+              <button type="submit" class="btn btn--small btn--danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="4" class="muted">No priorities yet.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+

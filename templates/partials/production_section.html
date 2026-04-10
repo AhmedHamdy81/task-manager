@@ -1,0 +1,30 @@
+<section class="panel production-panel" id="production-panel">
+  <h2 class="panel-title">Shooting days</h2>
+  <p class="muted production-panel-lead">Flat list of days. Open a day to edit scene rows in a spreadsheet-style table.</p>
+
+  <form class="production-add-row" method="post" action="{{ url_for('shooting_day_create', project_id=project.id) }}">
+    <input type="hidden" name="next" value="{{ url_for('project_production', project_id=project.id) }}">
+    <div class="production-inline-fields">
+      <input type="date" name="shooting_date" class="input" required aria-label="New shooting date">
+      <button type="submit" class="btn btn--primary btn--small">Add shooting day</button>
+    </div>
+  </form>
+
+  {% if not shooting_days %}
+  <p class="empty empty--in-panel production-empty">No shooting days yet. Add a date above.</p>
+  {% else %}
+  <ul class="production-days-simple-list">
+    {% for d in shooting_days %}
+    <li class="production-days-simple-item">
+      <a class="production-days-simple-link" href="{{ url_for('project_production_day', project_id=project.id, day_id=d.id) }}">
+        <span class="production-days-simple-date">{{ d.shooting_date.strftime('%Y-%m-%d') }}</span>
+        <span class="production-days-simple-total">Total {{ production_day_totals.get(d.id, 0)|fmt_duration_total }}</span>
+      </a>
+      <form method="post" action="{{ url_for('production_day_delete', project_id=project.id, day_id=d.id) }}" class="inline production-days-simple-delete" data-confirm="Delete this shooting day and all scene rows?">
+        <button type="submit" class="btn btn--small btn--danger">Delete</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>

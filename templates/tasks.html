@@ -1,149 +1,194 @@
 {% extends "base.html" %}
 {% block title %}My Tasks · {{ app_name }}{% endblock %}
 
-{% macro task_stream_item(t) %}
-      <article class="task-item" role="listitem">
-        <div class="task-item-body">
+{% macro task_line(t) %}
+{% set an = (t.assignee.name if t.assignee else 'Unknown') %}
+{% set pn = (t.project.name if t.project else '') %}
+{% set pnorm = pn|lower %}
+{% set st = t.status %}
+{% set pr = (t.priority or 'medium') %}
+{% set pr_rank = 3 if pr == 'high' else (2 if pr == 'medium' else 1) %}
+{% set search_hay = (t.title ~ ' ' ~ (t.description or '') ~ ' ' ~ pn ~ ' ' ~ an)|lower %}
+{% set created_ms = (t.created_at.timestamp() * 1000)|int if t.created_at else 0 %}
+      <article
+        class="tm-task-line"
+        role="listitem"
+        data-task-id="{{ t.id }}"
+        data-search="{{ search_hay|e }}"
+        data-project="{{ pnorm }}"
+        {% if t.project %}data-project-label="{{ t.project.name|e }}"{% endif %}
+        data-user="{{ an|lower|e }}"
+        data-user-label="{{ an|e }}"
+        data-user-id="{{ t.user_id }}"
+        data-status="{{ st }}"
+        data-priority="{{ pr }}"
+        data-priority-rank="{{ pr_rank }}"
+        data-created-ms="{{ created_ms }}"
+      >
+        <div class="tm-task-line-main">
           <h3 class="task-item-title">{{ t.title }}</h3>
-          {% if t.description %}<p class="project-active-task-desc">{{ t.description }}</p>{% endif %}
-          <p class="task-item-meta">
-            {% if t.project %}
-            <a href="{{ url_for('project_detail', project_id=t.project.id) }}" class="tasks-meta-project">{{ t.project.name }}</a>
-            {% else %}
-            <span>No project</span>
-            {% endif %}
-            <span class="task-item-meta-sep" aria-hidden="true">·</span>
-            <span>Due —</span>
-            <span class="task-item-meta-sep" aria-hidden="true">·</span>
-            <span>Priority —</span>
-          </p>
+          {% if t.description %}<p class="tm-task-desc">{{ t.description }}</p>{% endif %}
         </div>
-        <div class="task-item-actions tasks-page-task-actions">
-          {% if can_update_task_status(t) %}
-          <form method="post" action="{{ url_for('tasks_set_status', task_id=t.id) }}" class="status-form project-active-status-form">
-            <select name="status" class="status-select" aria-label="Task status">
-              <option value="open" {% if t.status == 'open' %}selected{% endif %}>Open</option>
-              <option value="in_progress" {% if t.status == 'in_progress' %}selected{% endif %}>In progress</option>
-              <option value="done" {% if t.status == 'done' %}selected{% endif %}>Done</option>
-            </select>
-          </form>
+        <div class="tm-task-line-col tm-task-line-project">
+          {% if t.project %}
+          <a href="{{ url_for('project_detail', project_id=t.project.id) }}" class="tasks-meta-project">{{ t.project.name }}</a>
           {% else %}
-          <span class="badge">{{ t.status|replace('_', ' ') }}</span>
+          <span class="tm-task-line-empty">—</span>
+          {% endif %}
+        </div>
+        <div class="tm-task-line-col tm-task-line-user">
+          <span>{{ an }}</span>
+        </div>
+        <div class="tm-task-line-col tm-task-line-status">
+          <span class="tm-task-status tm-task-status--{{ st|replace('_', '-') }}">{{ st|replace('_', ' ')|title }}</span>
+        </div>
+        <div class="tm-task-line-col tm-task-line-priority">
+          <span class="task-priority task-priority--{{ pr|e }}">{{ pr|replace('_', ' ')|title }}</span>
+        </div>
+        <div class="tm-task-line-actions" hidden aria-hidden="true">
+          {% if can_update_task_status(t) %}
+          <label class="field tm-task-inspector-field">
+            <span class="field-label">Status</span>
+            <form method="post" action="{{ url_for('tasks_set_status', task_id=t.id) }}" class="status-form project-active-status-form">
+              <select name="status" class="status-select" aria-label="Task status">
+                <option value="open" {% if t.status == 'open' %}selected{% endif %}>Open</option>
+                <option value="in_progress" {% if t.status == 'in_progress' %}selected{% endif %}>In progress</option>
+                <option value="done" {% if t.status == 'done' %}selected{% endif %}>Done</option>
+              </select>
+            </form>
+          </label>
           {% endif %}
           {% if can_delete_task(t) %}
-          <form method="post" action="{{ url_for('tasks_delete', task_id=t.id) }}" class="inline tasks-page-delete-form" data-confirm="{{ ('Are you sure you want to delete the task “' ~ t.title ~ '”? This cannot be undone.')|e }}">
-            <button type="submit" class="btn btn--small btn--danger">Delete</button>
+          <form method="post" action="{{ url_for('tasks_delete', task_id=t.id) }}" class="inline tasks-page-delete-form tm-task-delete-form" data-confirm="{{ ('Are you sure you want to delete the task “' ~ t.title ~ '”? This cannot be undone.')|e }}">
+            <button type="submit" class="btn btn--small btn--danger">Delete task</button>
           </form>
           {% endif %}
         </div>
       </article>
 {% endmacro %}
 
-{% macro task_stream_section(heading, lead, items, empty_msg) %}
-<section class="panel tasks-dashboard-panel">
-  <h2 class="panel-title tasks-dashboard-panel-title">{{ heading }}</h2>
-  {% if lead %}<p class="muted tasks-dashboard-panel-lead">{{ lead }}</p>{% endif %}
-  {% if items %}
-  <div class="tasks-dashboard-panel-inner">
-    <div class="task-stream" role="list">
-      {% for t in items %}
-      {{ task_stream_item(t) }}
+{% block content %}
+<div class="tasks-page-shell" id="tasks-page-root">
+  <header class="page-head shell-page-head">
+    <h1>Tasks</h1>
+    <p class="muted">Assigned to you. Use the row to open details; change status or delete from the side panel.</p>
+  </header>
+
+  {% if not users %}
+  <section class="panel shell-panel-min">
+    <p class="empty"><strong>Add people to the directory first</strong> — tasks must be assigned to someone.</p>
+    {% if current_account_is_admin %}
+    <a class="btn btn--primary" href="{{ url_for('users_list') }}">Go to Users</a>
+    {% else %}
+    <p class="muted">Ask an administrator to add people in <strong>Users</strong>.</p>
+    {% endif %}
+  </section>
+  {% elif not projects %}
+  <section class="panel shell-panel-min">
+    {% if current_account_is_elevated %}
+    <p class="empty"><strong>Create a project first</strong> — every task is tied to a project.</p>
+    <a class="btn btn--primary" href="{{ url_for('projects_list') }}">Go to Projects</a>
+    {% else %}
+    <p class="empty"><strong>No projects available</strong> — you must be on a project team before you can work with tasks. Ask an administrator or super user to add you to a project.</p>
+    <a class="btn btn--primary" href="{{ url_for('projects_list') }}">View your projects</a>
+    {% endif %}
+  </section>
+  {% elif not has_title_presets %}
+  <section class="panel shell-panel-min">
+    <p class="empty"><strong>Add task titles</strong> under your groups in the Control panel, then return here.</p>
+    {% if current_account_is_admin %}
+    <a class="btn btn--primary" href="{{ url_for('control_panel') }}">Open Control panel</a>
+    {% else %}
+    <p class="muted">Ask an administrator to add task titles in the Control panel.</p>
+    {% endif %}
+  </section>
+  {% else %}
+
+  <section class="panel shell-panel-min shell-panel-create" id="task-create">
+    <h2 class="shell-panel-create-title">New task</h2>
+    {% set task_create_field_prefix = '' %}
+    {% set task_create_show_project_select = true %}
+    {% set task_create_next_url = '' %}
+    {% set task_create_users = users %}
+    {% include 'partials/task_create_form.html' %}
+  </section>
+
+  {% set du = current_account.directory_user if current_account else none %}
+  {% if du %}
+  {% set ns = namespace(items=[]) %}
+  {% for g in task_groups %}
+  {% for t in tasks_by_group.get(g.id, []) %}
+  {% if t.user_id == du.id %}{% set _ = ns.items.append(t) %}{% endif %}
+  {% endfor %}
+  {% endfor %}
+  {% for t in tasks_by_group.get(None, []) %}
+  {% if t.user_id == du.id %}{% set _ = ns.items.append(t) %}{% endif %}
+  {% endfor %}
+  {% set my_tasks = ns.items|sort(attribute='created_at', reverse=true) %}
+
+  <section class="shell-task-section" aria-labelledby="tasks-assigned-heading">
+    <h2 id="tasks-assigned-heading">Your tasks</h2>
+    <p class="muted">Filter and sort in place. Search matches title, notes, project, and assignee.</p>
+
+    <div class="shell-filter-bar" role="toolbar" aria-label="Task filters">
+      <input type="search" id="tasks-filter-search" class="shell-filter-search" placeholder="Search…" autocomplete="off" aria-label="Search tasks">
+      <label class="shell-filter-label">
+        <span class="visually-hidden">Project</span>
+        <select id="tasks-filter-project" class="shell-filter-select" aria-label="Filter by project">
+          <option value="">All projects</option>
+        </select>
+      </label>
+      <label class="shell-filter-label">
+        <span class="visually-hidden">User</span>
+        <select id="tasks-filter-user" class="shell-filter-select" aria-label="Filter by assignee">
+          <option value="">All assignees</option>
+        </select>
+      </label>
+      <label class="shell-filter-label">
+        <span class="visually-hidden">Status</span>
+        <select id="tasks-filter-status" class="shell-filter-select" aria-label="Filter by status">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In progress</option>
+          <option value="done">Done</option>
+        </select>
+      </label>
+      <label class="shell-filter-label">
+        <span class="visually-hidden">Sort</span>
+        <select id="tasks-filter-sort" class="shell-filter-select" aria-label="Sort tasks">
+          <option value="newest" {% if selected_sort == 'newest' %}selected{% endif %}>Newest</option>
+          <option value="priority" {% if selected_sort == 'priority' %}selected{% endif %}>Priority</option>
+        </select>
+      </label>
+    </div>
+
+    {% if my_tasks %}
+    <div class="tm-task-stream-head" aria-hidden="true">
+      <span>Task</span>
+      <span>Project</span>
+      <span>User</span>
+      <span>Status</span>
+      <span>Priority</span>
+    </div>
+    <div class="tm-task-stream" id="tm-task-stream" role="list">
+      {% for t in my_tasks %}
+      {{ task_line(t) }}
       {% endfor %}
     </div>
-  </div>
-  {% else %}
-  <p class="empty empty--in-panel tasks-dashboard-empty">{{ empty_msg }}</p>
-  {% endif %}
-</section>
-{% endmacro %}
+    {% else %}
+    <p class="empty" id="tm-task-stream-empty">No tasks assigned to you yet.</p>
+    {% endif %}
+  </section>
 
-{% block content %}
-<div class="page-head">
-  <h1>My Tasks</h1>
-  <p class="muted">Work assigned to you, grouped by urgency. Create tasks below with a <strong>task group</strong>, <strong>title</strong>, and <strong>project</strong>; assignees must be on that project’s team (manage people on the <a href="{{ url_for('projects_list') }}">Projects</a> page).</p>
+  <div id="tasks-inspector-parking" hidden aria-hidden="true"></div>
+  {% else %}
+  <section class="panel shell-panel-min">
+    <p class="empty">Your account is not linked to a directory user, so assigned tasks cannot be matched to you. Complete your profile or ask an administrator to link your login.</p>
+  </section>
+  {% endif %}
+  {% endif %}
 </div>
-
-{% if not users %}
-<section class="panel">
-  <p class="empty"><strong>Add people to the directory first</strong> — tasks must be assigned to someone.</p>
-  {% if current_account_is_admin %}
-  <a class="btn btn--primary" href="{{ url_for('users_list') }}">Go to Users</a>
-  {% else %}
-  <p class="muted">Ask an administrator to add people in <strong>Users</strong>.</p>
-  {% endif %}
-</section>
-{% elif not projects %}
-<section class="panel">
-  {% if current_account_is_elevated %}
-  <p class="empty"><strong>Create a project first</strong> — every task is tied to a project.</p>
-  <a class="btn btn--primary" href="{{ url_for('projects_list') }}">Go to Projects</a>
-  {% else %}
-  <p class="empty"><strong>No projects available</strong> — you must be on a project team before you can work with tasks. Ask an administrator or super user to add you to a project.</p>
-  <a class="btn btn--primary" href="{{ url_for('projects_list') }}">View your projects</a>
-  {% endif %}
-</section>
-{% elif not has_title_presets %}
-<section class="panel">
-  <p class="empty"><strong>Add task titles</strong> under your groups in the Control panel, then return here.</p>
-  {% if current_account_is_admin %}
-  <a class="btn btn--primary" href="{{ url_for('control_panel') }}">Open Control panel</a>
-  {% else %}
-  <p class="muted">Ask an administrator to add task titles in the Control panel.</p>
-  {% endif %}
-</section>
-{% else %}
-
-<section class="panel">
-  <h2 class="panel-title">New task</h2>
-  {% set task_create_field_prefix = '' %}
-  {% set task_create_show_project_select = true %}
-  {% set task_create_next_url = '' %}
-  {% set task_create_users = users %}
-  {% include 'partials/task_create_form.html' %}
-</section>
-
-{% set du = current_account.directory_user if current_account else none %}
-{% if du %}
-{% set ns = namespace(raw=[]) %}
-{% for g in task_groups %}
-{% for t in tasks_by_group.get(g.id, []) %}
-{% if t.user_id == du.id and t.status != 'done' %}
-{% set _ = ns.raw.append(t) %}
-{% endif %}
-{% endfor %}
-{% endfor %}
-{% for t in tasks_by_group.get(None, []) %}
-{% if t.user_id == du.id and t.status != 'done' %}
-{% set _ = ns.raw.append(t) %}
-{% endif %}
-{% endfor %}
-{% set urgent_list = (ns.raw|selectattr('status', 'equalto', 'in_progress')|list)|sort(attribute='created_at', reverse=true) %}
-{% set open_sorted = (ns.raw|selectattr('status', 'equalto', 'open')|list)|sort(attribute='created_at') %}
-{% set due_soon_list = open_sorted[:5] %}
-{% set active_list = open_sorted[5:] %}
-
-{{ task_stream_section(
-  'Urgent / Overdue',
-  'In progress now. When tasks have due dates, overdue work will show here too.',
-  urgent_list,
-  'Nothing in progress. You’re all caught up in this bucket.'
-) }}
-{{ task_stream_section(
-  'Due soon',
-  'Oldest open assignments (up to five) to pick up next.',
-  due_soon_list,
-  'No open tasks in this queue.'
-) }}
-{{ task_stream_section(
-  'Active tasks',
-  'Other open work assigned to you.',
-  active_list,
-  'No additional open tasks.'
-) }}
-{% else %}
-<section class="panel tasks-dashboard-panel">
-  <p class="empty empty--in-panel tasks-dashboard-empty">Your account is not linked to a directory user, so assigned tasks cannot be matched to you. Complete your profile or ask an administrator to link your login.</p>
-</section>
-{% endif %}
-{% endif %}
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/tasks-page.js') }}" defer></script>
 {% endblock %}
