@@ -91,6 +91,23 @@ def _booking_to_dict(b: Any) -> dict[str, Any]:
     bf = b.booked_for_user
     booked_by_name = (by.name or by.email).strip() if by is not None else ""
     booked_for_name = (bf.name or bf.email).strip() if bf is not None else ""
+    scene_id = getattr(b, "scene_id", None)
+    scene_label = ""
+    sc = getattr(b, "shooting_day_scene", None)
+    if sc is not None:
+        sl = (getattr(sc, "scene_label", None) or "").strip()
+        if not sl:
+            sl = str(int(getattr(sc, "scene_number", 0) or 0))
+        scene_label = f"Ep {int(sc.episode_number or 0)} · {sl}"
+    vfx_shot_id = getattr(b, "vfx_shot_id", None)
+    vfx_shot_label = ""
+    vs = getattr(b, "vfx_shot", None)
+    if vs is not None:
+        code = (getattr(vs, "shot_code", None) or "").strip()
+        desc = (getattr(vs, "description", None) or "").strip()
+        vfx_shot_label = code
+        if desc:
+            vfx_shot_label += " — " + (desc[:48] + "..." if len(desc) > 48 else desc)
     return {
         "id": b.id,
         "edit_suite_id": b.edit_suite_id,
@@ -108,6 +125,10 @@ def _booking_to_dict(b: Any) -> dict[str, Any]:
         "notes": (b.notes or "").strip(),
         "is_active": bool(b.is_active),
         "created_at": b.created_at.isoformat(timespec="seconds") if b.created_at else None,
+        "scene_id": scene_id,
+        "scene_label": scene_label,
+        "vfx_shot_id": vfx_shot_id,
+        "vfx_shot_label": vfx_shot_label,
     }
 
 
@@ -182,12 +203,91 @@ def booking_projects_json():
     return jsonify({"projects": [{"id": p.id, "name": p.name} for p in projects]})
 
 
+@booking_bp.route("/project-scenes/<int:project_id>", methods=["GET"])
+def booking_project_scenes_json(project_id: int):
+    """Planned scenes for a project (optional booking target)."""
+    ctx = _ctx()
+    if not ctx:
+        abort(500)
+    SDS = ctx.get("ShootingDayScene")
+    SD = ctx.get("ShootingDay")
+    if SDS is None or SD is None:
+        return jsonify({"scenes": []})
+    acc = ctx["account_from_session"]()
+    if acc is None or not ctx["account_can_access_project"](acc, project_id):
+        return jsonify({"error": "forbidden"}), 403
+    rows = (
+        SDS.query.join(SD, SDS.shooting_day_id == SD.id)
+        .filter(SD.project_id == project_id)
+        .order_by(SDS.episode_number.asc(), SDS.scene_label.asc(), SDS.id.asc())
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for sc in rows:
+        sec = int(getattr(sc, "duration_seconds", 0) or 0)
+        if sec <= 0:
+            sec = max(0, int(getattr(sc, "duration", 0) or 0)) * 60
+        sl = (getattr(sc, "scene_label", None) or "").strip()
+        if not sl:
+            sl = str(int(getattr(sc, "scene_number", 0) or 0))
+        label = f"Ep {int(sc.episode_number or 0)} · {sl}"
+        desc = (sc.notes or "").strip()
+        if desc:
+            label += " — " + (desc[:48] + "..." if len(desc) > 48 else desc)
+        out.append(
+            {
+                "id": sc.id,
+                "label": label,
+                "estimated_duration_minutes": max(0, (sec + 59) // 60) if sec else 0,
+                "ready_for_editing": bool(sc.first_edit_done),
+                "project_id": project_id,
+            }
+        )
+    return jsonify({"scenes": out})
+
+
+@booking_bp.route("/project-members/<int:project_id>", methods=["GET"])
+def booking_project_members_json(project_id: int):
+    """Directory users on the project team (for Booked-for dropdown). JSON array of {id, name}."""
+    ctx = _ctx()
+    if not ctx:
+        abort(500)
+    acc = ctx["account_from_session"]()
+    if acc is None:
+        return jsonify({"error": "forbidden"}), 403
+    can = ctx.get("account_can_access_project")
+    if can is not None and not can(acc, project_id):
+        return jsonify({"error": "forbidden"}), 403
+    User = ctx["User"]
+    ProjectMember = ctx.get("ProjectMember")
+    if ProjectMember is None:
+        return jsonify([])
+    users = (
+        User.query.join(ProjectMember, ProjectMember.user_id == User.id)
+        .filter(ProjectMember.project_id == project_id)
+        .order_by(User.name.asc(), User.id.asc())
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for u in users:
+        if (u.name or "").strip().casefold() == "admin":
+            continue
+        out.append(
+            {
+                "id": u.id,
+                "name": (u.name or u.email or "").strip() or str(u.id),
+            }
+        )
+    return jsonify(out)
+
+
 @booking_bp.route("/users", methods=["GET"])
 def booking_users_json():
     ctx = _ctx()
     if not ctx:
         abort(500)
     User = ctx["User"]
+    ProjectMember = ctx.get("ProjectMember")
     if ctx["account_from_session"]() is None:
         return jsonify({"error": "forbidden"}), 403
     include_id: int | None = None
@@ -197,7 +297,30 @@ def booking_users_json():
             include_id = int(raw_inc)
         except (TypeError, ValueError):
             include_id = None
-    users = User.query.order_by(User.name.asc(), User.id.asc()).all()
+    project_id: int | None = None
+    raw_pid = request.args.get("project_id")
+    if raw_pid is not None and str(raw_pid).strip() != "":
+        try:
+            project_id = int(raw_pid)
+        except (TypeError, ValueError):
+            project_id = None
+
+    if project_id and ProjectMember is not None:
+        member_ids = {
+            pm.user_id for pm in ProjectMember.query.filter_by(project_id=project_id).all()
+        }
+        if include_id is not None:
+            member_ids.add(include_id)
+        if member_ids:
+            users = (
+                User.query.filter(User.id.in_(member_ids))
+                .order_by(User.name.asc(), User.id.asc())
+                .all()
+            )
+        else:
+            users = []
+    else:
+        users = User.query.order_by(User.name.asc(), User.id.asc()).all()
     out = []
     for u in users:
         if (u.name or "").strip().casefold() == "admin" and (include_id is None or u.id != include_id):
@@ -376,6 +499,20 @@ def booking_create():
         booked_for_id = int(data.get("booked_for_id"))
     except (TypeError, ValueError):
         return jsonify({"error": "validation", "message": "Booked for is required."}), 400
+    parsed_scene_id: int | None = None
+    raw_sc = data.get("scene_id")
+    if raw_sc is not None and str(raw_sc).strip() != "":
+        try:
+            parsed_scene_id = int(raw_sc)
+        except (TypeError, ValueError):
+            return jsonify({"error": "validation", "message": "Invalid scene."}), 400
+    parsed_vfx_shot_id: int | None = None
+    raw_vfx = data.get("vfx_shot_id")
+    if raw_vfx is not None and str(raw_vfx).strip() != "":
+        try:
+            parsed_vfx_shot_id = int(raw_vfx)
+        except (TypeError, ValueError):
+            return jsonify({"error": "validation", "message": "Invalid VFX shot."}), 400
     booking_date = _parse_date(data.get("booking_date"))
     if booking_date is None:
         return jsonify({"error": "validation", "message": "Invalid booking date."}), 400
@@ -399,12 +536,40 @@ def booking_create():
     acc = ctx["account_from_session"]()
     if acc is None or not ctx["account_can_access_project"](acc, project_id):
         return jsonify({"error": "validation", "message": "You cannot book under that project."}), 400
+    SDS = ctx.get("ShootingDayScene")
+    VFX = ctx.get("VfxShot")
+    if parsed_scene_id is not None:
+        if SDS is None:
+            return jsonify({"error": "validation", "message": "Scenes are not available."}), 400
+        sc_row = db.session.get(SDS, parsed_scene_id)
+        if sc_row is None:
+            return jsonify({"error": "validation", "message": "Unknown scene."}), 400
+        if sc_row.shooting_day is None or sc_row.shooting_day.project_id != project_id:
+            return jsonify({"error": "validation", "message": "Scene does not belong to that project."}), 400
+    if parsed_vfx_shot_id is not None:
+        if VFX is None:
+            return jsonify({"error": "validation", "message": "VFX shots are not available."}), 400
+        vfx_row = db.session.get(VFX, parsed_vfx_shot_id)
+        if vfx_row is None:
+            return jsonify({"error": "validation", "message": "Unknown VFX shot."}), 400
+        if int(getattr(vfx_row, "project_id", 0) or 0) != int(project_id):
+            return jsonify({"error": "validation", "message": "VFX shot does not belong to that project."}), 400
     suite = db.session.get(EditSuite, suite_id)
     if suite is None or not suite.is_active:
         return jsonify({"error": "validation", "message": "That room is not available."}), 400
     if db.session.get(User, booked_for_id) is None:
         return jsonify({"error": "validation", "message": "Invalid user for Booked for."}), 400
     if _overlap_exists(booking_date, suite_id, start_t, end_t, None):
+        emit_overlap = ctx.get("emit_booking_overlap_alert")
+        if callable(emit_overlap):
+            emit_overlap(
+                project_id=project_id,
+                suite_id=suite_id,
+                booking_date=booking_date,
+                start_t=start_t,
+                end_t=end_t,
+            )
+            db.session.commit()
         return jsonify(
             {
                 "error": "conflict",
@@ -424,6 +589,8 @@ def booking_create():
         notes=notes,
         is_active=True,
         created_at=datetime.now(timezone.utc),
+        scene_id=parsed_scene_id,
+        vfx_shot_id=parsed_vfx_shot_id,
     )
     db.session.add(b)
     db.session.commit()
@@ -434,6 +601,8 @@ def booking_create():
             joinedload(Booking.project),
             joinedload(Booking.booked_by_user),
             joinedload(Booking.booked_for_user),
+            joinedload(Booking.shooting_day_scene),
+            joinedload(Booking.vfx_shot),
         )
         .filter_by(id=b.id)
         .first()
@@ -466,6 +635,8 @@ def booking_update(booking_id: int):
             joinedload(Booking.project),
             joinedload(Booking.booked_by_user),
             joinedload(Booking.booked_for_user),
+            joinedload(Booking.shooting_day_scene),
+            joinedload(Booking.vfx_shot),
         )
         .filter_by(id=booking_id)
         .first()
@@ -531,10 +702,56 @@ def booking_update(booking_id: int):
         if len(notes) > NOTES_MAX_LEN:
             return jsonify({"error": "validation", "message": "Notes are too long."}), 400
         b.notes = notes
+    if "scene_id" in data:
+        SDS = ctx.get("ShootingDayScene")
+        raw_sc = data.get("scene_id")
+        if raw_sc is None or str(raw_sc).strip() == "":
+            b.scene_id = None
+        else:
+            try:
+                sid = int(raw_sc)
+            except (TypeError, ValueError):
+                return jsonify({"error": "validation", "message": "Invalid scene."}), 400
+            if SDS is None:
+                return jsonify({"error": "validation", "message": "Scenes are not available."}), 400
+            sc_row = db.session.get(SDS, sid)
+            if sc_row is None:
+                return jsonify({"error": "validation", "message": "Unknown scene."}), 400
+            if sc_row.shooting_day is None or sc_row.shooting_day.project_id != project_id:
+                return jsonify({"error": "validation", "message": "Scene does not belong to that project."}), 400
+            b.scene_id = sid
+    if "vfx_shot_id" in data:
+        VFX = ctx.get("VfxShot")
+        raw_vfx = data.get("vfx_shot_id")
+        if raw_vfx is None or str(raw_vfx).strip() == "":
+            b.vfx_shot_id = None
+        else:
+            try:
+                vid = int(raw_vfx)
+            except (TypeError, ValueError):
+                return jsonify({"error": "validation", "message": "Invalid VFX shot."}), 400
+            if VFX is None:
+                return jsonify({"error": "validation", "message": "VFX shots are not available."}), 400
+            vfx_row = db.session.get(VFX, vid)
+            if vfx_row is None:
+                return jsonify({"error": "validation", "message": "Unknown VFX shot."}), 400
+            if int(getattr(vfx_row, "project_id", 0) or 0) != int(project_id):
+                return jsonify({"error": "validation", "message": "VFX shot does not belong to that project."}), 400
+            b.vfx_shot_id = vid
     suite = db.session.get(EditSuite, suite_id)
     if suite is None or not suite.is_active:
         return jsonify({"error": "validation", "message": "That room is not available."}), 400
     if _overlap_exists(booking_date, suite_id, start_t, end_t, exclude_id=b.id):
+        emit_overlap = ctx.get("emit_booking_overlap_alert")
+        if callable(emit_overlap):
+            emit_overlap(
+                project_id=project_id,
+                suite_id=suite_id,
+                booking_date=booking_date,
+                start_t=start_t,
+                end_t=end_t,
+            )
+            db.session.commit()
         return jsonify(
             {
                 "error": "conflict",
@@ -555,6 +772,8 @@ def booking_update(booking_id: int):
             joinedload(Booking.project),
             joinedload(Booking.booked_by_user),
             joinedload(Booking.booked_for_user),
+            joinedload(Booking.shooting_day_scene),
+            joinedload(Booking.vfx_shot),
         )
         .filter_by(id=b.id)
         .first()
@@ -592,6 +811,8 @@ def booking_delete(booking_id: int):
             joinedload(Booking.project),
             joinedload(Booking.booked_by_user),
             joinedload(Booking.booked_for_user),
+            joinedload(Booking.shooting_day_scene),
+            joinedload(Booking.vfx_shot),
         )
         .filter_by(id=b.id)
         .first()
@@ -614,6 +835,8 @@ def _bookings_json_list():
         joinedload(Booking.project),
         joinedload(Booking.booked_by_user),
         joinedload(Booking.booked_for_user),
+        joinedload(Booking.shooting_day_scene),
+        joinedload(Booking.vfx_shot),
     )
     base = Booking.query.options(*opts).filter(Booking.is_active.is_(True))
     from_s = _parse_date(request.args.get("from"))
