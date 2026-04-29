@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}VFX Management · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block body_class %}vfx-editor-pro-body{% endblock %}
+{% block content %}
+<div class="production-page vfx-editor-pro-page">
+  <div class="page-head project-detail-head production-page-head">
+    <div class="project-detail-head-main">
+      <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
+      <h1>{{ project.name }}</h1>
+      <p class="muted">VFX editor — hierarchy, shots, and review.</p>
+      {% include 'partials/project_workflow_nav.html' %}
+    </div>
+  </div>
+
+  <div class="vfx-editor-pro-shell">
+    <div class="vfx-layout">
+      <aside class="vfx-left">
+        <div class="vfx-left-filters">
+          <button type="button" class="btn btn--small btn--ghost vfx-filter-btn vfx-filter-btn--active" data-vfx-filter="all">All</button>
+          <button type="button" class="btn btn--small btn--ghost vfx-filter-btn" data-vfx-filter="needs_vfx">Needs VFX</button>
+          <button type="button" class="btn btn--small btn--ghost vfx-filter-btn" data-vfx-filter="in_review">In Review</button>
+        </div>
+        <div id="vfx-left-tree" class="vfx-left-tree" aria-label="Scene hierarchy"></div>
+      </aside>
+      <main class="vfx-mid">
+        <div id="vfx-mid-empty" class="vfx-mid-empty">
+          <p class="muted">Select a scene from the left.</p>
+        </div>
+        <div id="vfx-mid-body" class="vfx-mid-body" hidden>
+          <header class="vfx-mid-header-row">
+            <h3 id="vfx-mid-header" class="vfx-mid-title scene-title" contenteditable="true" spellcheck="false">—</h3>
+            <div class="vfx-mid-actions">
+              <button type="button" class="btn btn--small btn--primary" data-vfx-add-shot>+ Add Shot</button>
+              <button type="button" class="btn btn--small btn--ghost" data-vfx-bulk>Bulk Create 01–10</button>
+            </div>
+          </header>
+          <section id="vfx-episode-previews-block" class="vfx-block" hidden>
+            <div class="vfx-board-toolbar">
+              <h3 id="vfx-board-title" class="vfx-block-title">Scene Board</h3>
+              <div class="vfx-board-toolbar-controls">
+                <select id="vfx-board-filter" class="input input--sm">
+                  <option value="all">All</option>
+                  <option value="needs_vfx">Needs VFX</option>
+                  <option value="in_review">In Review</option>
+                  <option value="blocked">Blocked</option>
+                </select>
+                <select id="vfx-board-sort" class="input input--sm">
+                  <option value="scene">Scene #</option>
+                  <option value="shots">Shot count</option>
+                  <option value="review">Review count</option>
+                </select>
+                <input id="vfx-board-search" class="input input--sm" placeholder="Search scene...">
+                <div class="vfx-view-toggle">
+                  <button type="button" id="vfx-view-board" class="btn btn--small btn--ghost">Board</button>
+                  <button type="button" id="vfx-view-list" class="btn btn--small btn--ghost">List</button>
+                </div>
+              </div>
+            </div>
+            <div id="vfx-episode-previews" class="vfx-episode-previews"></div>
+          </section>
+          <section id="vfx-scene-top-block" class="vfx-block">
+            <div class="scene-top-grid">
+              <div class="scene-preview" id="scene-preview">
+                <div class="preview-placeholder" id="scene-preview-placeholder">
+                  <span>No preview</span>
+                  <button type="button" class="btn btn--small btn--ghost" id="scene-preview-upload-btn">Upload Preview</button>
+                  <input type="file" id="scene-preview-upload" accept="image/*,video/*" hidden>
+                </div>
+              </div>
+              <textarea id="scene-comments" class="input scene-comments" placeholder="Scene notes / briefing..."></textarea>
+            </div>
+          </section>
+          <section id="vfx-scene-refs-block" class="vfx-block">
+            <h3 class="vfx-block-title">Scene References</h3>
+            <p class="muted vfx-block-lead">Video preview(s) and upload.</p>
+            <div id="vfx-scene-refs" class="vfx-scene-refs"></div>
+            <div class="vfx-ref-upload-row">
+              <input type="file" id="vfx-ref-file" accept="video/*" hidden>
+              <input type="text" id="vfx-ref-notes" class="input input--grow" placeholder="Reference notes (optional)">
+              <button type="button" id="vfx-ref-upload-btn" class="btn btn--small btn--ghost">Upload</button>
+            </div>
+          </section>
+          <section id="vfx-shots-block" class="vfx-block">
+            <h3 class="vfx-block-title">Shots</h3>
+            <div class="vfx-shot-table-wrap">
+              <table class="vfx-shot-table" aria-label="Shots">
+                <thead>
+                  <tr>
+                    <th>Shot Code</th>
+                    <th>Department</th>
+                    <th>Vendor</th>
+                    <th>Version</th>
+                    <th>Status</th>
+                    <th>Sent Date</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="vfx-shots-tbody"></tbody>
+              </table>
+            </div>
+            <div class="vfx-mid-actions vfx-mid-actions--footer">
+              <button type="button" class="btn btn--small btn--primary" data-vfx-add-shot>+ Add Shot</button>
+              <button type="button" class="btn btn--small btn--ghost" data-vfx-bulk>Bulk Create 01–10</button>
+            </div>
+          </section>
+        </div>
+      </main>
+      <aside class="vfx-right">
+        <div id="vfx-right-empty" class="vfx-right-empty">
+          <p class="muted">Select a shot to preview and review.</p>
+        </div>
+        <div id="vfx-right-body" class="vfx-right-body" hidden>
+          <div id="vfx-version-tabs" class="vfx-version-tabs" role="tablist" aria-label="Versions"></div>
+          <div id="vfx-preview-slot" class="vfx-preview-slot"></div>
+          <section class="vfx-block vfx-shot-meta-block">
+            <div class="vfx-shot-meta-row"><span class="muted">Shot</span> <strong id="vfx-right-shot-code">—</strong></div>
+            <label class="vfx-field-label">Status</label>
+            <select id="vfx-right-status" class="input vfx-right-select" aria-label="Status"></select>
+            <label class="vfx-field-label">Department</label>
+            <select id="vfx-right-department" class="input vfx-right-select" aria-label="Department"></select>
+            <button type="button" id="vfx-btn-approve" class="btn btn--small btn--primary vfx-approve-btn">Approve ✔</button>
+          </section>
+          <section class="vfx-block">
+            <h3 class="vfx-block-title">New version</h3>
+            <input type="text" id="vfx-version-url" class="input input--block" placeholder="Image or video URL">
+            <input type="file" id="vfx-version-file" accept="image/*,video/*" class="input input--block">
+            <input type="text" id="vfx-version-comment" class="input input--block" placeholder="Version comment">
+            <button type="button" id="vfx-version-submit" class="btn btn--small btn--ghost">Add version</button>
+          </section>
+          <section class="vfx-block">
+            <h3 class="vfx-block-title">Comments</h3>
+            <div id="vfx-comments-thread" class="vfx-comments-thread"></div>
+            <p id="vfx-comment-reply-hint" class="muted vfx-reply-hint"></p>
+            <textarea id="vfx-comment-text" class="input vfx-comment-textarea" rows="3" placeholder="Add a comment…" {% if vfx_directory_user_id is none %}disabled title="Directory user required"{% endif %}></textarea>
+            <button type="button" id="vfx-comment-submit" class="btn btn--small btn--primary" {% if vfx_directory_user_id is none %}disabled{% endif %}>Post</button>
+          </section>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <dialog id="vfx-preview-modal" class="vfx-preview-modal">
+    <div class="vfx-preview-modal-inner">
+      <button type="button" id="vfx-preview-modal-close" class="btn btn--small btn--ghost vfx-preview-modal-close">Close</button>
+      <div id="vfx-preview-modal-body"></div>
+    </div>
+  </dialog>
+
+  <p class="panel-after-link"><a href="{{ url_for('project_detail', project_id=project.id) }}">← Back to project</a></p>
+</div>
+<script type="application/json" id="vfx-editor-bootstrap">{{ vfx_editor_payload | tojson }}</script>
+<script>
+  window.__VFX_PROJECT_ID__ = {{ project.id }};
+  window.__VFX_DIRECTORY_USER_ID__ = {{ vfx_directory_user_id | tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/vfx-editor-pro.js') }}" defer></script>
+{% endblock %}

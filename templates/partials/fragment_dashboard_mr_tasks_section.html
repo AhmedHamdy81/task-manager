@@ -1,0 +1,22 @@
+<section
+  class="panel project-tasks-panel project-tasks-panel--stream dashboard-machine-room-tasks"
+  id="dashboard-machine-room-tasks"
+  aria-labelledby="dashboard-machine-room-tasks-title"
+>
+  <h2 class="panel-title project-tasks-panel-title" id="dashboard-machine-room-tasks-title">
+    Machine Room Tasks
+  </h2>
+  {% if not machine_room_tasks %}
+  <p class="empty empty--tight">No active machine tasks.</p>
+  {% else %}
+  <div class="project-tasks-panel-stream">
+    <div class="task-stream" role="list">
+      {% set task_actions_mr_dashboard = true %}
+      {% for t in machine_room_tasks %}
+      {% set status_next_url = url_for('index') %}
+      {% include 'partials/active_task_item.html' %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</section>

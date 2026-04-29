@@ -2,73 +2,20 @@
 {% block title %}My Tasks · {{ app_name }}{% endblock %}
 
 {% macro task_line(t) %}
-{% set an = (t.assignee.name if t.assignee else 'Unknown') %}
-{% set pn = (t.project.name if t.project else '') %}
-{% set pnorm = pn|lower %}
-{% set st = t.status %}
-{% set pr = (t.priority or 'medium') %}
-{% set pr_rank = 3 if pr == 'high' else (2 if pr == 'medium' else 1) %}
-{% set search_hay = (t.title ~ ' ' ~ (t.description or '') ~ ' ' ~ pn ~ ' ' ~ an)|lower %}
-{% set created_ms = (t.created_at.timestamp() * 1000)|int if t.created_at else 0 %}
-      <article
-        class="tm-task-line"
-        role="listitem"
-        data-task-id="{{ t.id }}"
-        data-search="{{ search_hay|e }}"
-        data-project="{{ pnorm }}"
-        {% if t.project %}data-project-label="{{ t.project.name|e }}"{% endif %}
-        data-user="{{ an|lower|e }}"
-        data-user-label="{{ an|e }}"
-        data-user-id="{{ t.user_id }}"
-        data-status="{{ st }}"
-        data-priority="{{ pr }}"
-        data-priority-rank="{{ pr_rank }}"
-        data-created-ms="{{ created_ms }}"
-      >
-        <div class="tm-task-line-main">
-          <h3 class="task-item-title">{{ t.title }}</h3>
-          {% if t.description %}<p class="tm-task-desc">{{ t.description }}</p>{% endif %}
-        </div>
-        <div class="tm-task-line-col tm-task-line-project">
-          {% if t.project %}
-          <a href="{{ url_for('project_detail', project_id=t.project.id) }}" class="tasks-meta-project">{{ t.project.name }}</a>
-          {% else %}
-          <span class="tm-task-line-empty">—</span>
-          {% endif %}
-        </div>
-        <div class="tm-task-line-col tm-task-line-user">
-          <span>{{ an }}</span>
-        </div>
-        <div class="tm-task-line-col tm-task-line-status">
-          <span class="tm-task-status tm-task-status--{{ st|replace('_', '-') }}">{{ st|replace('_', ' ')|title }}</span>
-        </div>
-        <div class="tm-task-line-col tm-task-line-priority">
-          <span class="task-priority task-priority--{{ pr|e }}">{{ pr|replace('_', ' ')|title }}</span>
-        </div>
-        <div class="tm-task-line-actions" hidden aria-hidden="true">
-          {% if can_update_task_status(t) %}
-          <label class="field tm-task-inspector-field">
-            <span class="field-label">Status</span>
-            <form method="post" action="{{ url_for('tasks_set_status', task_id=t.id) }}" class="status-form project-active-status-form">
-              <select name="status" class="status-select" aria-label="Task status">
-                <option value="open" {% if t.status == 'open' %}selected{% endif %}>Open</option>
-                <option value="in_progress" {% if t.status == 'in_progress' %}selected{% endif %}>In progress</option>
-                <option value="done" {% if t.status == 'done' %}selected{% endif %}>Done</option>
-              </select>
-            </form>
-          </label>
-          {% endif %}
-          {% if can_delete_task(t) %}
-          <form method="post" action="{{ url_for('tasks_delete', task_id=t.id) }}" class="inline tasks-page-delete-form tm-task-delete-form" data-confirm="{{ ('Are you sure you want to delete the task “' ~ t.title ~ '”? This cannot be undone.')|e }}">
-            <button type="submit" class="btn btn--small btn--danger">Delete task</button>
-          </form>
-          {% endif %}
-        </div>
-      </article>
+{% set _tm = namespace(
+  phref=(url_for('project_detail', project_id=t.project.id) if t.project else ''),
+  next='',
+  hide_inspector_status_form=False
+) %}
+{% include 'partials/tm_task_line.html' %}
 {% endmacro %}
 
 {% block content %}
-<div class="tasks-page-shell" id="tasks-page-root">
+<div
+  class="tasks-page-shell"
+  id="tasks-page-root"
+  data-tm-tasks-fragment-url="{{ url_for('ui_fragment_tasks_my_stream_slot') }}"
+>
   <header class="page-head shell-page-head">
     <h1>Tasks</h1>
     <p class="muted">Assigned to you. Use the row to open details; change status or delete from the side panel.</p>
@@ -162,6 +109,7 @@
       </label>
     </div>
 
+    <div id="tm-tasks-my-stream-slot">
     {% if my_tasks %}
     <div class="tm-task-stream-head" aria-hidden="true">
       <span>Task</span>
@@ -178,6 +126,7 @@
     {% else %}
     <p class="empty" id="tm-task-stream-empty">No tasks assigned to you yet.</p>
     {% endif %}
+    </div>
   </section>
 
   <div id="tasks-inspector-parking" hidden aria-hidden="true"></div>

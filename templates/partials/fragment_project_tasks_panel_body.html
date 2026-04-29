@@ -1,0 +1,12 @@
+{% if not active_tasks %}
+<p class="empty empty--tight project-tasks-empty-state">{% if has_title_presets and member_users %}No active tasks. <button type="button" class="project-new-task-trigger" id="project-new-task-open" aria-haspopup="dialog" aria-controls="project-new-task-dialog">Create a new task</button>, or use the <a href="{{ url_for('tasks_list') }}">Tasks</a> page.{% else %}No active tasks. Add team members and task titles, or use the <a href="{{ url_for('tasks_list') }}">Tasks</a> page.{% endif %}</p>
+{% else %}
+<div class="project-tasks-panel-stream">
+  <div class="task-stream" role="list">
+    {% for t in active_tasks %}
+    {% set status_next_url = url_for('project_detail', project_id=project.id) %}
+    {% include 'partials/active_task_item.html' %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

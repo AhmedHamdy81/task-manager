@@ -8,13 +8,19 @@
   </header>
 
   <div class="shell-dash-grid">
+    <div class="shell-widget shell-widget--clock" id="shell-dash-clock" aria-live="polite" aria-label="Clock">
+      <h2>Clock</h2>
+      <p class="shell-widget-clock" id="shell-dash-clock-time">--:--:--</p>
+      <p class="shell-widget-clock-date" id="shell-dash-clock-date">—</p>
+      <p class="shell-widget-meta">This device (DB times are Cairo)</p>
+    </div>
     <div class="shell-widget">
       <h2>Projects</h2>
       <p class="shell-widget-stat">{{ project_count }}</p>
       <p class="shell-widget-meta">On file</p>
       <a class="btn btn--ghost" href="{{ url_for('projects_list') }}">Open</a>
     </div>
-    {% if current_account_is_admin %}
+    {% if current_account_is_admin and not current_account_is_machine_room %}
     <div class="shell-widget">
       <h2>Users</h2>
       <p class="shell-widget-stat">{{ user_count }}</p>
@@ -22,6 +28,7 @@
       <a class="btn btn--ghost" href="{{ url_for('users_list') }}">Manage</a>
     </div>
     {% endif %}
+    {% if not current_account_is_machine_room %}
     <div class="shell-widget shell-widget--booking" id="dashboard-booking-card" data-today-url="{{ url_for('booking.booking_today_json') }}">
       <h2>My booking</h2>
       <div class="dashboard-booking-slot">
@@ -47,30 +54,90 @@
         </div>
       </div>
     </div>
+    {% endif %}
     <div class="shell-widget">
       <h2>{% if current_account_is_admin %}Open tasks{% else %}My open{% endif %}</h2>
       <p class="shell-widget-stat">{{ open_tasks }}</p>
       <p class="shell-widget-meta">{% if current_account_is_admin %}Open{% else %}Assigned to you{% endif %}</p>
-      <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">Triage</a>
+      <a class="btn btn--ghost" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') if current_account_is_machine_room else url_for('tasks_list') }}">Triage</a>
     </div>
     <div class="shell-widget">
       <h2>{% if current_account_is_admin %}All open{% else %}Team open{% endif %}</h2>
       <p class="shell-widget-stat">{{ task_count }}</p>
       <p class="shell-widget-meta">{% if current_account_is_admin %}Total open{% else %}On your projects{% endif %}</p>
-      <a class="btn btn--ghost" href="{{ url_for('tasks_list') }}">Tasks</a>
+      <a class="btn btn--ghost" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') if current_account_is_machine_room else url_for('tasks_list') }}">Tasks</a>
     </div>
   </div>
 
-  <div class="shell-widget shell-widget--flat">
-    <h2>Quick actions</h2>
-    <div class="shell-widget-actions">
-      <a class="btn btn--primary" href="{{ url_for('tasks_list') }}#task-create">New task</a>
-      <a class="btn btn--ghost" href="{{ url_for('booking.booking_home') }}">Booking</a>
-      <a class="btn btn--ghost" href="{{ url_for('projects_list') }}">Projects</a>
+  {% if current_account_is_machine_room %}
+  <section
+    class="panel project-tasks-panel project-tasks-panel--stream dashboard-machine-room-tasks"
+    id="dashboard-machine-room-tasks"
+    aria-labelledby="dashboard-machine-room-tasks-title"
+  >
+    <h2 class="panel-title project-tasks-panel-title" id="dashboard-machine-room-tasks-title">
+      Machine Room Tasks
+    </h2>
+    {% if not machine_room_tasks %}
+    <p class="empty empty--tight">No active machine tasks.</p>
+    {% else %}
+    <div class="project-tasks-panel-stream">
+      <div class="task-stream" role="list">
+        {% set task_actions_mr_dashboard = true %}
+        {% for t in machine_room_tasks %}
+        {% set status_next_url = url_for('index') %}
+        {% include 'partials/active_task_item.html' %}
+        {% endfor %}
+      </div>
     </div>
-  </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
 </div>
 {% endblock %}
 {% block extra_scripts %}
+{% if current_account_is_machine_room %}
+<script src="{{ url_for('static', filename='js/dashboard-mr-postcopy.js') }}" defer></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
+<script>
+(function () {
+  function tick() {
+    var timeEl = document.getElementById("shell-dash-clock-time");
+    var dateEl = document.getElementById("shell-dash-clock-date");
+    if (!timeEl || !dateEl) return;
+    if (typeof window.tmDateTime !== "undefined" && window.tmDateTime.formatDigitalClockCairo) {
+      timeEl.textContent = window.tmDateTime.formatDigitalClockCairo();
+      dateEl.textContent =
+        window.tmDateTime.formatDashboardDateCairo
+          ? window.tmDateTime.formatDashboardDateCairo()
+          : "—";
+    } else {
+      var d = new Date();
+      timeEl.textContent = d.toLocaleTimeString("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+      dateEl.textContent = d.toLocaleDateString("en-GB", {
+        weekday: "short",
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+    }
+  }
+  function boot() {
+    tick();
+    window.setInterval(tick, 1000);
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
 {% endblock %}

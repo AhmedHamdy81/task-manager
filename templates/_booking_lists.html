@@ -50,15 +50,23 @@
   </div>
 
   <section class="booking-list-section" aria-labelledby="booking-list-mine-title">
-    <h2 class="booking-list-section-title" id="booking-list-mine-title">My Bookings</h2>
+    <h2 class="booking-list-section-title" id="booking-list-mine-title">
+      {% if current_account_is_admin %}All bookings{% else %}My Bookings{% endif %}
+    </h2>
     <p class="empty booking-list-loading" id="booking-list-mine-loading">Loading…</p>
     <div class="booking-row-list-shell">
       <ul id="booking-list-mine" class="booking-row-list" role="list" hidden></ul>
     </div>
-    <p class="empty" id="booking-list-mine-empty" hidden>No bookings you created.</p>
+    <p class="empty" id="booking-list-mine-empty" hidden>
+      {% if current_account_is_admin %}No bookings in this range.{% else %}No bookings you created.{% endif %}
+    </p>
   </section>
 
-  <section class="booking-list-section" aria-labelledby="booking-list-assigned-title">
+  <section
+    class="booking-list-section"
+    aria-labelledby="booking-list-assigned-title"
+    {% if current_account_is_admin %}hidden{% endif %}
+  >
     <h2 class="booking-list-section-title" id="booking-list-assigned-title">Assigned to Me</h2>
     <p class="empty booking-list-loading" id="booking-list-assigned-loading">Loading…</p>
     <div class="booking-row-list-shell">

@@ -5,71 +5,106 @@
   <div class="page-head production-page-head">
     <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> / <a href="{{ url_for('project_production', project_id=project.id) }}">Production</a> /</p>
     <h1>Shooting day {{ day_display_index }}</h1>
-    <p class="muted">{{ production_day.shooting_date.strftime('%Y-%m-%d') }}</p>
+    <p class="muted">Unit {{ production_day.unit_number }} · {{ production_day.day_name }} · {{ production_day.shooting_date.strftime('%Y-%m-%d') }}</p>
   </div>
 
-  <div class="production-layout">
-    <aside class="production-sidebar" aria-label="Production navigation">
-      <h2 class="production-sidebar-title">Production</h2>
-      <nav class="production-sidebar-nav">
-        <a href="{{ url_for('project_production', project_id=project.id) }}" class="production-sidebar-link production-sidebar-link--active">Shooting Days</a>
-        <a href="{{ url_for('project_production_vfx', project_id=project.id) }}" class="production-sidebar-link">VFX Management</a>
-      </nav>
-    </aside>
-    <div class="production-main">
-      <div
-        id="production-day-app"
-        class="production-day-app"
-        data-project-id="{{ project.id }}"
-        data-day-id="{{ production_day.id }}"
-        data-rows-create-url="{{ rows_create_url }}"
-        data-initial-total="{{ total_seconds }}"
-      >
-        <div class="production-day-toolbar">
-          <form method="post" action="{{ url_for('production_day_delete', project_id=project.id, day_id=production_day.id) }}" class="inline" data-confirm="Delete this day and all rows?">
-            <button type="submit" class="btn btn--small btn--danger">Delete day</button>
-          </form>
+  {% include 'partials/project_workflow_nav.html' %}
+
+  <div class="production-main shooting-day-pro">
+    <div id="production-day-app" class="production-day-app">
+      <div class="production-day-toolbar">
+        <form method="post" action="{{ url_for('production_day_delete', project_id=project.id, day_id=production_day.id) }}" class="inline" data-confirm="Delete this day and all rows?">
+          <button type="submit" class="btn btn--small btn--danger">Delete day</button>
+        </form>
+      </div>
+
+      <section class="panel production-pipeline-day-panel" aria-labelledby="pipeline-day-heading">
+        <h2 id="pipeline-day-heading" class="panel-title">Scene rows</h2>
+        <p class="muted production-panel-lead shooting-day-lead">Duration: whole minutes, or M:SS (e.g. 4:30). Episode must be within the project episode count.</p>
+
+        <div class="shooting-dashboard" aria-label="Day progress">
+          <div class="dash-card">
+            <span class="dash-value">{{ total_scenes }}</span>
+            <span class="dash-label">Scenes</span>
+          </div>
+          <div class="dash-card">
+            <span class="dash-value">{{ sync_percentage }}%</span>
+            <span class="dash-label">Sync</span>
+          </div>
+          <div class="dash-card">
+            <span class="dash-value">{{ edit_percentage }}%</span>
+            <span class="dash-label">1st Edit</span>
+          </div>
+        </div>
+        <div class="shooting-dash-progress" aria-hidden="true">
+          <div class="shooting-dash-progress-row">
+            <span class="dash-progress-label">Sync</span>
+            <div class="progress-bar"><div class="progress-fill progress-fill--sync" style="width: {{ sync_percentage }}%"></div></div>
+          </div>
+          <div class="shooting-dash-progress-row">
+            <span class="dash-progress-label">1st Edit</span>
+            <div class="progress-bar"><div class="progress-fill progress-fill--edit" style="width: {{ edit_percentage }}%"></div></div>
+          </div>
         </div>
 
-        <div class="production-scenes-table-wrap">
-          <table class="production-scenes-table" aria-label="Scene rows">
-            <thead>
-              <tr>
-                <th scope="col">EPS</th>
-                <th scope="col">Scene</th>
-                <th scope="col">Sync</th>
-                <th scope="col">1st Edit</th>
-                <th scope="col">Final Edit</th>
-                <th scope="col">Duration</th>
-                <th scope="col">Notes</th>
-                <th scope="col"><span class="sr-only">Remove</span></th>
-              </tr>
-            </thead>
-            <tbody id="production-scenes-tbody">
-              {% for row in scene_rows %}
-              <tr class="production-scene-tr" data-row-id="{{ row.id }}">
-                <td><input type="text" class="input input--table production-field" data-field="episode" value="{{ row.episode }}" maxlength="120" aria-label="Episode"></td>
-                <td><input type="text" class="input input--table production-field" data-field="scene" value="{{ row.scene }}" maxlength="120" aria-label="Scene"></td>
-                <td class="production-chk-cell"><input type="checkbox" class="production-chk" data-field="sync" {% if row.sync %}checked{% endif %} aria-label="Sync"></td>
-                <td class="production-chk-cell"><input type="checkbox" class="production-chk" data-field="first_edit" {% if row.first_edit %}checked{% endif %} aria-label="First edit"></td>
-                <td class="production-chk-cell"><input type="checkbox" class="production-chk" data-field="final_edit" {% if row.final_edit %}checked{% endif %} aria-label="Final edit"></td>
-                <td><input type="text" class="input input--table production-field production-duration-input" data-field="duration" value="{{ row.duration_seconds|fmt_duration_mmss }}" inputmode="numeric" placeholder="MM:SS" aria-label="Duration"></td>
-                <td><input type="text" class="input input--table production-field" data-field="notes" value="{{ row.notes }}" maxlength="8000" aria-label="Notes"></td>
-                <td><button type="button" class="btn btn--small btn--ghost production-row-remove" title="Remove row">×</button></td>
-              </tr>
-              {% endfor %}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colspan="8" class="production-scenes-total-cell">
-                  Total: <strong id="production-duration-total">{{ total_seconds|fmt_duration_total }}</strong>
-                  <button type="button" class="btn btn--small btn--primary production-add-row-btn" id="production-add-row-btn">+ Add row</button>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+        <p class="shooting-day-total muted">Day total: <strong>{{ total_duration_seconds|fmt_duration_total }}</strong> <span class="muted">({{ (total_duration_seconds // 60) }} min)</span></p>
+
+        <form id="shooting-add-form" class="shooting-add-form" method="post" action="{{ url_for('shooting_day_assign_scene', project_id=project.id, day_id=production_day.id) }}">
+          <div class="shooting-row-input">
+            <input type="number" name="episode_number" id="shooting-add-ep" min="1" max="{{ max_episode_number }}" required placeholder="Ep" class="input input--sm" aria-label="Episode number" {% if max_episode_number < 1 %}disabled{% endif %}>
+            <input type="text" name="scene_label" maxlength="120" required placeholder="Sc" class="input input--sm shooting-scene-input" aria-label="Scene">
+            <input type="text" name="duration" inputmode="text" autocomplete="off" placeholder="Min or M:SS" class="input input--sm" aria-label="Duration in whole minutes or M:SS">
+            <input type="text" name="notes" maxlength="20000" placeholder="Notes…" class="input input--grow" aria-label="Notes">
+            <label class="check"><input type="checkbox" name="sync_done" value="1"> Sync</label>
+            <label class="check"><input type="checkbox" name="first_edit_done" value="1"> 1st Edit</label>
+            <label class="check"><input type="checkbox" name="needs_vfx" value="1"> Needs VFX</label>
+            <button type="submit" class="btn btn--primary btn--sm shooting-add-btn" {% if max_episode_number < 1 %}disabled{% endif %}>+ Add</button>
+          </div>
+        </form>
+
+        {% if pipeline_links %}
+        <div class="shooting-list" id="shooting-list">
+          {% for link in pipeline_links %}
+          {% set sec = link|shooting_row_duration_sec %}
+          {% set mins = ((sec + 59) // 60) if sec else 0 %}
+          <details class="shooting-row-card" id="shooting-row-{{ link.id }}">
+            <summary class="shooting-row-card-summary">
+              <div class="shooting-main">
+                Ep {{ link.episode_number }} · {% if (link.scene_label or '')|trim %}{{ (link.scene_label or '')|e }}{% else %}Sc {{ link.scene_number }}{% endif %}
+                {% if link.notes %}<span class="muted shooting-row-sub">{{ (link.notes or '')|e }}</span>{% endif %}
+              </div>
+              <div class="shooting-meta">{{ mins }} min</div>
+              <div class="shooting-status">
+                {% if link.sync_done %}<span class="badge badge--success">Sync</span>{% else %}<span class="badge badge--danger">Sync</span>{% endif %}
+                {% if link.first_edit_done %}<span class="badge badge--info">1st Edit</span>{% else %}<span class="badge badge--danger">1st Edit</span>{% endif %}
+                {% if link.needs_vfx %}<span class="badge badge--warning">VFX</span>{% endif %}
+              </div>
+            </summary>
+            <div class="shooting-row-card-edit">
+              <div class="shooting-row-card-edit-row">
+                <form class="shooting-row-input shooting-row-input--edit" method="post" action="{{ url_for('shooting_day_scene_update', project_id=project.id, link_id=link.id) }}">
+                  <input type="number" name="episode_number" min="1" max="{{ max_episode_number }}" required value="{{ link.episode_number }}" class="input input--sm" aria-label="Episode number" {% if max_episode_number < 1 %}disabled{% endif %}>
+                  <input type="text" name="scene_label" maxlength="120" required value="{{ (link.scene_label or '')|e }}" class="input input--sm shooting-scene-input" aria-label="Scene">
+                  <input type="text" name="duration" value="{{ link|shooting_row_duration_sec|fmt_duration_mmss }}" placeholder="M:SS" class="input input--sm" inputmode="text" autocomplete="off" aria-label="Duration M:SS or minutes">
+                  <input type="text" name="notes" maxlength="20000" value="{{ link.notes or '' }}" placeholder="Notes…" class="input input--grow" aria-label="Notes">
+                  <label class="check"><input type="checkbox" name="sync_done" value="1" {% if link.sync_done %}checked{% endif %}> Sync</label>
+                  <label class="check"><input type="checkbox" name="first_edit_done" value="1" {% if link.first_edit_done %}checked{% endif %}> 1st Edit</label>
+                  <label class="check"><input type="checkbox" name="needs_vfx" value="1" {% if link.needs_vfx %}checked{% endif %}> Needs VFX</label>
+                  <button type="submit" class="btn btn--primary btn--sm">Save</button>
+                </form>
+                <form method="post" action="{{ url_for('shooting_day_scene_delete', project_id=project.id, link_id=link.id) }}" class="inline shooting-row-delete-form" data-confirm="Delete this scene row from the day? Suite bookings linked to this row will be unlinked.">
+                  <button type="submit" class="btn btn--small btn--danger">Delete row</button>
+                </form>
+              </div>
+            </div>
+          </details>
+          {% endfor %}
         </div>
-      </div>
+        <div id="shooting-list-end" class="sr-only" aria-hidden="true"></div>
+        {% else %}
+        <p class="empty empty--in-panel shooting-empty">No rows yet. Use the bar above to add the first scene.</p>
+        {% endif %}
+      </section>
     </div>
   </div>
 
@@ -78,5 +113,47 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="{{ url_for('static', filename='js/production-day.js') }}" defer></script>
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var nid = params.get("new");
+  if (nid) {
+    var row = document.getElementById("shooting-row-" + nid);
+    if (row) {
+      row.open = true;
+      row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    params.delete("new");
+    var qs = params.toString();
+    var path = window.location.pathname + (qs ? "?" + qs : "");
+    window.history.replaceState({}, "", path);
+  }
+  var addForm = document.getElementById("shooting-add-form");
+  var addEp = document.getElementById("shooting-add-ep");
+  if (nid && addEp) {
+    addEp.focus({ preventScroll: true });
+  }
+  if (addForm) {
+    addForm.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target;
+      if (!t || t.tagName === "TEXTAREA") return;
+      if (t.closest(".shooting-row-input--edit")) return;
+      e.preventDefault();
+      if (addForm.requestSubmit) addForm.requestSubmit();
+      else addForm.submit();
+    });
+  }
+  document.querySelectorAll(".shooting-row-input--edit").forEach(function (form) {
+    form.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.altKey) return;
+      var t = e.target;
+      if (!t || t.tagName === "TEXTAREA") return;
+      e.preventDefault();
+      if (form.requestSubmit) form.requestSubmit();
+      else form.submit();
+    });
+  });
+})();
+</script>
 {% endblock %}

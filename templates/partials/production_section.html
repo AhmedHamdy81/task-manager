@@ -1,26 +1,58 @@
 <section class="panel production-panel" id="production-panel">
   <h2 class="panel-title">Shooting days</h2>
-  <p class="muted production-panel-lead">Flat list of days. Open a day to edit scene rows in a spreadsheet-style table.</p>
+  <p class="muted production-panel-lead">Open a day to add episode/scene rows. Total reflects M:SS duration plus any legacy shot-log time.</p>
 
+  {% set next_day_n = (shooting_days|length) + 1 %}
   <form class="production-add-row" method="post" action="{{ url_for('shooting_day_create', project_id=project.id) }}">
-    <input type="hidden" name="next" value="{{ url_for('project_production', project_id=project.id) }}">
     <div class="production-inline-fields">
-      <input type="date" name="shooting_date" class="input" required aria-label="New shooting date">
+      <select name="unit_number" class="input" required aria-label="Unit number">
+        <option value="">Unit</option>
+        <option value="1">Unit 1</option>
+        <option value="2">Unit 2</option>
+        <option value="3">Unit 3</option>
+      </select>
+      <input type="text" name="day_name" class="input" placeholder="Day name (e.g. Day 1)" maxlength="50" required value="Day {{ next_day_n }}" aria-label="Day name">
+      <input type="date" name="shooting_date" class="input" required aria-label="Shooting date">
       <button type="submit" class="btn btn--primary btn--small">Add shooting day</button>
     </div>
   </form>
 
   {% if not shooting_days %}
-  <p class="empty empty--in-panel production-empty">No shooting days yet. Add a date above.</p>
+  <p class="empty empty--in-panel production-empty">No shooting days yet. Add a unit, day name, and date above.</p>
   {% else %}
+  {% set _day_progress = production_day_progress|default({}, true) %}
   <ul class="production-days-simple-list">
     {% for d in shooting_days %}
-    <li class="production-days-simple-item">
+    <li class="production-days-simple-item" id="day-{{ d.id }}">
       <a class="production-days-simple-link" href="{{ url_for('project_production_day', project_id=project.id, day_id=d.id) }}">
-        <span class="production-days-simple-date">{{ d.shooting_date.strftime('%Y-%m-%d') }}</span>
+        <span class="production-days-simple-stack">
+          <span class="production-days-simple-main">Unit {{ d.unit_number }} · {{ d.day_name }}</span>
+          <span class="production-days-simple-sub">{{ d.shooting_date.strftime('%Y-%m-%d') }}</span>
+          {% set prog = _day_progress[d.id] if d.id in _day_progress else {'sync': 0, 'edit': 0} %}
+          <div class="production-day-progress-chart" aria-label="This shooting day: sync {{ prog['sync'] }}% complete, first edit {{ prog['edit'] }}% complete">
+            <div class="production-day-progress-block">
+              <div class="production-day-progress-head">
+                <span class="production-day-progress-label">Sync</span>
+                <span class="production-day-progress-pct">{{ prog['sync'] }}%</span>
+              </div>
+              <div class="production-day-progress-track progress-bar" aria-hidden="true">
+                <div class="progress-fill progress-fill--sync" style="width: {{ prog['sync'] }}%"></div>
+              </div>
+            </div>
+            <div class="production-day-progress-block">
+              <div class="production-day-progress-head">
+                <span class="production-day-progress-label">1st</span>
+                <span class="production-day-progress-pct">{{ prog['edit'] }}%</span>
+              </div>
+              <div class="production-day-progress-track progress-bar" aria-hidden="true">
+                <div class="progress-fill progress-fill--edit" style="width: {{ prog['edit'] }}%"></div>
+              </div>
+            </div>
+          </div>
+        </span>
         <span class="production-days-simple-total">Total {{ production_day_totals.get(d.id, 0)|fmt_duration_total }}</span>
       </a>
-      <form method="post" action="{{ url_for('production_day_delete', project_id=project.id, day_id=d.id) }}" class="inline production-days-simple-delete" data-confirm="Delete this shooting day and all scene rows?">
+      <form method="post" action="{{ url_for('production_day_delete', project_id=project.id, day_id=d.id) }}" class="inline production-days-simple-delete" data-confirm="Delete this shooting day and all rows on it?">
         <button type="submit" class="btn btn--small btn--danger">Delete</button>
       </form>
     </li>

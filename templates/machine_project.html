@@ -1,0 +1,589 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Machine Room · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="project-detail-page project-detail-page--machine">
+  <div class="page-head project-detail-head">
+    <div class="project-detail-head-main">
+      <p class="breadcrumb">
+        <a href="{{ url_for('machine_room') }}">Machine Room</a>
+        /
+        <a href="{{ url_for('project_detail', project_id=project.id) }}">Standard view</a>
+      </p>
+      <div class="machine-badge" role="status">Machine Room</div>
+      <h1>{{ project.name }}</h1>
+      <p class="muted">{{ project.project_type }} · {{ project.production_house }} · Director: {{ project.director }}</p>
+    </div>
+  </div>
+
+  <section
+    class="machine-panel hdd-panel"
+    aria-labelledby="hdd-heading"
+    data-hdd-update-url="{{ url_for('machine_hdd_update_name') }}"
+    {% if machine_hdd_cards %}
+    data-hdd-day-url="{{ url_for('machine_hdd_add_shooting_day', project_id=project.id) }}"
+    {% endif %}
+  >
+    <h2 id="hdd-heading" class="hdd-section-title">Hard disks</h2>
+    <p class="muted hdd-section-lead">Track physical drives, link existing shooting days, and see used vs free space.</p>
+
+    <div class="hdd-project-summary" role="group" aria-label="Project storage totals">
+      <div class="hdd-project-summary-item">
+        <span class="hdd-project-summary-value">{{ "%.2f"|format(machine_hdd_total_capacity_tb) }}</span>
+        <span class="hdd-project-summary-label">Total capacity (TB)</span>
+      </div>
+      <div class="hdd-project-summary-item">
+        <span class="hdd-project-summary-value">{{ "%.2f"|format(machine_hdd_total_used_tb) }}</span>
+        <span class="hdd-project-summary-label">Total used (TB)</span>
+      </div>
+      <div class="hdd-project-summary-item">
+        <span class="hdd-project-summary-value">{{ "%.2f"|format(machine_hdd_total_free_tb) }}</span>
+        <span class="hdd-project-summary-label">Total free (TB)</span>
+      </div>
+    </div>
+
+    <details class="hdd-add-disk">
+      <summary class="hdd-add-disk-summary">+ Add hard disk</summary>
+      <form
+        class="hdd-form hdd-form--add-disk"
+        method="post"
+        action="{{ url_for('machine_project_hard_disk_create', project_id=project.id) }}"
+      >
+        <label class="hdd-field">
+          <span class="hdd-field-label">Name</span>
+          <input type="text" name="name" required maxlength="120" placeholder="e.g. GBDX01" autocomplete="off" />
+        </label>
+        <label class="hdd-field">
+          <span class="hdd-field-label">Capacity (TB)</span>
+          <input type="number" name="capacity_tb" required min="0.0001" step="any" placeholder="24" />
+        </label>
+        <label class="hdd-field">
+          <span class="hdd-field-label">Type</span>
+          <select name="type" required>
+            <option value="" disabled selected>Select type</option>
+            <option value="G-Raid">G-Raid</option>
+            <option value="Passport">Passport</option>
+            <option value="SSD">SSD</option>
+            <option value="Other">Other</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn--primary">Save disk</button>
+      </form>
+    </details>
+
+    {% if not machine_hdd_cards %}
+    <p class="muted hdd-empty">No hard disks yet. Add one to start tracking storage.</p>
+    {% else %}
+    <div class="hdd-card-grid">
+      {% for card in machine_hdd_cards %}
+      <article class="hdd-card" data-disk-id="{{ card.id }}">
+        <header class="hdd-card-head">
+          <div>
+            <span
+              class="hdd-name editable"
+              data-id="{{ card.id }}"
+              tabindex="0"
+              role="button"
+              title="Click to rename"
+            >{{ card.name }}</span>
+            <p class="hdd-card-meta">{{ "%.1f"|format(card.capacity_tb) }} TB · {{ card.type or "—" }}</p>
+          </div>
+        </header>
+        <div class="hdd-card-body">
+          <div class="hdd-card-stats">
+            <p><span class="hdd-stat-label">Used</span> <span class="hdd-stat-num">{{ "%.2f"|format(card.used_tb) }} TB</span></p>
+            <p><span class="hdd-stat-label">Free</span> <span class="hdd-stat-num">{{ "%.2f"|format(card.free_tb) }} TB</span></p>
+            {% if card.used_tb > card.capacity_tb + 0.0001 %}
+            <p class="hdd-over-cap" role="status">Recorded use exceeds capacity; adjust sizes or capacity.</p>
+            {% endif %}
+          </div>
+          <div class="hdd-card-chart-wrap">
+            <canvas
+              id="hdd-chart-{{ card.id }}"
+              class="hdd-pie-canvas"
+              width="160"
+              height="160"
+              aria-label="Used versus free space"
+              data-used="{{ card.used_tb }}"
+              data-free="{{ card.free_tb }}"
+              data-capacity="{{ card.capacity_tb }}"
+            ></canvas>
+          </div>
+
+          <details class="hdd-link-day">
+            <summary class="hdd-link-day-summary">+ Link shooting day</summary>
+            {% if not machine_shooting_days %}
+            <p class="muted hdd-link-hint">
+              No shooting days on this project yet. Use <strong>+ Add Shooting Day</strong> below, or create them in production, then link here.
+            </p>
+            {% elif card.dropdown_options %}
+            <form
+              class="hdd-form hdd-form--link"
+              method="post"
+              action="{{ url_for('machine_project_hard_disk_usage_add', project_id=project.id, disk_id=card.id) }}"
+            >
+              <label class="hdd-field">
+                <span class="hdd-field-label">Shooting day</span>
+                <select name="shooting_day_id" required>
+                  <option value="" disabled selected>Choose day</option>
+                  {% for opt in card.dropdown_options %}
+                  <option value="{{ opt.id }}">{{ opt.label }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="hdd-field">
+                <span class="hdd-field-label">Video size (TB)</span>
+                <input type="number" name="video_size_tb" min="0" step="any" value="0" />
+              </label>
+              <label class="hdd-field">
+                <span class="hdd-field-label">Audio size (GB)</span>
+                <input type="number" name="audio_size_gb" min="0" step="any" value="0" />
+              </label>
+              <label class="hdd-field hdd-field--full">
+                <span class="hdd-field-label">Notes</span>
+                <textarea name="notes" rows="2" maxlength="4000" placeholder="Optional"></textarea>
+              </label>
+              <button type="submit" class="btn btn--primary">Link day</button>
+            </form>
+            {% else %}
+            <p class="muted hdd-link-hint">Every shooting day is already linked to this disk.</p>
+            {% endif %}
+          </details>
+
+          <button
+            type="button"
+            class="btn btn--ghost btn--small hdd-add-day-btn"
+            data-disk-id="{{ card.id }}"
+          >
+            + Add Shooting Day
+          </button>
+
+          {% if card.usage_rows %}
+          <details class="hdd-card-detail">
+            <summary class="hdd-card-detail-summary">Linked shooting days ({{ card.usage_rows|length }})</summary>
+            <div class="hdd-usage-list" role="list">
+              {% for row in card.usage_rows %}
+              <div class="hdd-usage-row" role="listitem">
+                <div class="hdd-usage-row-main">
+                  <span class="hdd-usage-unit">Unit {{ row.unit_number }}</span>
+                  <span class="hdd-usage-sep">·</span>
+                  <span class="hdd-usage-day">Day {{ row.day_name or "—" }}</span>
+                  <span class="hdd-usage-sep">·</span>
+                  <span class="hdd-usage-date">{{ row.shooting_date.isoformat() if row.shooting_date else "—" }}</span>
+                </div>
+                <div class="hdd-usage-row-sizes">
+                  <span>Video {{ "%.2f"|format(row.video_tb) }} TB</span>
+                  <span class="hdd-usage-sep">·</span>
+                  <span>Audio {{ "%.1f"|format(row.audio_gb) }} GB</span>
+                </div>
+                {% if row.notes %}
+                <p class="hdd-usage-notes">{{ row.notes }}</p>
+                {% endif %}
+                <form
+                  class="hdd-unlink-form"
+                  method="post"
+                  action="{{ url_for('machine_project_hard_disk_usage_delete', project_id=project.id, disk_id=card.id, usage_id=row.id) }}"
+                  data-confirm="Remove this shooting day from the disk?"
+                >
+                  <button type="submit" class="btn btn--small btn--ghost">Unlink</button>
+                </form>
+              </div>
+              {% endfor %}
+            </div>
+          </details>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <p class="panel-after-link"><a href="{{ url_for('machine_room') }}">← Projects List</a></p>
+  </section>
+
+  {% if machine_hdd_cards %}
+  <div id="hdd-day-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" tabindex="-1"></div>
+    <div class="modal-content" role="dialog" aria-labelledby="hdd-day-modal-title">
+      <h3 id="hdd-day-modal-title">Add Shooting Day</h3>
+      <p class="muted hdd-modal-lead">Creates a production shooting day and links it to this disk.</p>
+      <form id="hdd-day-form" class="hdd-modal-form">
+        <input type="hidden" name="disk_id" id="modal-disk-id" value="" />
+        <label class="hdd-field">
+          <span class="hdd-field-label">Unit number</span>
+          <input type="number" name="unit_number" required min="1" step="1" value="1" />
+        </label>
+        <label class="hdd-field">
+          <span class="hdd-field-label">Day name</span>
+          <input type="text" name="day_name" required maxlength="50" autocomplete="off" />
+        </label>
+        <label class="hdd-field">
+          <span class="hdd-field-label">Date</span>
+          <input type="date" name="shooting_date" class="hdd-date-input" required />
+        </label>
+        <label class="hdd-field">
+          <span class="hdd-field-label">Video size (TB)</span>
+          <input type="number" name="video_size_tb" min="0" step="any" value="0" />
+        </label>
+        <label class="hdd-field">
+          <span class="hdd-field-label">Audio size (GB)</span>
+          <input type="number" name="audio_size_gb" min="0" step="any" value="0" />
+        </label>
+        <label class="hdd-field hdd-field--full">
+          <span class="hdd-field-label">Notes</span>
+          <textarea name="notes" rows="2" maxlength="4000" placeholder="Optional"></textarea>
+        </label>
+        <label class="hdd-field">
+          <span class="hdd-field-label">Estimated copy time (minutes)</span>
+          <input
+            type="number"
+            name="copy_time_minutes"
+            min="1"
+            step="1"
+            placeholder="Required for Start Copy"
+            inputmode="numeric"
+          />
+        </label>
+        <div class="modal-actions">
+          <button type="button" id="modal-cancel" class="btn btn--ghost">Cancel</button>
+          <button type="submit" name="action" value="create_link" class="btn btn--ghost" id="hdd-day-submit-link">
+            Create &amp; link
+          </button>
+          <button type="submit" name="action" value="start_copy" class="btn btn--primary" id="hdd-day-submit-copy">
+            Start Copy
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    if (typeof Chart !== "undefined") {
+      document.querySelectorAll(".hdd-pie-canvas").forEach(function (canvas) {
+        var cap = parseFloat(canvas.getAttribute("data-capacity") || "0", 10);
+        var usedRaw = parseFloat(canvas.getAttribute("data-used") || "0", 10);
+        var freeRaw = parseFloat(canvas.getAttribute("data-free") || "0", 10);
+        var used = Math.max(0, usedRaw);
+        var free = freeRaw;
+        if (cap > 0 && used === 0 && free === 0) {
+          free = cap;
+        }
+        if (free < 0) {
+          free = 0;
+        }
+        var usedRatio = cap > 0 ? used / cap : 0;
+        var usedOver90 = usedRatio > 0.9;
+        var usedBg = usedOver90 ? "rgba(220, 75, 65, 0.92)" : "rgba(61, 154, 122, 0.85)";
+        var usedBorder = usedOver90 ? "rgba(90, 28, 24, 0.65)" : "rgba(11, 18, 16, 0.35)";
+        var ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        new Chart(ctx, {
+          type: "pie",
+          data: {
+            labels: ["Used", "Free"],
+            datasets: [
+              {
+                data: [used, free],
+                backgroundColor: [usedBg, "rgba(255, 255, 255, 0.12)"],
+                borderColor: [usedBorder, "rgba(11, 18, 16, 0.35)"],
+                borderWidth: 1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+              legend: {
+                position: "bottom",
+                labels: { color: "#c8d0cc", boxWidth: 12, font: { size: 11 } },
+              },
+            },
+          },
+        });
+      });
+    }
+
+    var section = document.querySelector(".hdd-panel");
+    var updateUrl = section && section.getAttribute("data-hdd-update-url");
+    if (!updateUrl) return;
+
+    function makeNameSpan(id, text) {
+      var span = document.createElement("span");
+      span.className = "hdd-name editable";
+      span.setAttribute("data-id", String(id));
+      span.setAttribute("tabindex", "0");
+      span.setAttribute("role", "button");
+      span.setAttribute("title", "Click to rename");
+      span.textContent = text;
+      return span;
+    }
+
+    function bindHddNameEditable(span) {
+      function openEdit() {
+        var currentText = span.textContent.trim();
+        var id = span.getAttribute("data-id");
+        var input = document.createElement("input");
+        input.type = "text";
+        input.value = currentText;
+        input.className = "hdd-name-input";
+        input.setAttribute("maxlength", "120");
+        input.setAttribute("aria-label", "Hard disk name");
+
+        var ignoreBlur = false;
+        var saving = false;
+
+        function finish(text) {
+          var next = makeNameSpan(id, text);
+          input.replaceWith(next);
+          bindHddNameEditable(next);
+        }
+
+        function cancel() {
+          ignoreBlur = true;
+          finish(currentText);
+        }
+
+        function persist() {
+          if (saving) return;
+          var newValue = input.value.trim();
+          if (!newValue) {
+            cancel();
+            return;
+          }
+          if (newValue === currentText) {
+            ignoreBlur = true;
+            finish(currentText);
+            return;
+          }
+          var confirmed = window.confirm(
+            "Are you sure you want to rename this HDD?"
+          );
+          if (!confirmed) {
+            ignoreBlur = true;
+            finish(currentText);
+            return;
+          }
+          saving = true;
+          fetch(updateUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify({ id: Number(id), name: newValue }),
+          })
+            .then(function (r) {
+              return r.json().then(function (body) {
+                return { ok: r.ok, body: body };
+              });
+            })
+            .then(function (res) {
+              saving = false;
+              if (res.ok && res.body && res.body.ok) {
+                ignoreBlur = true;
+                finish(newValue);
+              } else {
+                cancel();
+              }
+            })
+            .catch(function () {
+              saving = false;
+              cancel();
+            });
+        }
+
+        span.replaceWith(input);
+        input.focus();
+        input.select();
+
+        input.addEventListener("keydown", function (e) {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+            return;
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            input.blur();
+          }
+        });
+
+        input.addEventListener("blur", function () {
+          if (ignoreBlur) return;
+          persist();
+        });
+      }
+
+      span.addEventListener("click", openEdit);
+      span.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openEdit();
+        }
+      });
+    }
+
+    document.querySelectorAll(".hdd-name.editable").forEach(bindHddNameEditable);
+
+    var dayUrl = section && section.getAttribute("data-hdd-day-url");
+    var dayModal = document.getElementById("hdd-day-modal");
+    var dayForm = document.getElementById("hdd-day-form");
+    var diskField = document.getElementById("modal-disk-id");
+    var modalCancel = document.getElementById("modal-cancel");
+    var daySubmitLink = document.getElementById("hdd-day-submit-link");
+    var daySubmitCopy = document.getElementById("hdd-day-submit-copy");
+
+    function showMachineToast(text) {
+      var host = document.getElementById("realtime-toast-host");
+      if (!host || !text) return;
+      var el = document.createElement("div");
+      el.className = "realtime-toast";
+      el.setAttribute("role", "status");
+      el.textContent = text;
+      host.appendChild(el);
+      window.setTimeout(function () {
+        el.classList.add("realtime-toast--out");
+        window.setTimeout(function () {
+          if (el.parentNode) el.parentNode.removeChild(el);
+        }, 280);
+      }, 7000);
+    }
+
+    if (dayUrl && dayModal && dayForm && diskField) {
+      function closeDayModal() {
+        dayModal.classList.add("hidden");
+        dayModal.setAttribute("aria-hidden", "true");
+        dayForm.reset();
+        diskField.value = "";
+      }
+
+      function openDayModal(diskId) {
+        dayForm.reset();
+        diskField.value = String(diskId);
+        dayModal.classList.remove("hidden");
+        dayModal.setAttribute("aria-hidden", "false");
+        var unitInput = dayForm.querySelector('input[name="unit_number"]');
+        if (unitInput) unitInput.value = "1";
+        var first = dayForm.querySelector('input[name="day_name"]');
+        if (first) first.focus();
+      }
+
+      var dateInput = dayForm.querySelector('input[name="shooting_date"]');
+      if (dateInput && typeof dateInput.showPicker === "function") {
+        var openPicker = function () {
+          try {
+            dateInput.showPicker();
+          } catch (_err) {
+            // Ignore browsers that block programmatic picker opening.
+          }
+        };
+        dateInput.addEventListener("focus", openPicker);
+        dateInput.addEventListener("click", openPicker);
+      }
+
+      document.querySelectorAll(".hdd-add-day-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var id = btn.getAttribute("data-disk-id");
+          if (!id) return;
+          openDayModal(id);
+        });
+      });
+
+      if (modalCancel) {
+        modalCancel.addEventListener("click", closeDayModal);
+      }
+      var dayBackdrop = dayModal.querySelector(".modal-backdrop");
+      if (dayBackdrop) {
+        dayBackdrop.addEventListener("click", closeDayModal);
+      }
+
+      dayForm.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var submitter = e.submitter;
+        var actionVal =
+          submitter && submitter.getAttribute("name") === "action"
+            ? String(submitter.value || "create_link").trim()
+            : "create_link";
+        if (actionVal !== "start_copy") {
+          actionVal = "create_link";
+        }
+        if (typeof dayForm.checkValidity === "function" && !dayForm.checkValidity()) {
+          if (typeof dayForm.reportValidity === "function") dayForm.reportValidity();
+          return;
+        }
+        var fd = new FormData(dayForm);
+        if (actionVal === "start_copy") {
+          var rawCopy = (fd.get("copy_time_minutes") || "").toString().trim();
+          var copyNum = parseInt(rawCopy, 10);
+          if (!rawCopy || !isFinite(copyNum) || copyNum < 1) {
+            window.alert("Enter estimated copy time (minutes) before Start Copy.");
+            return;
+          }
+        }
+        var payload = {
+          action: actionVal,
+          disk_id: Number(fd.get("disk_id") || 0),
+          unit_number: Number(fd.get("unit_number") || 1),
+          day_name: (fd.get("day_name") || "").trim(),
+          shooting_date: (fd.get("shooting_date") || "").trim(),
+          video_size_tb: fd.get("video_size_tb") || "0",
+          audio_size_gb: fd.get("audio_size_gb") || "0",
+          notes: (fd.get("notes") || "").trim(),
+        };
+        if (actionVal === "start_copy") {
+          payload.copy_time_minutes = parseInt(
+            (fd.get("copy_time_minutes") || "").toString().trim(),
+            10
+          );
+        }
+        var subs = dayForm.querySelectorAll("button[type='submit'][name='action']");
+        subs.forEach(function (b) {
+          b.disabled = true;
+        });
+        fetch(dayUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(payload),
+        })
+          .then(function (r) {
+            return r.json().then(function (body) {
+              return { ok: r.ok, body: body };
+            });
+          })
+          .then(function (res) {
+            subs.forEach(function (b) {
+              b.disabled = false;
+            });
+            if (res.ok && res.body && res.body.ok) {
+              if (res.body.copy_started) {
+                showMachineToast("Copy started and task created");
+                window.setTimeout(function () {
+                  window.location.reload();
+                }, 900);
+              } else {
+                window.location.reload();
+              }
+            } else {
+              var err = (res.body && res.body.error) || "save_failed";
+              window.alert("Could not save: " + err);
+            }
+          })
+          .catch(function () {
+            subs.forEach(function (b) {
+              b.disabled = false;
+            });
+            window.alert("Could not save: network error");
+          });
+      });
+    }
+  });
+</script>
+{% endblock %}

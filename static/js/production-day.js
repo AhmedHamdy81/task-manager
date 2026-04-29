@@ -208,4 +208,40 @@
         .catch(function () {});
     });
   }
+
+  try {
+    var sp = new URLSearchParams(window.location.search || '');
+    if (sp.get('new') === '1') {
+      try {
+        window.scrollTo(0, 0);
+      } catch (e1) {}
+      if (root) {
+        try {
+          root.scrollIntoView({ block: 'start', behavior: 'auto' });
+        } catch (e3) {}
+      }
+      var firstEditable =
+        tbody &&
+        tbody.querySelector('input.production-field, input.production-chk, textarea.production-field');
+      if (firstEditable) {
+        try {
+          firstEditable.focus({ preventScroll: true });
+        } catch (e4) {
+          try {
+            firstEditable.focus();
+          } catch (e5) {}
+        }
+      } else if (addBtn) {
+        try {
+          addBtn.focus();
+        } catch (e6) {}
+      }
+      try {
+        var u = new URL(window.location.href);
+        u.searchParams.delete('new');
+        var qs = u.searchParams.toString();
+        history.replaceState({}, '', u.pathname + (qs ? '?' + qs : '') + u.hash);
+      } catch (e7) {}
+    }
+  } catch (e0) {}
 })();

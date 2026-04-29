@@ -15,8 +15,15 @@
   </label>
   <div class="project-completed-stream" id="project-completed-list" role="list">
     {% for t in completed_tasks %}
-    <article class="project-completed-item" role="listitem" data-task-search="{{ (t.title ~ ' ' ~ (t.assignee.name if t.assignee else ''))|lower|e }}">
+    <article class="project-completed-item" role="listitem" data-task-search="{{ (t.title ~ ' ' ~ (t.assignee.name if t.assignee else '') ~ ' ' ~ (t.copy_day_name or ''))|lower|e }}">
       <div class="project-completed-item-body">
+        {% if t.title in ('Copy Material', 'Convert') and t.copy_estimated_minutes is not none %}
+        <h3 class="project-completed-item-title sr-only">{{ t.title }}</h3>
+        {% include 'partials/task_copy_live.html' %}
+        <p class="project-completed-item-meta">
+          <span>Completed {% if t.completed_at %}{{ t.completed_at|fmt_cairo }}{% else %}—{% endif %}</span>
+        </p>
+        {% else %}
         <h3 class="project-completed-item-title">{{ t.title }}</h3>
         <p class="project-completed-item-meta">
           <span class="project-completed-item-user">
@@ -29,10 +36,11 @@
             {% endif %}
           </span>
           <span class="project-completed-item-meta-sep" aria-hidden="true">·</span>
-          <span>Created {% if t.created_at %}{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</span>
+          <span>Created {% if t.created_at %}{{ t.created_at|fmt_cairo }}{% else %}—{% endif %}</span>
           <span class="project-completed-item-meta-sep" aria-hidden="true">·</span>
-          <span>Completed {% if t.completed_at %}{{ t.completed_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</span>
+          <span>Completed {% if t.completed_at %}{{ t.completed_at|fmt_cairo }}{% else %}—{% endif %}</span>
         </p>
+        {% endif %}
       </div>
       {% if current_account_is_elevated %}
       <div class="project-completed-item-action">
@@ -67,4 +75,9 @@
 </section>
 
 <p class="panel-after-link"><a href="{{ url_for('project_detail', project_id=project.id) }}">← Back to project</a></p>
+{% endblock %}
+{% block extra_scripts %}
+{% if completed_tasks %}
+<script src="{{ url_for('static', filename='js/task-copy-live.js') }}" defer></script>
+{% endif %}
 {% endblock %}

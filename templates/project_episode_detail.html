@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Episode {{ episode.episode_number }} · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="project-detail-page">
+  <div class="page-head project-detail-head">
+    <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> / <a href="{{ url_for('project_episodes', project_id=project.id) }}">Episodes</a> /</p>
+    <h1>Episode {{ episode.episode_number }}{% if episode.title %} — {{ episode.title }}{% endif %}</h1>
+    <p class="muted">{{ project.name }}</p>
+  </div>
+
+  {% include 'partials/project_workflow_nav.html' %}
+
+  <section class="panel">
+    <h2 class="panel-title">Add scene</h2>
+    <form class="form-stack" method="post" action="{{ url_for('project_episode_detail', project_id=project.id, episode_id=episode.id) }}" style="max-width: 36rem;">
+      <div class="form-row">
+        <label class="field field--grow">
+          <span class="field-label">Scene number</span>
+          <input type="number" name="scene_number" class="input" required min="1" step="1" placeholder="e.g. 12">
+        </label>
+        <label class="field field--grow">
+          <span class="field-label">Est. duration (minutes)</span>
+          <input type="number" name="estimated_duration_minutes" class="input" min="0" step="1" value="0">
+        </label>
+      </div>
+      <label class="field">
+        <span class="field-label">Description</span>
+        <textarea name="description" class="input booking-textarea" rows="2" maxlength="8000" placeholder="Interior / exterior, story beats…"></textarea>
+      </label>
+      <button type="submit" class="btn btn--primary">Add scene</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Scenes</h2>
+    {% if scenes %}
+    <div class="production-scenes-table-wrap project-episode-scenes-wrap">
+      <table class="production-scenes-table" aria-label="Scenes in this episode">
+        <thead>
+          <tr>
+            <th scope="col">Scene</th>
+            <th scope="col">Description</th>
+            <th scope="col">Duration</th>
+            <th scope="col">Editing</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sc in scenes %}
+          <tr>
+            <td>{{ sc.scene_number }}</td>
+            <td class="project-scene-desc-cell">{{ (sc.description or '')|e }}</td>
+            <td>{{ sc.estimated_duration_minutes }} min</td>
+            <td>{% if sc.ready_for_editing %}<span class="booking-pill booking-pill--ok">Ready</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+            <td class="project-scene-actions-cell">
+              <a class="btn btn--small btn--ghost" href="{{ url_for('project_scene_edit', project_id=project.id, episode_id=episode.id, scene_id=sc.id) }}">Edit</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty empty--in-panel">No scenes yet.</p>
+    {% endif %}
+  </section>
+
+  <p class="panel-after-link"><a href="{{ url_for('project_episodes', project_id=project.id) }}">← All episodes</a></p>
+</div>
+{% endblock %}

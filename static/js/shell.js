@@ -85,11 +85,6 @@
     var closeBtn = qs("app-inspector-close");
     if (closeBtn) closeBtn.addEventListener("click", closeInspector);
     if (backdrop) backdrop.addEventListener("click", closeInspector);
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && inspector && inspector.classList.contains("is-open")) {
-        closeInspector();
-      }
-    });
 
     if (sidebarToggle && sidebar) {
       sidebarToggle.addEventListener("click", function () {

@@ -51,16 +51,22 @@
   function formatTime(iso) {
     if (!iso) return "";
     try {
+      if (typeof window.tmDateTime !== "undefined" && window.tmDateTime.formatDateTimeCairo) {
+        return window.tmDateTime.formatDateTimeCairo(iso);
+      }
       var d = new Date(iso);
-      if (isNaN(d.getTime())) return iso;
+      if (isNaN(d.getTime())) return String(iso);
       return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
     } catch (e) {
-      return iso;
+      return String(iso);
     }
   }
 
   function parseTime(iso) {
     try {
+      if (typeof window.tmDateTime !== "undefined" && window.tmDateTime.instantMs) {
+        return window.tmDateTime.instantMs(iso);
+      }
       var d = new Date(iso);
       return isNaN(d.getTime()) ? 0 : d.getTime();
     } catch (e) {
@@ -173,7 +179,10 @@
       nameEl.textContent = m.username || "Unknown";
       var timeEl = document.createElement("time");
       timeEl.className = "project-chat-bubble-time";
-      timeEl.dateTime = m.created_at || "";
+      timeEl.dateTime =
+        (typeof window.tmDateTime !== "undefined" && window.tmDateTime.utcIsoForAttr
+          ? window.tmDateTime.utcIsoForAttr(m.created_at)
+          : m.created_at) || "";
       timeEl.textContent = formatTime(m.created_at);
       meta.appendChild(nameEl);
       meta.appendChild(timeEl);
@@ -601,8 +610,13 @@
         var t = threadsMap[k];
         var ts = 0;
         if (t.last_at) {
-          var d = new Date(t.last_at);
-          ts = isNaN(d.getTime()) ? 0 : d.getTime();
+          ts =
+            typeof window.tmDateTime !== "undefined" && window.tmDateTime.instantMs
+              ? window.tmDateTime.instantMs(t.last_at)
+              : (function () {
+                  var d = new Date(t.last_at);
+                  return isNaN(d.getTime()) ? 0 : d.getTime();
+                })();
         }
         t.last_sort = ts;
       });
@@ -618,8 +632,13 @@
           if (!data || !Array.isArray(data.threads)) return;
           threadsMap = {};
           data.threads.forEach(function (t) {
-            var ta = new Date(t.last_at || 0).getTime();
-            t.last_sort = isNaN(ta) ? 0 : ta;
+            t.last_sort =
+              typeof window.tmDateTime !== "undefined" && window.tmDateTime.instantMs
+                ? window.tmDateTime.instantMs(t.last_at || "")
+                : (function () {
+                    var ta = new Date(t.last_at || 0).getTime();
+                    return isNaN(ta) ? 0 : ta;
+                  })();
             threadsMap[t.project_id] = t;
           });
           updateThreadSortFields();

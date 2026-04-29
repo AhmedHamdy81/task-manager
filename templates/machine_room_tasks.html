@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Machine Room Tasks · {{ app_name }}{% endblock %}
+{% block content %}
+<div
+  class="tasks-page-shell"
+  id="tasks-page-root"
+  data-tm-tasks-fragment-url="{{ url_for('ui_fragment_machine_room_tasks_zone', tab_slug=filt.tab) }}"
+>
+  <header class="page-head shell-page-head">
+    <h1>Machine Room Tasks</h1>
+    <p class="mr-tasks-breadcrumb" aria-label="Current section">
+      <span class="mr-tasks-breadcrumb-muted">Machine room</span>
+      <span class="mr-tasks-breadcrumb-sep" aria-hidden="true">/</span>
+      <span class="mr-tasks-breadcrumb-strong">{{ 'In progress' if filt.tab == 'progress' else 'Finished' }}</span>
+    </p>
+    <p class="muted">
+      All tasks assigned to directory users with the Machine Room role (including copy operations started from Storage Management).
+    </p>
+  </header>
+
+  <div id="mr-tasks-refresh-zone">
+    {% include 'partials/mr_tasks_zone_inner.html' %}
+  </div>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/dashboard-mr-postcopy.js') }}" defer></script>
+{% endblock %}

@@ -1,0 +1,138 @@
+{# Single active-task row (project detail stream + dashboard). Expects: t, status_next_url #}
+{% set _mr_postcopy_row = task_actions_mr_dashboard is defined and task_actions_mr_dashboard and can_machine_room_operate_stream_task(t) and t.title == 'Copy Material' %}
+{% if mr_task_list_filters is defined and mr_task_list_filters %}
+{% set an = (t.assignee.name if t.assignee else 'Unknown') %}
+{% set pn = (t.project.name if t.project else '') %}
+{% set pnorm = pn|lower %}
+{% set st = t.status %}
+{% set pr = (t.priority or 'medium') %}
+{% set pr_rank = 3 if pr == 'high' else (2 if pr == 'medium' else 1) %}
+{% set is_copy_live = (t.title in ('Copy Material', 'Convert') and t.copy_estimated_minutes is not none) %}
+{% set copy_bits = ((t.copy_day_name or '') ~ ' ' ~ (t.copy_unit_number|string if t.copy_unit_number is not none else ''))|trim %}
+{% set search_hay = (t.title ~ ' ' ~ (t.description or '') ~ ' ' ~ pn ~ ' ' ~ an ~ ' ' ~ copy_bits)|lower %}
+{% if is_copy_live %}
+{% if (t.title or '') == 'Convert' %}
+{% set search_hay = (search_hay ~ ' converting ' ~ (t.copy_day_name or '') ~ ' unit ' ~ (t.copy_unit_number|string if t.copy_unit_number is not none else ''))|lower %}
+{% else %}
+{% set search_hay = (search_hay ~ ' copying ' ~ (t.copy_day_name or '') ~ ' unit ' ~ (t.copy_unit_number|string if t.copy_unit_number is not none else ''))|lower %}
+{% endif %}
+{% endif %}
+{% set created_ms = (t.created_at|epoch_ms_stored) if t.created_at else 0 %}
+{% endif %}
+<article
+  class="task-item{% if _mr_postcopy_row %} task-item--mr-postcopy-row{% endif %}"
+  role="listitem"
+  {% if mr_task_list_filters is defined and mr_task_list_filters %}
+  data-task-id="{{ t.id }}"
+  data-search="{{ search_hay|e }}"
+  data-project="{{ pnorm }}"
+  {% if t.project %}data-project-label="{{ t.project.name|e }}"{% endif %}
+  data-user="{{ an|lower|e }}"
+  data-user-label="{{ an|e }}"
+  data-user-id="{{ t.user_id }}"
+  data-status="{{ st }}"
+  data-priority="{{ pr }}"
+  data-priority-rank="{{ pr_rank }}"
+  data-created-ms="{{ created_ms }}"
+  {% if is_copy_live %}data-is-copy="1"{% endif %}
+  {% endif %}
+>
+  <div class="task-item-body">
+    {% if t.title in ('Copy Material', 'Convert') and t.copy_estimated_minutes is not none %}
+    <h3 class="task-item-title sr-only">{{ t.title }}</h3>
+    {% include 'partials/task_copy_live.html' %}
+    {% else %}
+    <h3 class="task-item-title">{{ t.title }}</h3>
+    {% if t.description %}<p class="project-active-task-desc">{{ t.description }}</p>{% endif %}
+    <p class="task-item-meta">
+      <span class="task-item-assignee">
+        <span class="task-item-assignee-label">Assigned to</span>
+        {% if t.assignee %}
+        <span class="task-item-assignee-name">{{ t.assignee.name }}</span>
+        {% else %}
+        <span class="task-item-assignee-name task-item-assignee-name--unassigned">Unassigned</span>
+        {% endif %}
+      </span>
+      <span class="task-item-meta-sep" aria-hidden="true">·</span>
+      <span>Created {% if t.created_at %}{{ t.created_at|fmt_cairo }}{% else %}—{% endif %}</span>
+    </p>
+    {% endif %}
+  </div>
+  {% if _mr_postcopy_row %}
+  <div class="task-item-mr-postcopy-wrap" id="mr-postcopy-wrap-{{ t.id }}" hidden>
+    <form
+      method="post"
+      action="{{ url_for('tasks_machine_room_stream_finish', task_id=t.id) }}"
+      class="status-form project-active-status-form task-item-mr-finish-form"
+      data-mr-postcopy-form
+      data-task-id="{{ t.id }}"
+    >
+      <input type="hidden" name="next" value="{{ status_next_url }}">
+      <input type="hidden" name="start_convert" value="0">
+      <input type="hidden" name="convert_minutes" value="">
+      <div class="task-item-mr-postcopy">
+        <p class="task-item-mr-postcopy-lede">The estimated copy time has passed, or you chose to finish now. Mark the copy finished for the project team, then choose whether to start a <strong>Convert</strong> task.</p>
+        <fieldset class="task-item-mr-postcopy-fieldset">
+          <legend class="task-item-mr-postcopy-legend">Start a Convert task after this copy is marked finished?</legend>
+          <label class="task-item-mr-postcopy-choice">
+            <input type="radio" name="mr-start-convert-{{ t.id }}" value="0" checked>
+            No — notify the team that Convert will not be started
+          </label>
+          <label class="task-item-mr-postcopy-choice task-item-mr-postcopy-choice--yes">
+            <input type="radio" name="mr-start-convert-{{ t.id }}" value="1">
+            Yes — estimate time to convert (minutes)
+          </label>
+          <label class="task-item-mr-postcopy-est is-muted">
+            <span class="task-item-mr-postcopy-est-label">Minutes</span>
+            <input type="number" class="mr-convert-est-input" min="1" max="2880" value="60" step="1" disabled aria-label="Convert estimate in minutes">
+          </label>
+        </fieldset>
+        <div class="task-item-mr-postcopy-actions">
+          <button type="submit" class="btn btn--primary btn--sm">Mark copy finished and notify team</button>
+        </div>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+  <div class="task-item-actions">
+    {% if task_actions_mr_dashboard is defined and task_actions_mr_dashboard and can_machine_room_operate_stream_task(t) %}
+    <div class="task-item-actions-inner task-item-actions-inner--mr-dashboard" role="group" aria-label="Machine room task actions">
+      {% if t.title == 'Copy Material' %}
+      <button type="button" class="btn btn--ghost btn--sm mr-finish-now">Finish now</button>
+      {% elif t.title == 'Convert' %}
+      <form
+        method="post"
+        action="{{ url_for('tasks_machine_room_stream_finish', task_id=t.id) }}"
+        class="status-form project-active-status-form"
+        data-confirm="Mark this convert as finished? Everyone on the project team will be notified."
+      >
+        <input type="hidden" name="next" value="{{ status_next_url }}">
+        <input type="hidden" name="start_convert" value="0">
+        <input type="hidden" name="convert_minutes" value="">
+        <button type="submit" class="btn btn--ghost btn--sm">Finish</button>
+      </form>
+      {% endif %}
+      <form
+        method="post"
+        action="{{ url_for('tasks_machine_room_stream_cancel_delete', task_id=t.id) }}"
+        class="status-form project-active-status-form"
+        data-confirm="{% if t.title == 'Convert' %}Cancel this convert and delete the task? Everyone on the project team will be notified.{% else %}Cancel this copy and delete the task? Everyone on the project team will be notified.{% endif %}"
+      >
+        <input type="hidden" name="next" value="{{ status_next_url }}">
+        <button type="submit" class="btn btn--danger btn--sm">Cancel and delete</button>
+      </form>
+    </div>
+    {% elif can_update_task_status(t) and not (mr_task_list_filters is defined and mr_task_list_filters) %}
+    <form method="post" action="{{ url_for('tasks_set_status', task_id=t.id) }}" class="status-form project-active-status-form">
+      <input type="hidden" name="next" value="{{ status_next_url }}">
+      <select name="status" class="status-select" aria-label="Task status">
+        <option value="open" {% if t.status == 'open' %}selected{% endif %}>Open</option>
+        <option value="in_progress" {% if t.status == 'in_progress' %}selected{% endif %}>In progress</option>
+        <option value="done" {% if t.status == 'done' %}selected{% endif %}>Done</option>
+      </select>
+    </form>
+    {% elif not (mr_task_list_filters is defined and mr_task_list_filters) %}
+    <span class="badge">{{ t.status|replace('_', ' ') }}</span>
+    {% endif %}
+  </div>
+</article>

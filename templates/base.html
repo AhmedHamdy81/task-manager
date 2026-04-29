@@ -9,20 +9,31 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="{{ url_for('static', filename='js/escape-modal-lock.js') }}"></script>
 </head>
-<body class="app--shell {% block body_class %}{% endblock %}">
+<body class="app--shell{% if current_account %} app-has-global-audio{% endif %} {% block body_class %}{% endblock %}">
   <div class="app-frame">
     <aside class="app-sidebar" id="app-sidebar" aria-label="Main navigation">
       <a class="app-sidebar-brand" href="{{ url_for('index') if current_account else url_for('login') }}">{{ app_name }}</a>
       {% if current_account %}
       <nav class="app-sidebar-nav">
         <a href="{{ url_for('index') }}" class="app-nav-item{% if request.endpoint == 'index' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">◉</span> Dashboard</a>
-        <a href="{{ url_for('projects_list') }}" class="app-nav-item{% if request.endpoint and (request.endpoint.startswith('projects_') or request.endpoint == 'project_detail' or request.endpoint == 'project_completed_tasks' or request.endpoint == 'project_edit' or request.endpoint in ('project_members_add', 'project_member_remove', 'project_production', 'project_production_vfx', 'project_production_day')) %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">▦</span> Projects</a>
+        <a href="{{ url_for('music_library') }}" class="app-nav-item{% if request.endpoint in ('music_library', 'music_library_mount_add', 'browse_mount', 'browse_play_file', 'music_library_scan_mount') %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">♪</span> Music Library</a>
+        <a href="#" class="app-nav-item" aria-disabled="true" onclick="return false;"><span class="app-nav-icon" aria-hidden="true">◌</span> Comming Soon</a>
+        {% if current_account_is_machine_room %}
+        <a href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}" class="app-nav-item{% if request.endpoint in ('machine_room_tasks', 'machine_room_tasks_tab') %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">☰</span> Tasks</a>
+        <a href="{{ url_for('machine_room') }}" class="app-nav-item{% if request.endpoint == 'machine_room' or (request.endpoint and request.endpoint.startswith('machine_project')) %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">⌁</span> Storage Management</a>
+        {% else %}
+        <a href="{{ url_for('projects_list') }}" class="app-nav-item{% if request.endpoint and (request.endpoint.startswith('projects_') or request.endpoint == 'project_detail' or request.endpoint == 'project_completed_tasks' or request.endpoint == 'project_edit' or request.endpoint in ('project_members_add', 'project_member_remove', 'project_production', 'project_production_day', 'project_episodes', 'project_episode_detail', 'project_scene_edit', 'shooting_day_assign_scene', 'shooting_day_scene_update', 'production_scene_mark_done') or (request.endpoint and request.endpoint.startswith('project_vfx'))) %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">▦</span> Projects</a>
         <a href="{{ url_for('tasks_list') }}" class="app-nav-item{% if request.endpoint == 'tasks_list' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">☰</span> Tasks</a>
         <a href="{{ url_for('booking.booking_home') }}" class="app-nav-item{% if request.blueprint == 'booking' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">▣</span> Booking</a>
+        <a href="{{ url_for('machine_room') }}" class="app-nav-item{% if request.endpoint == 'machine_room' or (request.endpoint and request.endpoint.startswith('machine_project')) %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">⌁</span> Storage Management</a>
         {% if current_account_is_admin %}
         <a href="{{ url_for('users_list') }}" class="app-nav-item{% if request.endpoint == 'users_list' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">◎</span> Users</a>
+        {% endif %}
+        {% if current_account_is_admin %}
         <a href="{{ url_for('control_panel') }}" class="app-nav-item{% if request.endpoint and request.endpoint.startswith('control_') %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">⚙</span> Control</a>
+        {% endif %}
         {% endif %}
       </nav>
       <div class="app-sidebar-spacer"></div>
@@ -45,9 +56,15 @@
           <span class="site-nav-toggle-bars" aria-hidden="true"></span>
         </button>
         <span class="app-topbar-title">{{ app_name }}</span>
+        {% if current_account %}
+        <button type="button" id="notif-btn" class="btn btn--small btn--ghost notif-btn" aria-expanded="false" aria-controls="notif-panel" aria-label="Toggle notifications">
+          <span aria-hidden="true">🔔</span>
+          <span id="notif-badge" class="notif-badge">0</span>
+        </button>
+        {% endif %}
       </header>
       <div class="app-body">
-        <main class="wrap main">
+        <main class="wrap main app-main">
           {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
               <ul class="flash-list" role="status">
@@ -58,7 +75,11 @@
             {% endif %}
           {% endwith %}
           <div class="app-main-inner">
-            {% block content %}{% endblock %}
+            <div class="page-wrapper">
+              <div class="page-content">
+                {% block content %}{% endblock %}
+              </div>
+            </div>
           </div>
         </main>
       </div>
@@ -73,8 +94,68 @@
       <div class="app-inspector-content" id="app-inspector-content"></div>
     </aside>
     <div class="app-inspector-backdrop" id="app-inspector-backdrop" hidden aria-hidden="true"></div>
+    <div id="tm-global-audio-dock" class="tm-global-audio-dock" hidden>
+      <div class="tm-global-audio-dock-main">
+        <div class="tm-global-audio-track-block">
+          <span class="tm-global-audio-track-label muted" id="tm-global-audio-track-label">Now playing</span>
+          <div id="tm-global-audio-track" class="tm-global-audio-track" title="">—</div>
+        </div>
+        <div class="tm-global-audio-waveform-block">
+          <div id="global-waveform" class="music-library-waveform tm-global-audio-waveform"></div>
+          <div class="tm-global-audio-waveform-meta">
+            <span id="global-waveform-time" class="muted tm-global-audio-time">0.0s</span>
+            <span class="muted tm-global-audio-hint">Wheel zoom · Space · ← → · ↑ ↓</span>
+          </div>
+        </div>
+        <div class="tm-global-audio-controls-cluster">
+          <button id="tm-global-audio-toggle" type="button" class="btn btn--small btn--ghost tm-global-audio-toggle" aria-label="Play or pause">▶</button>
+          <label class="tm-global-audio-volume" title="Volume">
+            <span class="tm-global-audio-volume-icon" aria-hidden="true">🔊</span>
+            <input
+              type="range"
+              id="tm-global-audio-volume"
+              min="0"
+              max="1"
+              step="0.01"
+              value="0.8"
+              aria-label="Volume"
+              aria-valuemin="0"
+              aria-valuemax="1"
+            >
+            <span id="tm-global-audio-volume-label" class="muted tm-global-audio-volume-label">80%</span>
+          </label>
+        </div>
+      </div>
+    </div>
     {% endif %}
   </div>
+  {% if current_account %}
+  <div
+    id="notif-panel"
+    class="notif-panel"
+    aria-label="Notifications"
+    data-list-url="{{ url_for('notifications_list') }}"
+    data-read-url-base="{{ url_for('notifications_mark_read', notification_id=0)[:-1] }}"
+    data-ack-url-base="{{ url_for('notifications_ack', notification_id=0)[:-1] }}"
+    data-resolve-url-base="{{ url_for('notifications_resolve', notification_id=0)[:-1] }}"
+    data-read-all-url="{{ url_for('notifications_mark_all_read') }}"
+  >
+    <div class="notif-header">
+      <h2>Notifications</h2>
+      <div class="notif-header-actions">
+        <button type="button" id="notif-mute" class="btn btn--small btn--ghost" aria-label="Toggle notification sound">🔊</button>
+        <button type="button" id="mark-all-read" class="btn btn--small btn--ghost">Mark all read</button>
+        <button type="button" id="notif-close" class="btn btn--small btn--ghost" aria-label="Close notifications">✕</button>
+      </div>
+    </div>
+    <div class="notif-filters" role="tablist" aria-label="Notification filters">
+      <button type="button" class="notif-filter is-active" data-filter="all">All</button>
+      <button type="button" class="notif-filter" data-filter="alert">Alerts</button>
+      <button type="button" class="notif-filter" data-filter="activity">Activity</button>
+    </div>
+    <div id="notif-list" class="notif-list" aria-live="polite"></div>
+  </div>
+  {% endif %}
 
   <script>
     document.addEventListener('DOMContentLoaded', function () {
@@ -113,7 +194,17 @@
     data-viewer-id="{{ directory_chat_user_id if directory_chat_user_id is not none else '' }}"
     aria-live="polite"></div>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  <script>
+    window.__tmTaskFragmentUrls = {
+      dashboardMrTasks: {{ url_for('ui_fragment_dashboard_machine_room_tasks') | tojson }},
+      machineRoomTasksZone: {{ url_for('ui_fragment_machine_room_tasks_zone') | tojson }},
+      tasksMyStream: {{ url_for('ui_fragment_tasks_my_stream_slot') | tojson }}
+    };
+  </script>
+  <script src="{{ url_for('static', filename='js/tm-datetime.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/realtime.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/task-copy-live.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/tasks-realtime.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/chat/chat-state.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/chat/chat-api.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/chat/chat-render.js') }}" defer></script>
@@ -123,6 +214,10 @@
   <script src="{{ url_for('static', filename='js/site-nav.js') }}" defer></script>
   {% if current_account %}
   <script src="{{ url_for('static', filename='js/shell.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/notifications.js') }}" defer></script>
+  <script src="https://unpkg.com/wavesurfer.js@7.8.6/dist/wavesurfer.min.js"></script>
+  <script src="https://unpkg.com/wavesurfer.js@7.8.6/dist/plugins/regions.min.js"></script>
+  <script src="{{ url_for('static', filename='js/global-audio-player.js') }}"></script>
   {% endif %}
   {% block extra_scripts %}{% endblock %}
 </body>

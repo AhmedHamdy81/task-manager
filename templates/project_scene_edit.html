@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Edit scene · Episode {{ episode.episode_number }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="project-detail-page">
+  <div class="page-head project-detail-head">
+    <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> / <a href="{{ url_for('project_episodes', project_id=project.id) }}">Episodes</a> / <a href="{{ url_for('project_episode_detail', project_id=project.id, episode_id=episode.id) }}">Episode {{ episode.episode_number }}</a> /</p>
+    <h1>Edit scene {{ scene.scene_number }}</h1>
+  </div>
+
+  {% include 'partials/project_workflow_nav.html' %}
+
+  <section class="panel">
+    <form class="form-stack" method="post" action="{{ url_for('project_scene_edit', project_id=project.id, episode_id=episode.id, scene_id=scene.id) }}" style="max-width: 36rem;">
+      <div class="form-row">
+        <label class="field field--grow">
+          <span class="field-label">Scene number</span>
+          <input type="number" name="scene_number" class="input" required min="1" step="1" value="{{ scene.scene_number }}">
+        </label>
+        <label class="field field--grow">
+          <span class="field-label">Est. duration (minutes)</span>
+          <input type="number" name="estimated_duration_minutes" class="input" min="0" step="1" value="{{ scene.estimated_duration_minutes|default(0) }}">
+        </label>
+      </div>
+      <label class="field">
+        <span class="field-label">Description</span>
+        <textarea name="description" class="input booking-textarea" rows="3" maxlength="8000">{{ scene.description or '' }}</textarea>
+      </label>
+      <div class="form-actions-row">
+        <button type="submit" class="btn btn--primary">Save</button>
+        <a class="btn btn--ghost" href="{{ url_for('project_episode_detail', project_id=project.id, episode_id=episode.id) }}">Cancel</a>
+      </div>
+    </form>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+{# Expects task `t` with optional `t.project` joined (same as other task lists). #}
+{% set _pn = (t.project.name if t.project else '') %}
+{% set _un = (t.assignee.name if t.assignee else 'Unknown') %}
+{% set _day = (t.copy_day_name or '—') %}
+{% set _unit = t.copy_unit_number if t.copy_unit_number is not none else '—' %}
+{% set _start = t.copy_started_at or t.created_at %}
+{% set started_ms = (_start|epoch_ms_stored) if _start else 0 %}
+<div
+  class="task-copy-live"
+  data-task-id="{{ t.id }}"
+  data-status="{{ t.status|e }}"
+  data-est-min="{{ t.copy_estimated_minutes if t.copy_estimated_minutes is not none else '' }}"
+  data-started-ms="{{ started_ms }}"
+  {% if (t.title or '') == 'Copy Material' %}data-offer-convert="1"{% endif %}
+>
+  <div class="task-header">
+    <span class="task-project">{{ _pn }}</span>
+    <span class="task-sep">·</span>
+    <span class="task-user">{{ _un }}</span>
+  </div>
+  <div class="task-title">{% if (t.title or '') == 'Convert' %}Converting{% else %}Copying{% endif %} {{ _day }} · Unit {{ _unit }}</div>
+  <div class="task-progress">
+    <div class="task-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="task-progress-fill" style="width: 0%;"></div>
+    </div>
+    <div class="task-progress-meta" aria-live="polite"></div>
+  </div>
+</div>

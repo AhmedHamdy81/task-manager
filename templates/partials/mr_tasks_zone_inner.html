@@ -1,0 +1,170 @@
+{% if mr_operator_ids_empty %}
+<section class="panel shell-panel-min">
+  <p class="empty">No tasks for Machine Room users yet.</p>
+</section>
+{% else %}
+<section
+  class="panel project-tasks-panel project-tasks-panel--stream mr-machine-room-task-stream-panel"
+  id="mr-machine-room-task-stream-panel"
+  aria-labelledby="mr-tasks-heading"
+>
+  <h2 class="panel-title project-tasks-panel-title" id="mr-tasks-heading">Machine Room Tasks</h2>
+
+  <div class="mr-tasks-tabs" role="tablist" aria-label="Task buckets">
+    <a
+      href="{{ mr_url(tab='progress') }}"
+      class="mr-tasks-tab{% if filt.tab == 'progress' %} mr-tasks-tab--active{% endif %}"
+      role="tab"
+      aria-selected="{{ 'true' if filt.tab == 'progress' else 'false' }}"
+    >In progress{% if total_progress %} ({{ total_progress }}){% endif %}</a>
+    <a
+      href="{{ mr_url(tab='finished') }}"
+      class="mr-tasks-tab{% if filt.tab == 'finished' %} mr-tasks-tab--active{% endif %}"
+      role="tab"
+      aria-selected="{{ 'true' if filt.tab == 'finished' else 'false' }}"
+    >Finished{% if total_finished %} ({{ total_finished }}){% endif %}</a>
+  </div>
+
+  <div class="mr-tasks-tab-panels">
+    <div
+      class="mr-tasks-tab-panel"
+      id="mr-tasks-panel-progress"
+      role="tabpanel"
+      {% if filt.tab != 'progress' %}hidden{% endif %}
+    >
+      <p class="muted mr-tasks-tab-lede">Open and in-progress work. Filters apply to this list only; search matches title, notes, copy day or unit, and assignee name.</p>
+      <form method="get" action="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}" class="shell-filter-bar" aria-label="In progress filters">
+        {% if filt.pf > 1 %}<input type="hidden" name="pf" value="{{ filt.pf }}">{% endif %}
+        <input type="search" name="q" class="shell-filter-search" placeholder="Search…" value="{{ filt.q }}" autocomplete="off" aria-label="Search tasks">
+        <label class="shell-filter-label">
+          <span class="visually-hidden">Project</span>
+          <select name="project_id" class="shell-filter-select" aria-label="Filter by project" onchange="this.form.submit()">
+            <option value="">All projects</option>
+            {% for pid, plabel in project_choices %}
+            <option value="{{ pid }}"{% if filt.project_id == pid %} selected{% endif %}>{{ plabel }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="shell-filter-label">
+          <span class="visually-hidden">User</span>
+          <select name="user_id" class="shell-filter-select" aria-label="Filter by assignee" onchange="this.form.submit()">
+            <option value="">All assignees</option>
+            {% for uid, ulabel in user_choices %}
+            <option value="{{ uid }}"{% if filt.user_id == uid %} selected{% endif %}>{{ ulabel }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="shell-filter-label">
+          <span class="visually-hidden">Status</span>
+          <select name="status" class="shell-filter-select" aria-label="Filter by status" onchange="this.form.submit()">
+            <option value="">All statuses</option>
+            <option value="open"{% if filt.status == 'open' %} selected{% endif %}>Open</option>
+            <option value="in_progress"{% if filt.status == 'in_progress' %} selected{% endif %}>In progress</option>
+          </select>
+        </label>
+        <label class="shell-filter-label">
+          <span class="visually-hidden">Sort</span>
+          <select name="sort" class="shell-filter-select" aria-label="Sort tasks" onchange="this.form.submit()">
+            <option value="newest"{% if filt.sort == 'newest' %} selected{% endif %}>Newest</option>
+            <option value="priority"{% if filt.sort == 'priority' %} selected{% endif %}>Priority</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn--ghost btn--sm">Apply</button>
+      </form>
+
+      <div class="project-tasks-panel-stream">
+        <div class="task-stream" role="list">
+          {% if progress_tasks %}
+          {% set task_actions_mr_dashboard = true %}
+          {% set mr_task_list_filters = true %}
+          {% for t in progress_tasks %}
+          {% set status_next_url = mr_url(tab='progress', pg=progress_page, pf=filt.pf) %}
+          {% include 'partials/active_task_item.html' %}
+          {% endfor %}
+          {% else %}
+          <p class="empty empty--tight">No in-progress tasks match these filters.</p>
+          {% endif %}
+        </div>
+      </div>
+      {% if progress_page_count > 1 %}
+      <nav class="mr-tasks-pager shell-pager" aria-label="In progress pages">
+        {% if progress_page > 1 %}
+        <a class="btn btn--ghost btn--sm" href="{{ mr_url(tab='progress', pg=progress_page - 1) }}">Previous</a>
+        {% endif %}
+        <span class="mr-tasks-pager-meta">Page {{ progress_page }} of {{ progress_page_count }}</span>
+        {% if progress_page < progress_page_count %}
+        <a class="btn btn--ghost btn--sm" href="{{ mr_url(tab='progress', pg=progress_page + 1) }}">Next</a>
+        {% endif %}
+      </nav>
+      {% endif %}
+    </div>
+
+    <div
+      class="mr-tasks-tab-panel"
+      id="mr-tasks-panel-finished"
+      role="tabpanel"
+      {% if filt.tab != 'finished' %}hidden{% endif %}
+    >
+      <p class="muted mr-tasks-tab-lede">Completed tasks ({{ mr_per_page }} per page). Filters apply to this list only.</p>
+      <form method="get" action="{{ url_for('machine_room_tasks_tab', tab_slug='finished') }}" class="shell-filter-bar" aria-label="Finished filters">
+        {% if filt.pg > 1 %}<input type="hidden" name="pg" value="{{ filt.pg }}">{% endif %}
+        <input type="search" name="q" class="shell-filter-search" placeholder="Search…" value="{{ filt.q }}" autocomplete="off" aria-label="Search tasks">
+        <label class="shell-filter-label">
+          <span class="visually-hidden">Project</span>
+          <select name="project_id" class="shell-filter-select" aria-label="Filter by project" onchange="this.form.submit()">
+            <option value="">All projects</option>
+            {% for pid, plabel in project_choices %}
+            <option value="{{ pid }}"{% if filt.project_id == pid %} selected{% endif %}>{{ plabel }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="shell-filter-label">
+          <span class="visually-hidden">User</span>
+          <select name="user_id" class="shell-filter-select" aria-label="Filter by assignee" onchange="this.form.submit()">
+            <option value="">All assignees</option>
+            {% for uid, ulabel in user_choices %}
+            <option value="{{ uid }}"{% if filt.user_id == uid %} selected{% endif %}>{{ ulabel }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="shell-filter-label">
+          <span class="visually-hidden">Sort</span>
+          <select name="sort" class="shell-filter-select" aria-label="Sort tasks" onchange="this.form.submit()">
+            <option value="newest"{% if filt.sort == 'newest' %} selected{% endif %}>Newest</option>
+            <option value="priority"{% if filt.sort == 'priority' %} selected{% endif %}>Priority</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn--ghost btn--sm">Apply</button>
+      </form>
+
+      <div class="project-tasks-panel-stream">
+        <div class="task-stream" role="list">
+          {% if finished_tasks %}
+          {% set task_actions_mr_dashboard = true %}
+          {% set mr_task_list_filters = true %}
+          {% for t in finished_tasks %}
+          {% set status_next_url = mr_url(tab='finished', pg=filt.pg, pf=finished_page) %}
+          {% include 'partials/active_task_item.html' %}
+          {% endfor %}
+          {% else %}
+          <p class="empty empty--tight">No finished tasks match these filters.</p>
+          {% endif %}
+        </div>
+      </div>
+      {% if finished_page_count > 1 %}
+      <nav class="mr-tasks-pager shell-pager" aria-label="Finished pages">
+        {% if finished_page > 1 %}
+        <a class="btn btn--ghost btn--sm" href="{{ mr_url(tab='finished', pf=finished_page - 1) }}">Previous</a>
+        {% endif %}
+        <span class="mr-tasks-pager-meta">Page {{ finished_page }} of {{ finished_page_count }}</span>
+        {% if finished_page < finished_page_count %}
+        <a class="btn btn--ghost btn--sm" href="{{ mr_url(tab='finished', pf=finished_page + 1) }}">Next</a>
+        {% endif %}
+      </nav>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<div id="tasks-inspector-parking" hidden aria-hidden="true"></div>
+{% endif %}

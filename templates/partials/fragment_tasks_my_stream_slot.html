@@ -1,0 +1,21 @@
+{% if my_tasks %}
+<div class="tm-task-stream-head" aria-hidden="true">
+  <span>Task</span>
+  <span>Project</span>
+  <span>User</span>
+  <span>Status</span>
+  <span>Priority</span>
+</div>
+<div class="tm-task-stream" id="tm-task-stream" role="list">
+  {% for t in my_tasks %}
+  {% set _tm = namespace(
+    phref=(url_for('project_detail', project_id=t.project.id) if t.project else ''),
+    next='',
+    hide_inspector_status_form=False
+  ) %}
+  {% include 'partials/tm_task_line.html' %}
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty" id="tm-task-stream-empty">No tasks assigned to you yet.</p>
+{% endif %}

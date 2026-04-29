@@ -5,10 +5,12 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+import subprocess
 import uuid
+from urllib.parse import urlparse
 from collections import defaultdict
 from typing import Sequence
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from flask import (
     Flask,
     Response,
@@ -18,12 +20,13 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     send_from_directory,
     session,
     url_for,
 )
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import exc as sa_exc, inspect, or_, text
+from sqlalchemy import and_, case, exc as sa_exc, exists, func, inspect, or_, select, text
 from sqlalchemy.orm import foreign, joinedload, selectinload
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -31,6 +34,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask_socketio import SocketIO, join_room, leave_room
 
 from booking import booking_bp
+from time_utils import CAIRO_TZ, now_local, today_cairo
 
 db = SQLAlchemy()
 SOCKET_AUTH_SALT = "tm-socket"
@@ -48,6 +52,8 @@ CHAT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 CHAT_ALLOWED_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 CHAT_AUDIO_MAX_BYTES = 15 * 1024 * 1024
 CHAT_AUDIO_EXT = frozenset({".webm", ".ogg", ".opus", ".mp3", ".m4a", ".wav", ".mp4"})
+SCENE_REF_MAX_BYTES = 300 * 1024 * 1024
+SCENE_REF_ALLOWED_EXT = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"})
 CHAT_REACTION_EMOJIS = frozenset({"👍", "❤️", "😂", "😮"})
 
 def _project_type_is_tv_series(project_type: str | None) -> bool:
@@ -55,18 +61,10 @@ def _project_type_is_tv_series(project_type: str | None) -> bool:
     return (project_type or "").strip().casefold() == "tv series"
 
 
-VFX_STATUSES: tuple[str, ...] = (
-    "pending",
-    "assigned",
-    "in_progress",
-    "internal_review",
-    "client_review",
-    "approved",
-    "delivered",
-)
-VFX_STATUS_INDEX = {k: i for i, k in enumerate(VFX_STATUSES)}
-VFX_PRIORITIES: tuple[str, ...] = ("low", "medium", "high")
-VFX_COMPLEXITIES: tuple[str, ...] = ("simple", "medium", "complex", "hero")
+VFX_EDITOR_STATUSES: tuple[str, ...] = ("pending", "sent", "review", "approved")
+VFX_DEPARTMENTS: tuple[str, ...] = ("animation", "fx", "comp")
+VFX_VERSION_ALLOWED_EXT = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".webm", ".mov", ".m4v"})
+VFX_VERSION_MAX_BYTES = 80 * 1024 * 1024
 
 
 CHAT_AUDIO_MIME_TO_EXT = {
@@ -113,17 +111,31 @@ def _ext_for_chat_audio(part_mime: str | None, filename: str | None, raw: bytes)
 ROLE_ADMIN = "admin"
 ROLE_SUPER_USER = "super_user"
 ROLE_PRODUCER = "producer"
+ROLE_MACHINE_ROOM = "machine_room"
 ROLE_USER = "user"
 ROLE_GUEST = "guest"
-ACCOUNT_ROLES = (ROLE_ADMIN, ROLE_SUPER_USER, ROLE_PRODUCER, ROLE_USER, ROLE_GUEST)
+ACCOUNT_ROLES = (
+    ROLE_ADMIN,
+    ROLE_SUPER_USER,
+    ROLE_PRODUCER,
+    ROLE_MACHINE_ROOM,
+    ROLE_USER,
+    ROLE_GUEST,
+)
 
 ROLE_LABELS = {
     ROLE_ADMIN: "Administrator",
     ROLE_SUPER_USER: "Super user",
     ROLE_PRODUCER: "Producer",
+    ROLE_MACHINE_ROOM: "Machine Room",
     ROLE_USER: "User",
     ROLE_GUEST: "Guest",
 }
+
+# Machine-room dashboard live rows (progress bar) — copy then optional convert pipeline.
+MR_TIMED_STREAM_TITLES = frozenset({"Copy Material", "Convert"})
+MR_STREAM_COPY_TITLE = "Copy Material"
+MR_STREAM_CONVERT_TITLE = "Convert"
 
 # Directory job titles that grant super-user privileges (same as role "super_user").
 SUPER_USER_JOB_TITLE_NAMES = frozenset({"Post-Producer in-house", "Main Editor"})
@@ -180,8 +192,16 @@ def create_app() -> Flask:
     app.config["PROFILE_AVATAR_UPLOAD_FOLDER"] = upload_root
     chat_upload_root = os.path.join(os.path.dirname(db_path), "uploads", "chat")
     os.makedirs(chat_upload_root, exist_ok=True)
-    app.config["CHAT_UPLOAD_FOLDER"] = chat_upload_root
-    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
+    scene_ref_upload_root = os.path.join(os.path.dirname(db_path), "uploads", "scene_refs")
+    os.makedirs(scene_ref_upload_root, exist_ok=True)
+    vfx_version_upload_root = os.path.join(os.path.dirname(db_path), "uploads", "vfx_versions")
+    os.makedirs(vfx_version_upload_root, exist_ok=True)
+    test_db_uri = (os.environ.get("TASK_MANAGER_TEST_DATABASE") or "").strip()
+    if test_db_uri:
+        app.config["SQLALCHEMY_DATABASE_URI"] = test_db_uri
+        app.config["TESTING"] = True
+    else:
+        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
     db.init_app(app)
@@ -202,7 +222,7 @@ def create_app() -> Flask:
         username = db.Column(db.String(64), nullable=True, unique=True)
         password_hash = db.Column(db.String(256), nullable=False)
         role = db.Column(db.String(32), nullable=False, default=ROLE_USER)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
 
         @property
         def is_admin(self) -> bool:
@@ -239,7 +259,7 @@ def create_app() -> Flask:
         avatar_kind = db.Column(db.String(16), nullable=False, default="preset")
         avatar_preset = db.Column(db.String(8), nullable=False, default="01")
         avatar_upload = db.Column(db.String(255), nullable=True)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
 
         account = db.relationship("Account", backref=db.backref("directory_user", uselist=False))
         job_title = db.relationship("JobTitle", backref=db.backref("users", lazy=True))
@@ -253,17 +273,6 @@ def create_app() -> Flask:
         id = db.Column(db.Integer, primary_key=True)
         name = db.Column(db.String(200), nullable=False)
         is_active = db.Column(db.Boolean, nullable=False, default=True)
-
-    class Vendor(db.Model):
-        __tablename__ = "vendors"
-
-        id = db.Column(db.Integer, primary_key=True)
-        name = db.Column(db.String(200), nullable=False, unique=True)
-        vendor_type = db.Column(db.String(32), nullable=False, default="studio")
-        specialization = db.Column(db.String(120), nullable=False, default="")
-        contact_info = db.Column(db.Text, nullable=False, default="")
-        is_active = db.Column(db.Boolean, nullable=False, default=True)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     class Booking(db.Model):
         """Time-based reservation of an edit suite, scoped to a project and people."""
@@ -282,10 +291,9 @@ def create_app() -> Flask:
         end_time = db.Column(db.Time, nullable=False)
         is_full_day = db.Column(db.Boolean, nullable=False, default=False)
         notes = db.Column(db.Text, nullable=False, default="")
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
         is_active = db.Column(db.Boolean, nullable=False, default=True)
         scene_id = db.Column(db.Integer, nullable=True, index=True)
-        vfx_shot_id = db.Column(db.Integer, nullable=True, index=True)
 
         edit_suite = db.relationship("EditSuite", backref=db.backref("bookings", lazy=True))
         project = db.relationship("Project", backref=db.backref("suite_bookings", lazy=True))
@@ -299,12 +307,6 @@ def create_app() -> Flask:
             "ShootingDayScene",
             primaryjoin=lambda: foreign(Booking.scene_id) == ShootingDayScene.id,
             backref=db.backref("suite_bookings", lazy=True),
-            uselist=False,
-        )
-        vfx_shot = db.relationship(
-            "VfxShot",
-            primaryjoin=lambda: foreign(Booking.vfx_shot_id) == VfxShot.id,
-            backref=db.backref("suite_bookings_vfx", lazy=True),
             uselist=False,
         )
 
@@ -325,7 +327,7 @@ def create_app() -> Flask:
         title = db.Column(db.String(200), nullable=False)
         description = db.Column(db.Text, default="")
         sort_order = db.Column(db.Integer, nullable=False, default=0)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
 
         group = db.relationship("TaskGroup", backref=db.backref("title_presets", lazy=True))
 
@@ -334,7 +336,7 @@ def create_app() -> Flask:
 
         id = db.Column(db.Integer, primary_key=True)
         name = db.Column(db.String(80), nullable=False, unique=True)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
 
     class Task(db.Model):
         __tablename__ = "tasks"
@@ -347,9 +349,14 @@ def create_app() -> Flask:
         user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
         group_id = db.Column(db.Integer, db.ForeignKey("task_groups.id"), nullable=True)
         project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
         completed_at = db.Column(db.DateTime, nullable=True)
         archived = db.Column(db.Boolean, nullable=False, default=False)
+        # Machine-room "Copy Material" live UI (optional; null for normal tasks).
+        copy_started_at = db.Column(db.DateTime, nullable=True)
+        copy_estimated_minutes = db.Column(db.Integer, nullable=True)
+        copy_day_name = db.Column(db.String(80), nullable=True)
+        copy_unit_number = db.Column(db.Integer, nullable=True)
 
         group = db.relationship("TaskGroup", backref=db.backref("tasks", lazy=True))
         project = db.relationship("Project", back_populates="tasks")
@@ -362,7 +369,7 @@ def create_app() -> Flask:
         project_type = db.Column(db.String(120), nullable=False)
         production_house = db.Column(db.String(200), nullable=False)
         director = db.Column(db.String(200), nullable=False)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
         sort_order = db.Column(db.Integer, nullable=False, default=0)
         number_of_episodes = db.Column(db.Integer, nullable=False, default=0)
         estimated_shooting_days = db.Column(db.Integer, nullable=False, default=0)
@@ -508,74 +515,79 @@ def create_app() -> Flask:
 
     class VfxShot(db.Model):
         __tablename__ = "vfx_shot"
+        __table_args__ = (
+            db.UniqueConstraint("scene_id", "shot_number", name="uq_vfx_scene_shot_number"),
+            db.UniqueConstraint("shot_code", name="uq_vfx_shot_code"),
+        )
 
         id = db.Column(db.Integer, primary_key=True)
         project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
-        shooting_day_id = db.Column(
-            db.Integer, db.ForeignKey("shooting_days_flat.id"), nullable=False, index=True
-        )
-        shooting_day_scene_id = db.Column(
-            db.Integer,
-            db.ForeignKey("shooting_day_scenes.id"),
-            nullable=False,
-            unique=True,
-            index=True,
-        )
-        episode_number = db.Column(db.Integer, nullable=False, default=1, index=True)
-        scene_number = db.Column(db.Integer, nullable=False, default=1, index=True)
-        shot_code = db.Column(db.String(64), nullable=False, unique=True, index=True)
-        description = db.Column(db.Text, nullable=False, default="")
+        scene_id = db.Column(db.Integer, db.ForeignKey("shooting_day_scenes.id"), nullable=False, index=True)
+        episode_number = db.Column(db.Integer, nullable=True, index=True)
+        reel_number = db.Column(db.Integer, nullable=True, index=True)
+        shot_number = db.Column(db.Integer, nullable=False, default=1)
+        shot_code = db.Column(db.String(64), nullable=False, index=True)
+        shot_briefing = db.Column(db.Text, nullable=False, default="")
+        department = db.Column(db.String(16), nullable=False, default="animation", index=True)
+        vendor = db.Column(db.String(24), nullable=False, default="in_house")
+        vendor_name = db.Column(db.String(120), nullable=False, default="")
+        shot_ref_frame = db.Column(db.Text, nullable=False, default="")
+        sent_at = db.Column(db.DateTime, nullable=True)
         status = db.Column(db.String(16), nullable=False, default="pending", index=True)
-        priority = db.Column(db.String(16), nullable=False, default="medium", index=True)
-        complexity = db.Column(db.String(16), nullable=False, default="medium", index=True)
-        assigned_artist_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
-        assigned_vendor_id = db.Column(db.Integer, db.ForeignKey("vendors.id"), nullable=True, index=True)
-        # Legacy fields retained for compatibility with existing SQLite rows.
-        assigned_to = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
-        assigned_vendor = db.Column(db.String(120), nullable=False, default="")
-        estimated_days = db.Column(db.Integer, nullable=False, default=0)
-        actual_days = db.Column(db.Integer, nullable=False, default=0)
-        estimated_cost = db.Column(db.Float, nullable=False, default=0.0)
-        actual_cost = db.Column(db.Float, nullable=False, default=0.0)
-        currency = db.Column(db.String(8), nullable=False, default="USD")
-        version = db.Column(db.Integer, nullable=False, default=1)
-        version_number = db.Column(db.Integer, nullable=False, default=1)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-        updated_at = db.Column(
-            db.DateTime,
-            default=lambda: datetime.now(timezone.utc),
-            onupdate=lambda: datetime.now(timezone.utc),
-            nullable=False,
-        )
+        created_at = db.Column(db.DateTime, default=now_local, nullable=False)
 
         project = db.relationship("Project", backref=db.backref("vfx_shots", lazy=True))
-        shooting_day = db.relationship("ShootingDay", backref=db.backref("vfx_shots", lazy=True))
-        source_scene = db.relationship(
-            "ShootingDayScene",
-            backref=db.backref("vfx_shot", uselist=False),
-            uselist=False,
+        scene = db.relationship("ShootingDayScene", backref=db.backref("vfx_shots", lazy=True))
+        comments = db.relationship(
+            "VfxShotComment",
+            back_populates="shot",
+            cascade="all, delete-orphan",
+            lazy=True,
+            order_by="VfxShotComment.created_at",
         )
-        assignee = db.relationship(
-            "User",
-            foreign_keys=[assigned_artist_id],
-            backref=db.backref("vfx_assigned_shots", lazy=True),
-        )
-        vendor = db.relationship("Vendor", backref=db.backref("vfx_shots", lazy=True))
 
-    class VfxComment(db.Model):
-        __tablename__ = "vfx_comment"
+    class VfxVersion(db.Model):
+        __tablename__ = "vfx_version"
 
         id = db.Column(db.Integer, primary_key=True)
-        vfx_shot_id = db.Column(db.Integer, db.ForeignKey("vfx_shot.id"), nullable=False, index=True)
-        user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+        shot_id = db.Column(db.Integer, db.ForeignKey("vfx_shot.id"), nullable=False, index=True)
+        version_number = db.Column(db.Integer, nullable=False, default=1)
+        image = db.Column(db.Text, nullable=False, default="")
         comment = db.Column(db.Text, nullable=False, default="")
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+        created_at = db.Column(db.DateTime, default=now_local, nullable=False)
 
         shot = db.relationship(
             "VfxShot",
-            backref=db.backref("comments", lazy=True, cascade="all, delete-orphan"),
+            backref=db.backref("versions", lazy=True, cascade="all, delete-orphan"),
         )
-        user = db.relationship("User", backref=db.backref("vfx_comments", lazy=True))
+
+    class VfxShotComment(db.Model):
+        __tablename__ = "vfx_shot_comment"
+
+        id = db.Column(db.Integer, primary_key=True)
+        shot_id = db.Column(db.Integer, db.ForeignKey("vfx_shot.id"), nullable=False, index=True)
+        user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+        parent_id = db.Column(db.Integer, db.ForeignKey("vfx_shot_comment.id"), nullable=True, index=True)
+        body = db.Column(db.Text, nullable=False, default="")
+        resolved = db.Column(db.Boolean, nullable=False, default=False)
+        created_at = db.Column(db.DateTime, default=now_local, nullable=False)
+
+        shot = db.relationship("VfxShot", back_populates="comments")
+        user = db.relationship("User", backref=db.backref("vfx_shot_comments", lazy=True))
+
+    class SceneReference(db.Model):
+        __tablename__ = "scene_reference"
+
+        id = db.Column(db.Integer, primary_key=True)
+        scene_id = db.Column(db.Integer, db.ForeignKey("shooting_day_scenes.id"), nullable=False, index=True)
+        video_url = db.Column(db.Text, nullable=False, default="")
+        notes = db.Column(db.Text, nullable=False, default="")
+        created_at = db.Column(db.DateTime, default=now_local, nullable=False)
+
+        scene = db.relationship(
+            "ShootingDayScene",
+            backref=db.backref("scene_references", lazy=True, cascade="all, delete-orphan"),
+        )
 
     class ProjectMember(db.Model):
         __tablename__ = "project_members"
@@ -597,7 +609,7 @@ def create_app() -> Flask:
         message = db.Column(db.Text, nullable=True)
         image_path = db.Column(db.String(255), nullable=True)
         audio_path = db.Column(db.String(255), nullable=True)
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
         is_deleted = db.Column(db.Boolean, nullable=False, default=False)
         deleted_at = db.Column(db.DateTime, nullable=True)
 
@@ -646,7 +658,7 @@ def create_app() -> Flask:
         name = db.Column(db.String(120), nullable=False)
         capacity_tb = db.Column(db.Float, nullable=False, default=0.0)
         type = db.Column(db.String(80), nullable=False, default="")
-        created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+        created_at = db.Column(db.DateTime, default=now_local)
 
         project = db.relationship("Project", backref=db.backref("hard_disks", lazy=True))
         usages = db.relationship(
@@ -694,17 +706,148 @@ def create_app() -> Flask:
         is_acknowledged = db.Column(db.Boolean, nullable=False, default=False, index=True)
         is_resolved = db.Column(db.Boolean, nullable=False, default=False, index=True)
         rule_key = db.Column(db.String(255), nullable=False, default="")
-        created_at = db.Column(db.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+        created_at = db.Column(db.DateTime, nullable=False, default=now_local, index=True)
 
         user = db.relationship("User", backref=db.backref("notifications", lazy=True))
         project = db.relationship("Project", backref=db.backref("notifications", lazy=True))
+
+    class MusicMount(db.Model):
+        """Server-side mount point for indexed audio (no uploads)."""
+
+        __tablename__ = "music_mount"
+        __table_args__ = (db.UniqueConstraint("base_path", name="uq_music_mount_base_path"),)
+
+        id = db.Column(db.Integer, primary_key=True)
+        name = db.Column(db.String(512), nullable=False, default="")
+        base_path = db.Column(db.String(2048), nullable=False, default="")
+        created_at = db.Column(db.DateTime, nullable=False, default=now_local, index=True)
+
+        files = db.relationship("MusicFile", back_populates="mount", lazy=True)
+
+    class MusicFile(db.Model):
+        """Indexed audio on disk; file_path is absolute; scoped to mount when mount_id is set."""
+
+        __tablename__ = "music_file"
+
+        id = db.Column(db.Integer, primary_key=True)
+        mount_id = db.Column(db.Integer, db.ForeignKey("music_mount.id"), nullable=True, index=True)
+        file_path = db.Column(db.String(2048), nullable=False, unique=True, index=True)
+        name = db.Column(db.String(512), nullable=False, index=True)
+        folder = db.Column(db.String(2048), nullable=False, default="")
+        duration = db.Column(db.Float, nullable=False, default=0.0)
+        type = db.Column(db.String(16), nullable=False, default="")
+        color_tag = db.Column(db.String(64), nullable=True)
+        is_favorite = db.Column(db.Boolean, nullable=False, default=False)
+        comments = db.Column(db.Text, nullable=True)
+        created_at = db.Column(db.DateTime, nullable=False, default=now_local, index=True)
+
+        mount = db.relationship("MusicMount", back_populates="files")
+
+    class AudioUsage(db.Model):
+        __tablename__ = "audio_usage"
+
+        id = db.Column(db.Integer, primary_key=True)
+        file_id = db.Column(db.Integer, db.ForeignKey("music_file.id"), nullable=False, index=True)
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
+        user_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True, index=True)
+        action = db.Column(db.String(24), nullable=False, default="play", index=True)
+        created_at = db.Column(db.DateTime, nullable=False, default=now_local, index=True)
+
+        file = db.relationship("MusicFile", backref=db.backref("usage_rows", lazy=True))
+        project = db.relationship("Project", backref=db.backref("audio_usage_rows", lazy=True))
+        user = db.relationship("Account", backref=db.backref("audio_usage_rows", lazy=True))
+
+    class ProjectAudioLibrary(db.Model):
+        __tablename__ = "project_audio_library"
+
+        id = db.Column(db.Integer, primary_key=True)
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+        name = db.Column(db.String(255), nullable=False, default="")
+        parent_id = db.Column(db.Integer, db.ForeignKey("project_audio_library.id"), nullable=True, index=True)
+        created_at = db.Column(db.DateTime, nullable=False, default=now_local, index=True)
+
+        project = db.relationship("Project", backref=db.backref("audio_libraries", lazy=True))
+        parent = db.relationship(
+            "ProjectAudioLibrary",
+            remote_side=[id],
+            backref=db.backref("children", lazy=True),
+        )
+
+    class ProjectAudioFolder(db.Model):
+        __tablename__ = "project_audio_folder"
+        __table_args__ = (
+            db.UniqueConstraint(
+                "project_id",
+                "library_id",
+                "mount_id",
+                "folder_path",
+                name="uq_project_audio_folder_link",
+            ),
+        )
+
+        id = db.Column(db.Integer, primary_key=True)
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+        library_id = db.Column(db.Integer, db.ForeignKey("project_audio_library.id"), nullable=False, index=True)
+        mount_id = db.Column(db.Integer, db.ForeignKey("music_mount.id"), nullable=False, index=True)
+        folder_path = db.Column(db.String(2048), nullable=False, default="")
+        created_at = db.Column(db.DateTime, nullable=False, default=now_local, index=True)
+
+        project = db.relationship("Project", backref=db.backref("audio_folder_links", lazy=True))
+        library = db.relationship("ProjectAudioLibrary", backref=db.backref("folder_links", lazy=True))
+        mount = db.relationship("MusicMount")
 
     # Hard-disk UI: audio entered in GB; columns remain TB (decimal GB per TB).
     HDD_STORAGE_GB_PER_TB = 1000.0
     VFX_REVIEW_THRESHOLD_DAYS = 2
 
     def _utc_now() -> datetime:
-        return datetime.now(timezone.utc)
+        """Naive Africa/Cairo wall time for ORM columns (same as :func:`now_local`)."""
+        return now_local()
+
+    def _cairo_now_aware() -> datetime:
+        """Current instant as timezone-aware Cairo (for deltas vs stored naive rows)."""
+        return datetime.now(CAIRO_TZ)
+
+    def _ensure_cairo_aware(dt: datetime | None) -> datetime | None:
+        """Interpret naive datetimes as Cairo wall time; return timezone-aware Cairo."""
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=CAIRO_TZ)
+        return dt.astimezone(CAIRO_TZ)
+
+    def isoformat_stored_instant(dt: datetime | None) -> str:
+        """ISO-8601 string for JSON (naive = Cairo wall clock; no trailing Z)."""
+        if dt is None or not isinstance(dt, datetime):
+            return ""
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(CAIRO_TZ).replace(tzinfo=None)
+        return dt.replace(microsecond=0).isoformat(timespec="seconds")
+
+    def _epoch_ms_from_stored_naive(dt: datetime | None) -> float:
+        if dt is None or not isinstance(dt, datetime):
+            return 0.0
+        if dt.tzinfo is None:
+            aware = dt.replace(tzinfo=CAIRO_TZ)
+        else:
+            aware = dt.astimezone(CAIRO_TZ)
+        return float(aware.timestamp() * 1000.0)
+
+    def format_datetime_cairo(dt: date | datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
+        """Format stored naive Cairo datetime for server-rendered HTML."""
+        if dt is None:
+            return "—"
+        if isinstance(dt, date) and not isinstance(dt, datetime):
+            return dt.isoformat()
+        if not isinstance(dt, datetime):
+            return "—"
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(CAIRO_TZ).replace(tzinfo=None)
+        return dt.strftime(fmt)
+
+    def _notification_unresolved_filter():
+        """Treat NULL is_resolved as open (SQLite / legacy rows)."""
+        return or_(Notification.is_resolved.is_(False), Notification.is_resolved.is_(None))
 
     def _notification_rule_key(rule: str, entity_type: str, entity_id: int, user_id: int) -> str:
         return f"{rule}:{entity_type}:{int(entity_id)}:{int(user_id)}"
@@ -725,11 +868,18 @@ def create_app() -> Flask:
         message: str,
         entity_type: str,
         entity_id: int,
+        extra_user_ids: Sequence[int] | None = None,
     ) -> None:
         """Create one notification per project team member (user-specific rows)."""
         if project_id is None:
             return
-        uid_list = _project_team_user_ids(project_id)
+        base = set(_project_team_user_ids(project_id))
+        for x in extra_user_ids or ():
+            try:
+                base.add(int(x))
+            except (TypeError, ValueError):
+                continue
+        uid_list = sorted(base)
         if not uid_list:
             return
         eid = int(entity_id or 0)
@@ -766,7 +916,7 @@ def create_app() -> Flask:
             Notification.query.filter(
                 Notification.project_id == int(project_id),
                 Notification.rule_key.startswith(pref),
-                Notification.is_resolved.is_(False),
+                _notification_unresolved_filter(),
             )
             .all()
         )
@@ -830,6 +980,7 @@ def create_app() -> Flask:
         booking_date: date,
         start_t,
         end_t,
+        attempting_user_id: int | None = None,
     ) -> None:
         suite = db.session.get(EditSuite, suite_id)
         suite_name = (suite.name if suite is not None else f"Suite {suite_id}").strip()
@@ -837,6 +988,7 @@ def create_app() -> Flask:
             f"booking_overlap|{project_id}|{suite_id}|{booking_date.isoformat()}|"
             f"{start_t.isoformat()}|{end_t.isoformat()}"
         )
+        extra = [attempting_user_id] if attempting_user_id is not None else None
         _notification_emit_to_project(
             project_id=project_id,
             rule=overlap_rule,
@@ -846,73 +998,30 @@ def create_app() -> Flask:
             message=f"{suite_name} overlaps on {booking_date.isoformat()} ({start_t.strftime('%H:%M')}–{end_t.strftime('%H:%M')}).",
             entity_type="booking",
             entity_id=int(suite_id),
+            extra_user_ids=extra,
         )
 
     def emit_shooting_day_created_activity(day: ShootingDay, source: str) -> None:
+        proj = db.session.get(Project, day.project_id)
+        pname = (proj.name or "").strip() if proj is not None else "Project"
         _notification_emit_to_project(
             project_id=day.project_id,
             rule="shooting_day_created",
             n_type="activity",
             severity="info",
-            title=f"Shooting day created ({source})",
+            title=f"{pname} · Shooting day created ({source})",
             message=f"Unit {int(day.unit_number or 1)} · Day {(day.day_name or '').strip() or '—'} · {day.shooting_date.isoformat()}",
             entity_type="shooting_day",
             entity_id=day.id,
         )
 
-    def emit_vfx_delivered_activity(shot: VfxShot) -> None:
-        ver = int(shot.version_number or shot.version or 1)
-        _notification_emit_to_project(
-            project_id=shot.project_id,
-            rule=f"vfx_delivered|{shot.id}|{ver}",
-            n_type="activity",
-            severity="info",
-            title=f"VFX delivered: {(shot.shot_code or '').strip() or 'Shot'}",
-            message=(shot.description or "").strip()[:240] or "Shot marked delivered.",
-            entity_type="vfx",
-            entity_id=shot.id,
-        )
-
-    def evaluate_vfx_review_notifications(project_id: int | None = None) -> None:
-        q = VfxShot.query.filter(VfxShot.status.in_(("internal_review", "client_review")))
-        if project_id is not None:
-            q = q.filter(VfxShot.project_id == project_id)
-        shots = q.all()
-        now = _utc_now()
-        for shot in shots:
-            ts = shot.updated_at or shot.created_at
-            if ts is None:
-                continue
-            age = now - ts
-            if age > timedelta(days=VFX_REVIEW_THRESHOLD_DAYS):
-                _notification_emit_to_project(
-                    project_id=shot.project_id,
-                    rule="vfx_review_stale",
-                    n_type="alert",
-                    severity="warning",
-                    title=f"VFX in review > {VFX_REVIEW_THRESHOLD_DAYS} days",
-                    message=f"{(shot.shot_code or 'Shot').strip()} is still in review.",
-                    entity_type="vfx",
-                    entity_id=shot.id,
-                )
-        for row in Notification.query.filter(
-            Notification.rule_key.startswith("vfx_review_stale:"),
-            Notification.is_resolved.is_(False),
-        ).all():
-            shot = db.session.get(VfxShot, int(row.entity_id or 0))
-            keep = False
-            if shot is not None and (shot.status or "").strip() in ("internal_review", "client_review"):
-                ts2 = shot.updated_at or shot.created_at
-                if ts2 is not None and (now - ts2) > timedelta(days=VFX_REVIEW_THRESHOLD_DAYS):
-                    keep = True
-            if not keep:
-                row.is_resolved = True
-                row.is_read = True
-
     def _notification_relative_time(ts: datetime | None) -> str:
         if ts is None:
             return ""
-        delta = _utc_now() - ts
+        ts_cairo = _ensure_cairo_aware(ts)
+        if ts_cairo is None:
+            return ""
+        delta = _cairo_now_aware() - ts_cairo
         sec = max(0, int(delta.total_seconds()))
         if sec < 60:
             return f"{sec}s ago"
@@ -925,24 +1034,28 @@ def create_app() -> Flask:
         days = hrs // 24
         return f"{days}d ago"
 
-    def _notification_to_dict(n: Notification) -> dict:
+    def serialize_notification(n: Notification) -> dict:
+        """JSON-safe payload for the notification panel (all keys always present)."""
+        created_iso = isoformat_stored_instant(n.created_at if isinstance(n.created_at, datetime) else None)
         return {
-            "id": n.id,
-            "type": (n.type or "activity").strip().lower(),
-            "severity": (n.severity or "info").strip().lower(),
-            "title": n.title or "",
-            "message": n.message or "",
-            "entity_type": n.entity_type or "",
+            "id": int(n.id or 0),
+            "title": (n.title or "") if n.title is not None else "",
+            "message": (n.message or "") if n.message is not None else "",
+            "severity": ((n.severity or "info") or "info").strip().lower(),
+            "type": ((n.type or "activity") or "activity").strip().lower(),
+            "entity_type": (n.entity_type or "") if n.entity_type is not None else "",
             "entity_id": int(n.entity_id or 0),
             "project_id": int(n.project_id) if n.project_id is not None else None,
+            "user_id": int(n.user_id) if n.user_id is not None else None,
             "is_read": bool(n.is_read),
             "is_acknowledged": bool(n.is_acknowledged),
-            "is_resolved": bool(n.is_resolved),
-            "created_at": n.created_at.isoformat(timespec="seconds") if n.created_at else None,
-            "created_ago": _notification_relative_time(n.created_at),
+            "is_resolved": bool(n.is_resolved) if n.is_resolved is not None else False,
+            "rule_key": (n.rule_key or "") if n.rule_key is not None else "",
+            "created_at": created_iso,
+            "created_ago": _notification_relative_time(
+                n.created_at if isinstance(n.created_at, datetime) else None
+            ),
         }
-
-    Task.project = db.relationship("Project", back_populates="tasks")
 
     def shooting_day_scene_duration_seconds(link: ShootingDayScene) -> int:
         ds = int(getattr(link, "duration_seconds", 0) or 0)
@@ -982,77 +1095,20 @@ def create_app() -> Flask:
                 pass
         return max(1, int(fallback or 1))
 
-    def _next_vfx_shot_index(project_id: int, episode_number: int, scene_number: int) -> int:
-        # `shot_code` is globally unique in SQLite schema, so include project id.
-        prefix = f"P{int(project_id or 0):04d}_EP{int(episode_number or 0):02d}_SC{int(scene_number or 0):02d}_SH"
-        rows = (
-            VfxShot.query.filter(
-                VfxShot.project_id == project_id,
-                VfxShot.shot_code.like(f"{prefix}%"),
-            )
-            .order_by(VfxShot.id.asc())
-            .all()
+    def _next_vfx_shot_number(scene_id: int) -> int:
+        mx = (
+            db.session.query(func.max(VfxShot.shot_number))
+            .filter(VfxShot.scene_id == int(scene_id))
+            .scalar()
         )
-        mx = 0
-        for row in rows:
-            code = (row.shot_code or "").strip().upper()
-            mm = re.search(r"_SH(\d+)$", code)
-            if not mm:
-                continue
-            try:
-                mx = max(mx, int(mm.group(1)))
-            except (TypeError, ValueError):
-                continue
-        return mx + 1
+        return max(0, int(mx or 0)) + 1
 
-    def _build_vfx_shot_code(project_id: int, episode_number: int, scene_number: int) -> str:
-        shot_n = _next_vfx_shot_index(project_id, episode_number, scene_number)
+    def _build_vfx_shot_code(episode_number: int, scene_number: int, shot_number: int) -> str:
         return (
-            f"P{int(project_id or 0):04d}_"
-            f"EP{int(episode_number or 0):02d}_SC{int(scene_number or 0):02d}_SH{int(shot_n):02d}"
+            f"Eps{int(episode_number or 0):02d}_"
+            f"Scene{int(scene_number or 0):02d}_"
+            f"Shot{int(shot_number or 0):02d}"
         )
-
-    def ensure_vfx_shot_for_scene(scene: ShootingDayScene, force: bool = False) -> VfxShot | None:
-        """Create a VFX shot if missing for a scene marked Needs VFX."""
-        if scene is None or scene.shooting_day is None:
-            return None
-        if not force and not bool(scene.needs_vfx):
-            return None
-        existing = VfxShot.query.filter_by(shooting_day_scene_id=scene.id).first()
-        if existing is not None:
-            return existing
-        sc_n = _parse_scene_number_from_label(scene.scene_label, fallback=scene.scene_number or 1)
-        label = (scene.scene_label or "").strip()
-        shot = VfxShot(
-            project_id=scene.shooting_day.project_id,
-            shooting_day_id=scene.shooting_day_id,
-            shooting_day_scene_id=scene.id,
-            episode_number=max(1, int(scene.episode_number or 1)),
-            scene_number=sc_n,
-            shot_code=_build_vfx_shot_code(scene.shooting_day.project_id, scene.episode_number, sc_n),
-            description=label or f"Scene {sc_n}",
-            status="pending",
-            priority="medium",
-            complexity="medium",
-            estimated_days=0,
-            actual_days=0,
-            estimated_cost=0.0,
-            actual_cost=0.0,
-            currency="USD",
-            version=1,
-            version_number=1,
-        )
-        db.session.add(shot)
-        return shot
-
-    def _vfx_status_transition_ok(prev_status: str, next_status: str) -> bool:
-        prev = (prev_status or "").strip().lower()
-        nxt = (next_status or "").strip().lower()
-        if prev not in VFX_STATUS_INDEX or nxt not in VFX_STATUS_INDEX:
-            return False
-        if prev == "delivered":
-            return nxt == "delivered"
-        return VFX_STATUS_INDEX[nxt] in (VFX_STATUS_INDEX[prev], VFX_STATUS_INDEX[prev] + 1)
 
     def format_duration_mmss(seconds: int) -> str:
         sec = max(0, int(seconds or 0))
@@ -1137,6 +1193,40 @@ def create_app() -> Flask:
             return
         path = os.path.join(chat_upload_root, basename)
         real_upload = os.path.realpath(chat_upload_root)
+        real_file = os.path.realpath(path)
+        try:
+            if os.path.commonpath([real_upload, real_file]) != real_upload:
+                return
+        except ValueError:
+            return
+        if os.path.isfile(real_file):
+            try:
+                os.remove(real_file)
+            except OSError:
+                pass
+
+    def remove_scene_reference_file(basename: str | None) -> None:
+        if not basename or "/" in basename or "\\" in basename or basename.startswith("."):
+            return
+        path = os.path.join(scene_ref_upload_root, basename)
+        real_upload = os.path.realpath(scene_ref_upload_root)
+        real_file = os.path.realpath(path)
+        try:
+            if os.path.commonpath([real_upload, real_file]) != real_upload:
+                return
+        except ValueError:
+            return
+        if os.path.isfile(real_file):
+            try:
+                os.remove(real_file)
+            except OSError:
+                pass
+
+    def remove_vfx_version_file(basename: str | None) -> None:
+        if not basename or "/" in basename or "\\" in basename or basename.startswith("."):
+            return
+        path = os.path.join(vfx_version_upload_root, basename)
+        real_upload = os.path.realpath(vfx_version_upload_root)
         real_file = os.path.realpath(path)
         try:
             if os.path.commonpath([real_upload, real_file]) != real_upload:
@@ -1444,6 +1534,23 @@ def create_app() -> Flask:
             conn.execute(text("ALTER TABLE tasks ADD COLUMN priority VARCHAR(16) NOT NULL DEFAULT 'medium'"))
             conn.execute(text("UPDATE tasks SET priority = 'medium' WHERE priority IS NULL OR priority = ''"))
 
+    def ensure_sqlite_tasks_copy_material_columns() -> None:
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        if "tasks" not in insp.get_table_names():
+            return
+        col_names = {c["name"] for c in insp.get_columns("tasks")}
+        with db.engine.begin() as conn:
+            if "copy_started_at" not in col_names:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN copy_started_at DATETIME"))
+            if "copy_estimated_minutes" not in col_names:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN copy_estimated_minutes INTEGER"))
+            if "copy_day_name" not in col_names:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN copy_day_name VARCHAR(80)"))
+            if "copy_unit_number" not in col_names:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN copy_unit_number INTEGER"))
+
     def ensure_sqlite_bookings_v2_columns() -> None:
         if db.engine.dialect.name != "sqlite":
             return
@@ -1613,64 +1720,70 @@ def create_app() -> Flask:
                     )
                 )
 
-    def ensure_sqlite_vfx_columns() -> None:
+    def ensure_sqlite_vfx_editor_tables() -> None:
+        """Create editor-mode VFX tables/columns on SQLite when missing."""
         if db.engine.dialect.name != "sqlite":
             return
         insp = inspect(db.engine)
         tables = set(insp.get_table_names())
-        if "vendors" not in tables:
-            Vendor.__table__.create(bind=db.engine, checkfirst=True)
-        if "vfx_shot" not in tables:
-            VfxShot.__table__.create(bind=db.engine, checkfirst=True)
-        if "vfx_comment" not in tables:
-            VfxComment.__table__.create(bind=db.engine, checkfirst=True)
-
+        with db.engine.begin() as conn:
+            if "vfx_shot" not in tables:
+                VfxShot.__table__.create(bind=db.engine, checkfirst=True)
+            if "vfx_version" not in tables:
+                VfxVersion.__table__.create(bind=db.engine, checkfirst=True)
+            if "scene_reference" not in tables:
+                SceneReference.__table__.create(bind=db.engine, checkfirst=True)
         if "vfx_shot" in inspect(db.engine).get_table_names():
             cols = {c["name"] for c in inspect(db.engine).get_columns("vfx_shot")}
             with db.engine.begin() as conn:
-                if "complexity" not in cols:
+                if "shot_briefing" not in cols:
                     conn.execute(
-                        text("ALTER TABLE vfx_shot ADD COLUMN complexity VARCHAR(16) NOT NULL DEFAULT 'medium'")
+                        text("ALTER TABLE vfx_shot ADD COLUMN shot_briefing TEXT NOT NULL DEFAULT ''")
                     )
-                if "assigned_artist_id" not in cols:
-                    conn.execute(text("ALTER TABLE vfx_shot ADD COLUMN assigned_artist_id INTEGER"))
-                if "assigned_vendor_id" not in cols:
-                    conn.execute(text("ALTER TABLE vfx_shot ADD COLUMN assigned_vendor_id INTEGER"))
-                if "estimated_cost" not in cols:
-                    conn.execute(text("ALTER TABLE vfx_shot ADD COLUMN estimated_cost FLOAT NOT NULL DEFAULT 0"))
-                if "actual_cost" not in cols:
-                    conn.execute(text("ALTER TABLE vfx_shot ADD COLUMN actual_cost FLOAT NOT NULL DEFAULT 0"))
-                if "currency" not in cols:
-                    conn.execute(text("ALTER TABLE vfx_shot ADD COLUMN currency VARCHAR(8) NOT NULL DEFAULT 'USD'"))
-                if "version_number" not in cols:
-                    conn.execute(text("ALTER TABLE vfx_shot ADD COLUMN version_number INTEGER NOT NULL DEFAULT 1"))
-                if "status" in cols:
+                if "status" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE vfx_shot ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'pending'")
+                    )
+                if "created_at" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE vfx_shot ADD COLUMN created_at DATETIME")
+                    )
+                if "department" not in cols:
                     conn.execute(
                         text(
-                            "UPDATE vfx_shot SET status='internal_review' "
-                            "WHERE trim(lower(coalesce(status,'')))='review'"
+                            "ALTER TABLE vfx_shot ADD COLUMN department VARCHAR(16) NOT NULL DEFAULT 'animation'"
                         )
                     )
-                if "assigned_to" in cols and "assigned_artist_id" in cols:
+                if "vendor" not in cols:
                     conn.execute(
                         text(
-                            "UPDATE vfx_shot SET assigned_artist_id = assigned_to "
-                            "WHERE assigned_artist_id IS NULL AND assigned_to IS NOT NULL"
+                            "ALTER TABLE vfx_shot ADD COLUMN vendor VARCHAR(24) NOT NULL DEFAULT 'in_house'"
                         )
                     )
-                if "version" in cols and "version_number" in cols:
+                if "vendor_name" not in cols:
                     conn.execute(
-                        text(
-                            "UPDATE vfx_shot SET version_number = version "
-                            "WHERE version_number = 1 AND version > 1"
-                        )
+                        text("ALTER TABLE vfx_shot ADD COLUMN vendor_name VARCHAR(120) NOT NULL DEFAULT ''")
                     )
-
-        if "bookings" in inspect(db.engine).get_table_names():
-            bcols = {c["name"] for c in inspect(db.engine).get_columns("bookings")}
-            if "vfx_shot_id" not in bcols:
-                with db.engine.begin() as conn:
-                    conn.execute(text("ALTER TABLE bookings ADD COLUMN vfx_shot_id INTEGER"))
+                if "shot_ref_frame" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE vfx_shot ADD COLUMN shot_ref_frame TEXT NOT NULL DEFAULT ''")
+                    )
+                if "sent_at" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE vfx_shot ADD COLUMN sent_at DATETIME")
+                    )
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_vfx_scene_shot_number "
+                        "ON vfx_shot(scene_id, shot_number)"
+                    )
+                )
+                conn.execute(
+                    text("CREATE UNIQUE INDEX IF NOT EXISTS uq_vfx_shot_code ON vfx_shot(shot_code)")
+                )
+        tables_after = set(inspect(db.engine).get_table_names())
+        if "vfx_shot_comment" not in tables_after:
+            VfxShotComment.__table__.create(bind=db.engine, checkfirst=True)
 
     def ensure_sqlite_hard_disk_tables() -> None:
         """Create HDD tracking tables on SQLite when missing (additive migration)."""
@@ -1682,6 +1795,53 @@ def create_app() -> Flask:
             HardDisk.__table__.create(bind=db.engine, checkfirst=True)
         if "hard_disk_usage" not in names:
             HardDiskUsage.__table__.create(bind=db.engine, checkfirst=True)
+
+    def ensure_sqlite_music_mount_tables() -> None:
+        """Create music_mount and add music_file.mount_id on SQLite when missing."""
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        names = set(insp.get_table_names())
+        if "music_mount" not in names:
+            MusicMount.__table__.create(bind=db.engine, checkfirst=True)
+        if "music_file" not in names:
+            return
+        cols = {c["name"] for c in insp.get_columns("music_file")}
+        if "mount_id" not in cols:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE music_file ADD COLUMN mount_id INTEGER "
+                        "REFERENCES music_mount(id)"
+                    )
+                )
+        if "is_favorite" not in cols:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE music_file ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
+
+    def ensure_sqlite_project_audio_library_tables() -> None:
+        """Create project audio library tables on SQLite when missing."""
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        names = set(insp.get_table_names())
+        if "project_audio_library" not in names:
+            ProjectAudioLibrary.__table__.create(bind=db.engine, checkfirst=True)
+        if "project_audio_folder" not in names:
+            ProjectAudioFolder.__table__.create(bind=db.engine, checkfirst=True)
+
+    def ensure_sqlite_audio_usage_tables() -> None:
+        """Create audio_usage table on SQLite when missing."""
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        names = set(insp.get_table_names())
+        if "audio_usage" not in names:
+            AudioUsage.__table__.create(bind=db.engine, checkfirst=True)
 
     def ensure_sqlite_notification_tables() -> None:
         """Create Notification table on SQLite when missing (additive migration)."""
@@ -1704,6 +1864,84 @@ def create_app() -> Flask:
                 )
                 conn.execute(text("DELETE FROM notification WHERE user_id IS NULL"))
 
+    def ensure_sqlite_notification_legacy_created_at_shift() -> None:
+        """One-time correction when legacy rows stored local wall time as naive UTC.
+
+        Set TM_NOTIFICATION_CREATED_AT_SHIFT_HOURS (e.g. 2) once, restart; leaves a marker
+        in instance/ so it does not run again. Off by default (no env = no-op).
+        """
+        raw = (os.environ.get("TM_NOTIFICATION_CREATED_AT_SHIFT_HOURS") or "").strip()
+        if not raw:
+            return
+        try:
+            hrs = int(raw)
+        except ValueError:
+            return
+        if hrs == 0 or db.engine.dialect.name != "sqlite":
+            return
+        mark = os.path.join(app.instance_path, f".done_notification_created_at_shift_{hrs}h")
+        if os.path.isfile(mark):
+            return
+        insp = inspect(db.engine)
+        if "notification" not in insp.get_table_names():
+            return
+        mod_sql = f"{hrs:+d} hours"
+        with db.engine.begin() as conn:
+            conn.execute(
+                text("UPDATE notification SET created_at = datetime(created_at, :mod)"),
+                {"mod": mod_sql},
+            )
+        try:
+            with open(mark, "w", encoding="utf-8") as f:
+                f.write("ok\n")
+        except OSError:
+            pass
+
+    def ensure_sqlite_stored_instant_utc_to_cairo_v1() -> None:
+        """One-time: naive datetimes were UTC wall clock; shift +2h to Cairo (Egypt, no DST).
+
+        Writes instance/.done_tm_stored_instant_utc_to_cairo_v1 so it runs once per DB file.
+        """
+        if db.engine.dialect.name != "sqlite":
+            return
+        mark = os.path.join(app.instance_path, ".done_tm_stored_instant_utc_to_cairo_v1")
+        if os.path.isfile(mark):
+            return
+        insp = inspect(db.engine)
+        names = set(insp.get_table_names())
+        columns_by_table: list[tuple[str, tuple[str, ...]]] = [
+            ("accounts", ("created_at",)),
+            ("users", ("created_at",)),
+            ("vendors", ("created_at",)),
+            ("bookings", ("created_at",)),
+            ("task_group_titles", ("created_at",)),
+            ("task_priorities", ("created_at",)),
+            ("tasks", ("created_at", "completed_at", "copy_started_at")),
+            ("projects", ("created_at",)),
+            ("chat_messages", ("created_at", "deleted_at")),
+            ("notification", ("created_at",)),
+            ("hard_disk", ("created_at",)),
+        ]
+        with db.engine.begin() as conn:
+            for table, cols in columns_by_table:
+                if table not in names:
+                    continue
+                existing = {c["name"] for c in insp.get_columns(table)}
+                for col in cols:
+                    if col not in existing:
+                        continue
+                    conn.execute(
+                        text(
+                            f"UPDATE {table} SET {col} = datetime({col}, '+2 hours') "
+                            f"WHERE {col} IS NOT NULL"
+                        )
+                    )
+        try:
+            with open(mark, "w", encoding="utf-8") as f:
+                f.write("ok\n")
+        except OSError:
+            pass
+
     with app.app_context():
         db.create_all()
         ensure_sqlite_tasks_group_column()
@@ -1721,13 +1959,19 @@ def create_app() -> Flask:
         ensure_sqlite_chat_messages_audio_path()
         ensure_sqlite_chat_messages_soft_delete_columns()
         ensure_sqlite_tasks_priority_column()
+        ensure_sqlite_tasks_copy_material_columns()
         ensure_sqlite_bookings_v2_columns()
         ensure_sqlite_bookings_scene_id_column()
         ensure_sqlite_shooting_days_flat_unit_day_name_columns()
         ensure_sqlite_shooting_day_scenes_pipeline_columns()
-        ensure_sqlite_vfx_columns()
+        ensure_sqlite_vfx_editor_tables()
         ensure_sqlite_hard_disk_tables()
+        ensure_sqlite_music_mount_tables()
+        ensure_sqlite_project_audio_library_tables()
+        ensure_sqlite_audio_usage_tables()
         ensure_sqlite_notification_tables()
+        ensure_sqlite_notification_legacy_created_at_shift()
+        ensure_sqlite_stored_instant_utc_to_cairo_v1()
 
     PUBLIC_ENDPOINTS = frozenset({"login", "register", "logout", "static"})
 
@@ -1753,16 +1997,37 @@ def create_app() -> Flask:
         """Administrator or super user (by role or job title)."""
         return acc is not None and (acc.is_admin or account_is_super_user_effective(acc))
 
+    def account_can_create_projects(acc: Account | None) -> bool:
+        """Project creation: admin, super user, or producer."""
+        if acc is None:
+            return False
+        return bool(account_is_elevated(acc) or _normalized_account_role_key(acc.role) == ROLE_PRODUCER)
+
+    def account_can_manage_project_team(acc: Account | None) -> bool:
+        """Project team membership management: admin, super user, or producer."""
+        if acc is None:
+            return False
+        return bool(account_is_elevated(acc) or _normalized_account_role_key(acc.role) == ROLE_PRODUCER)
+
+    def account_can_manage_music_mounts(acc: Account | None) -> bool:
+        """Music mounts management: administrator or super user only."""
+        if acc is None:
+            return False
+        return bool(acc.is_admin or account_is_super_user_effective(acc))
+
     def account_may_use_machine_project_view(acc: Account | None) -> bool:
         """Machine Room project management access (/machine/project/<id>)."""
         if acc is None:
             return False
         r = _normalized_account_role_key(acc.role)
-        return r == ROLE_ADMIN or r == ROLE_PRODUCER
+        return r in (ROLE_ADMIN, ROLE_PRODUCER, ROLE_MACHINE_ROOM)
 
     def account_can_access_admin_settings(acc: Account | None) -> bool:
         """Users page, Control panel, and related actions — administrator role only (not super user)."""
         return acc is not None and acc.is_admin
+
+    def account_is_machine_room_role(acc: Account | None) -> bool:
+        return acc is not None and _normalized_account_role_key(acc.role) == ROLE_MACHINE_ROOM
 
     def account_from_session() -> Account | None:
         raw = session.get("account_id")
@@ -1801,6 +2066,17 @@ def create_app() -> Flask:
             if acc is None or not account_can_access_admin_settings(acc):
                 flash("Only administrators can access Users (view, add, edit, or remove).", "error")
                 return redirect(url_for("index"))
+        if account_is_machine_room_role(acc):
+            if request.path.startswith("/projects"):
+                flash("You do not have access to the projects area.", "error")
+                return redirect(url_for("machine_room"))
+            if request.path.startswith("/booking/manage"):
+                flash("You do not have access to booking management.", "error")
+                return redirect(url_for("machine_room"))
+            _tasks_path = request.path.rstrip("/")
+            if _tasks_path == "/tasks":
+                flash("You do not have access to the tasks list.", "error")
+                return redirect(url_for("machine_room_tasks_tab", tab_slug="progress"))
 
     @app.context_processor
     def inject_globals():
@@ -1818,7 +2094,11 @@ def create_app() -> Flask:
         return {
             "current_account": acc,
             "current_account_is_admin": bool(acc and acc.is_admin),
+            "current_account_is_machine_room": bool(acc and account_is_machine_room_role(acc)),
             "current_account_is_elevated": bool(acc and account_is_elevated(acc)),
+            "current_account_can_create_projects": bool(acc and account_can_create_projects(acc)),
+            "current_account_can_manage_project_team": bool(acc and account_can_manage_project_team(acc)),
+            "current_account_can_manage_music_mounts": bool(acc and account_can_manage_music_mounts(acc)),
             "current_account_avatar_url": avatar_href_for_user(du) if aid else None,
             "app_name": app.config["APP_NAME"],
             "role_labels": ROLE_LABELS,
@@ -1833,11 +2113,62 @@ def create_app() -> Flask:
         u = User.query.filter_by(account_id=acc.id).first()
         return u.id if u else None
 
+    def _notification_visible_filter(*, uid: int | None, visible: set[int] | None):
+        """Rows for this viewer: own user_id, or legacy null-user rows on any project they are on.
+
+        Uses EXISTS(ProjectMember) so all team projects are covered even if visible set drifts.
+        """
+        if uid is None:
+            if visible is None:
+                # Administrator / Machine Room (broad project access) without a directory user:
+                # per-user rows still have user_id set — show all project-scoped notifications.
+                return Notification.project_id.isnot(None)
+            if visible:
+                return and_(
+                    Notification.user_id.is_(None),
+                    Notification.project_id.in_(list(visible)),
+                )
+            return None
+
+        on_my_team_projects = exists(
+            select(1)
+            .select_from(ProjectMember)
+            .where(
+                ProjectMember.project_id == Notification.project_id,
+                ProjectMember.user_id == uid,
+            )
+            .correlate(Notification)
+        )
+        mine = Notification.user_id == uid
+        legacy_on_my_teams = and_(
+            Notification.user_id.is_(None),
+            Notification.project_id.isnot(None),
+            on_my_team_projects,
+        )
+        if visible is None:
+            admin_legacy = and_(Notification.user_id.is_(None), Notification.project_id.isnot(None))
+            return or_(mine, admin_legacy)
+        if not visible:
+            return mine
+        return or_(mine, legacy_on_my_teams)
+
+    def _notification_row_may_mutate(actor: Account, n: Notification) -> bool:
+        uid = directory_user_id_for_account(actor)
+        if int(n.user_id or 0) and uid is not None and int(n.user_id) == int(uid):
+            return True
+        if n.user_id is not None:
+            if n.project_id is not None and account_is_elevated(actor):
+                return account_can_access_project(actor, int(n.project_id))
+            return False
+        if n.project_id is None:
+            return False
+        return account_can_access_project(actor, int(n.project_id))
+
     def visible_project_ids_for_account(acc: Account | None) -> set[int] | None:
-        """None means no filter (administrator only). Otherwise project IDs from team membership."""
+        """None = see all projects (administrator or Machine Room role). Else team membership IDs."""
         if acc is None:
             return set()
-        if acc.is_admin:
+        if acc.is_admin or _normalized_account_role_key(acc.role) == ROLE_MACHINE_ROOM:
             return None
         uid = directory_user_id_for_account(acc)
         if uid is None:
@@ -1858,12 +2189,10 @@ def create_app() -> Flask:
         "User": User,
         "Project": Project,
         "ProjectMember": ProjectMember,
-        "Vendor": Vendor,
         "EditSuite": EditSuite,
         "Booking": Booking,
         "ProductionScene": ProductionScene,
         "ProductionEpisode": ProductionEpisode,
-        "VfxShot": VfxShot,
         "ShootingDayScene": ShootingDayScene,
         "ShootingDay": ShootingDay,
         "emit_booking_overlap_alert": emit_booking_overlap_alert,
@@ -1987,9 +2316,9 @@ def create_app() -> Flask:
             last_at_iso: str | None = None
             last_sort = 0.0
             if m is not None:
-                last_at_iso = m.created_at.isoformat() if m.created_at else None
+                last_at_iso = isoformat_stored_instant(m.created_at) if m.created_at else None
                 if m.created_at:
-                    last_sort = m.created_at.timestamp()
+                    last_sort = _epoch_ms_from_stored_naive(m.created_at)
                 txt = (m.message or "").strip()
                 if txt:
                     preview = (txt[:100] + "…") if len(txt) > 100 else txt
@@ -2104,7 +2433,7 @@ def create_app() -> Flask:
                 avatar_initial = ch.upper()
                 break
         base_me = viewer_dir_user_id is not None and m.user_id == viewer_dir_user_id
-        created_iso = m.created_at.isoformat() if m.created_at else ""
+        created_iso = isoformat_stored_instant(m.created_at)
         if m.is_deleted:
             return {
                 "id": m.id,
@@ -2150,6 +2479,25 @@ def create_app() -> Flask:
         """Push a Socket.IO event to every connection for this login account (room user_<id>)."""
         socketio.emit(event, payload, room=f"user_{account_id}")
 
+    def emit_tasks_feed_changed(*project_ids: int | None) -> None:
+        """Notify browsers to refresh task HTML fragments (room joined by every authenticated socket)."""
+        ids: set[int] = set()
+        for x in project_ids:
+            if x is None:
+                continue
+            try:
+                ids.add(int(x))
+            except (TypeError, ValueError):
+                continue
+        try:
+            socketio.emit(
+                "tasks_changed",
+                {"project_ids": sorted(ids)},
+                room="tasks_feed",
+            )
+        except Exception:
+            app.logger.exception("tasks_changed emit failed")
+
     def task_visible_to_account(t: Task, acc: Account | None) -> bool:
         if acc is None:
             return False
@@ -2159,6 +2507,302 @@ def create_app() -> Flask:
         if t.project_id is None:
             return False
         return bool(allowed and t.project_id in allowed)
+
+    def di_machine_task_group_id() -> int | None:
+        return db.session.query(TaskGroup.id).filter(TaskGroup.name == "DI / Machine").scalar()
+
+    def fetch_dashboard_machine_room_tasks(acc: Account | None) -> list[Task]:
+        """Timed copy/convert stream rows for the Machine Room dashboard panel."""
+        if acc is None or not account_is_machine_room_role(acc):
+            return []
+        dm_gid = di_machine_task_group_id()
+        if dm_gid is None:
+            return []
+        return (
+            Task.query.options(
+                joinedload(Task.group),
+                joinedload(Task.assignee),
+                joinedload(Task.project),
+            )
+            .filter(
+                Task.group_id == int(dm_gid),
+                Task.archived.is_(False),
+                Task.status.in_(("open", "in_progress")),
+                Task.title.in_(MR_TIMED_STREAM_TITLES),
+                Task.copy_estimated_minutes.isnot(None),
+            )
+            .order_by(Task.created_at.desc())
+            .all()
+        )
+
+    MR_MACHINE_ROOM_TASKS_PER_PAGE = 10
+
+    def mr_operator_user_ids(acc: Account | None) -> list[int]:
+        """Directory user ids whose linked account has the Machine Room role."""
+        if acc is None or not account_is_machine_room_role(acc):
+            return []
+        linked_users = (
+            User.query.options(joinedload(User.account))
+            .filter(User.account_id.isnot(None))
+            .all()
+        )
+        return [
+            u.id
+            for u in linked_users
+            if u.account is not None and account_is_machine_room_role(u.account)
+        ]
+
+    def fetch_mr_operator_assigned_tasks(acc: Account | None) -> list[Task]:
+        """All non-archived tasks assigned to any directory user with the Machine Room role."""
+        mr_user_ids = mr_operator_user_ids(acc)
+        if not mr_user_ids:
+            return []
+        return (
+            Task.query.options(
+                joinedload(Task.assignee), joinedload(Task.project), joinedload(Task.group)
+            )
+            .filter(Task.user_id.in_(mr_user_ids), Task.archived.is_(False))
+            .order_by(Task.created_at.desc())
+            .all()
+        )
+
+    def _mr_machine_room_tasks_tab_from_request(fragment_tab_slug: str | None = None) -> str:
+        """Tab from URL path (/machine-room/tasks/<slug>), fragment path, or legacy ?tab=."""
+        if fragment_tab_slug in ("progress", "finished"):
+            return fragment_tab_slug
+        tv = request.view_args or {}
+        slug = (tv.get("tab_slug") or "").strip().lower()
+        if slug in ("progress", "finished"):
+            return slug
+        t = (request.args.get("tab") or "progress").strip().lower()
+        if t in ("progress", "finished"):
+            return t
+        return "progress"
+
+    def _mr_machine_room_tasks_parse_request(fragment_tab_slug: str | None = None) -> dict:
+        """Query args for MR tasks lists; tab comes from path when present."""
+        q = (request.args.get("q") or "").strip()
+        project_id = request.args.get("project_id", type=int)
+        user_id = request.args.get("user_id", type=int)
+        status = (request.args.get("status") or "").strip().lower()
+        if status not in ("", "open", "in_progress"):
+            status = ""
+        sort = (request.args.get("sort") or "").strip().lower()
+        if sort not in ("newest", "priority"):
+            sort = "newest"
+        tab = _mr_machine_room_tasks_tab_from_request(fragment_tab_slug)
+        if tab == "finished":
+            status = ""
+        elif status == "done":
+            status = ""
+        pg = request.args.get("pg", type=int) or 1
+        pf = request.args.get("pf", type=int) or 1
+        pg = max(1, int(pg))
+        pf = max(1, int(pf))
+        return {
+            "q": q,
+            "project_id": project_id,
+            "user_id": user_id,
+            "status": status,
+            "sort": sort,
+            "tab": tab,
+            "pg": pg,
+            "pf": pf,
+        }
+
+    def _mr_machine_room_tasks_base_query(mr_user_ids: list[int], tab: str, filt: dict):
+        """Filtered query for one tab (progress = open/in_progress, finished = done)."""
+        qy = Task.query.options(
+            joinedload(Task.assignee), joinedload(Task.project), joinedload(Task.group)
+        ).filter(Task.user_id.in_(mr_user_ids), Task.archived.is_(False))
+        if tab == "finished":
+            qy = qy.filter(Task.status == "done")
+        else:
+            qy = qy.filter(Task.status.in_(("open", "in_progress")))
+            if filt["status"] in ("open", "in_progress"):
+                qy = qy.filter(Task.status == filt["status"])
+        pid = filt.get("project_id")
+        if pid is not None and int(pid) > 0:
+            qy = qy.filter(Task.project_id == int(pid))
+        uid = filt.get("user_id")
+        if uid is not None and int(uid) > 0:
+            qy = qy.filter(Task.user_id == int(uid))
+        raw_q = (filt.get("q") or "").strip()
+        if raw_q:
+            like = f"%{raw_q}%"
+            parts = [
+                Task.title.ilike(like),
+                Task.description.ilike(like),
+                Task.copy_day_name.ilike(like),
+            ]
+            if raw_q.isdigit():
+                try:
+                    parts.append(Task.copy_unit_number == int(raw_q))
+                except (TypeError, ValueError):
+                    pass
+            qy = qy.filter(or_(*parts))
+        sort = filt.get("sort") or "newest"
+        if sort == "priority":
+            pr_rank = case(
+                (Task.priority == "high", 3),
+                (Task.priority == "medium", 2),
+                else_=1,
+            )
+            qy = qy.order_by(pr_rank.desc(), Task.created_at.desc(), Task.id.desc())
+        else:
+            qy = qy.order_by(Task.created_at.desc(), Task.id.desc())
+        return qy
+
+    def _mr_machine_room_tasks_filter_choices(mr_user_ids: list[int]) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+        """Distinct (id, label) for project and assignee filters."""
+        rows = (
+            db.session.query(Task.project_id, Task.user_id)
+            .filter(Task.user_id.in_(mr_user_ids), Task.archived.is_(False))
+            .distinct()
+            .all()
+        )
+        pids = sorted({int(r[0]) for r in rows if r[0] is not None})
+        uids = sorted({int(r[1]) for r in rows if r[1] is not None})
+        projects: list[tuple[int, str]] = []
+        if pids:
+            for p in Project.query.filter(Project.id.in_(pids)).order_by(Project.name.asc()).all():
+                projects.append((int(p.id), (p.name or "").strip() or f"Project {p.id}"))
+        users: list[tuple[int, str]] = []
+        if uids:
+            for u in User.query.filter(User.id.in_(uids)).order_by(User.name.asc()).all():
+                users.append((int(u.id), (u.name or u.email or "").strip() or f"User {u.id}"))
+        return projects, users
+
+    def _mr_machine_room_tasks_query_params(merged: dict) -> dict:
+        """GET query only (tab is in the path); omit default pg=1 and pf=1."""
+        out: dict = {}
+        if merged.get("q"):
+            out["q"] = merged["q"]
+        if merged.get("project_id"):
+            out["project_id"] = int(merged["project_id"])
+        if merged.get("user_id"):
+            out["user_id"] = int(merged["user_id"])
+        if merged.get("status"):
+            out["status"] = merged["status"]
+        if merged.get("sort") and merged["sort"] != "newest":
+            out["sort"] = merged["sort"]
+        if int(merged.get("pg") or 1) > 1:
+            out["pg"] = int(merged["pg"])
+        if int(merged.get("pf") or 1) > 1:
+            out["pf"] = int(merged["pf"])
+        return out
+
+    def machine_room_tasks_page_bundle(
+        actor: Account | None, *, fragment_tab_slug: str | None = None
+    ) -> dict | None:
+        """Template context for /machine-room/tasks/<tab>; None if not MR or not logged in."""
+        if actor is None or not account_is_machine_room_role(actor):
+            return None
+        mr_user_ids = mr_operator_user_ids(actor)
+        filt = _mr_machine_room_tasks_parse_request(fragment_tab_slug)
+        per = MR_MACHINE_ROOM_TASKS_PER_PAGE
+        if not mr_user_ids:
+            return {
+                "mr_operator_ids_empty": True,
+                "mr_user_ids": [],
+                "filt": filt,
+                "mr_per_page": per,
+                "mr_url": lambda **overrides: url_for("machine_room_tasks_tab", tab_slug="progress"),
+                "mr_status_next_url": url_for("machine_room_tasks_tab", tab_slug="progress"),
+                "project_choices": [],
+                "user_choices": [],
+            }
+
+        q_progress = _mr_machine_room_tasks_base_query(mr_user_ids, "progress", filt)
+        q_finished = _mr_machine_room_tasks_base_query(mr_user_ids, "finished", filt)
+        total_progress = q_progress.count()
+        total_finished = q_finished.count()
+        pc_progress = max(1, (total_progress + per - 1) // per)
+        pc_finished = max(1, (total_finished + per - 1) // per)
+        pg = min(filt["pg"], pc_progress)
+        pf = min(filt["pf"], pc_finished)
+        filt = {**filt, "pg": pg, "pf": pf}
+
+        progress_tasks = (
+            q_progress.offset((pg - 1) * per).limit(per).all()
+        )
+        finished_tasks = (
+            q_finished.offset((pf - 1) * per).limit(per).all()
+        )
+        project_choices, user_choices = _mr_machine_room_tasks_filter_choices(mr_user_ids)
+
+        def mr_url(**overrides) -> str:
+            m = {**filt, **overrides}
+            return url_for(
+                "machine_room_tasks_tab",
+                tab_slug=m["tab"],
+                **_mr_machine_room_tasks_query_params(m),
+            )
+
+        return {
+            "mr_operator_ids_empty": False,
+            "mr_user_ids": mr_user_ids,
+            "filt": filt,
+            "mr_per_page": per,
+            "total_progress": total_progress,
+            "total_finished": total_finished,
+            "progress_page": pg,
+            "finished_page": pf,
+            "progress_page_count": pc_progress,
+            "finished_page_count": pc_finished,
+            "progress_tasks": progress_tasks,
+            "finished_tasks": finished_tasks,
+            "project_choices": project_choices,
+            "user_choices": user_choices,
+            "mr_url": mr_url,
+            "mr_status_next_url": mr_url(),
+        }
+
+    def all_tasks_for_tasks_list_page(acc: Account | None) -> list[Task]:
+        """Same visible task set as the /tasks page (non-archived, permission-scoped)."""
+        vis = visible_project_ids_for_account(acc)
+        uid = directory_user_id_for_account(acc)
+        if vis is None:
+            q = Task.query.filter(Task.archived.is_(False))
+        elif not vis:
+            if uid is None:
+                q = Task.query.filter(text("1=0"))
+            else:
+                q = Task.query.filter(Task.user_id == uid, Task.archived.is_(False))
+        elif uid is not None:
+            q = Task.query.filter(
+                or_(Task.project_id.in_(vis), Task.user_id == uid),
+                Task.archived.is_(False),
+            )
+        else:
+            q = Task.query.filter(Task.project_id.in_(vis), Task.archived.is_(False))
+        return (
+            q.options(joinedload(Task.assignee), joinedload(Task.project))
+            .order_by(Task.created_at.desc())
+            .all()
+        )
+
+    def task_is_machine_room_stream_task(t: Task) -> bool:
+        """Live timed rows (Copy Material / Convert) on the Machine Room overview stream."""
+        gid = di_machine_task_group_id()
+        if gid is None or int(t.group_id or 0) != int(gid):
+            return False
+        if (t.title or "").strip() not in MR_TIMED_STREAM_TITLES:
+            return False
+        if t.copy_estimated_minutes is None:
+            return False
+        if bool(t.archived):
+            return False
+        if (t.status or "").strip().lower() not in ("open", "in_progress"):
+            return False
+        return True
+
+    def account_may_machine_room_operate_stream_task(t: Task, acc: Account | None) -> bool:
+        return (
+            acc is not None
+            and account_is_machine_room_role(acc)
+            and task_is_machine_room_stream_task(t)
+        )
 
     def account_may_update_task_status(t: Task, acc: Account | None) -> bool:
         """Only the logged-in account's directory user, when they are the task assignee, may set status."""
@@ -2177,18 +2821,23 @@ def create_app() -> Flask:
 
     @app.template_global()
     def can_update_task_status(task: Task) -> bool:
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         return account_may_update_task_status(task, acc)
 
     @app.template_global()
     def can_archive_task(task: Task) -> bool:
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         return account_may_archive_task(task, acc)
 
     @app.template_global()
     def can_delete_task(task: Task) -> bool:
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         return task_visible_to_account(task, acc)
+
+    @app.template_global()
+    def can_machine_room_operate_stream_task(task: Task) -> bool:
+        acc = db.session.get(Account, session.get("account_id"))
+        return account_may_machine_room_operate_stream_task(task, acc)
 
     @app.template_filter("fmt_duration_mmss")
     def fmt_duration_mmss_filter(seconds: int | None) -> str:
@@ -2203,6 +2852,21 @@ def create_app() -> Flask:
         if link is None:
             return 0
         return shooting_day_scene_duration_seconds(link)
+
+    @app.template_filter("fmt_cairo")
+    def fmt_cairo_filter(dt: date | datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> str:
+        return format_datetime_cairo(dt, fmt)
+
+    @app.template_filter("fmt_cairo_date")
+    def fmt_cairo_date_filter(dt: date | datetime | None) -> str:
+        return format_datetime_cairo(dt, "%Y-%m-%d")
+
+    @app.template_filter("epoch_ms_stored")
+    def epoch_ms_stored_filter(dt: date | datetime | None) -> int:
+        """Milliseconds since Unix epoch for a naive Cairo-stored datetime (sorting / client)."""
+        if dt is None or not isinstance(dt, datetime):
+            return 0
+        return int(_epoch_ms_from_stored_naive(dt))
 
     def _production_redirect(project_id: int) -> Response:
         return redirect(url_for("project_production", project_id=project_id))
@@ -2232,20 +2896,6 @@ def create_app() -> Flask:
             return None
         return link
 
-    def vfx_shot_for_project(shot_id: int, project_id: int) -> VfxShot | None:
-        shot = (
-            VfxShot.query.options(
-                joinedload(VfxShot.assignee).joinedload(User.job_title),
-                joinedload(VfxShot.vendor),
-                joinedload(VfxShot.source_scene),
-            )
-            .filter_by(id=shot_id)
-            .first()
-        )
-        if shot is None or int(shot.project_id or 0) != int(project_id):
-            return None
-        return shot
-
     def next_legacy_scene_id_for_day(day_id: int) -> int:
         """Compatibility allocator for legacy UNIQUE(shooting_day_id, scene_id)."""
         mx = (
@@ -2260,7 +2910,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/shooting-days", methods=["POST"])
     def shooting_day_create(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(acc, p.id):
             flash("You do not have access to that project.", "error")
@@ -2308,7 +2958,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/production/days/<int:day_id>/delete", methods=["POST"])
     def production_day_delete(project_id: int, day_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         d = shooting_day_in_project(day_id, project_id)
         if d is None:
             abort(404)
@@ -2322,7 +2972,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/production/day/<int:day_id>/rows", methods=["POST"])
     def production_scene_row_create(project_id: int, day_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_can_access_project(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         d = shooting_day_in_project(day_id, project_id)
@@ -2347,7 +2997,7 @@ def create_app() -> Flask:
         methods=["PATCH", "DELETE"],
     )
     def production_scene_row_mutate(project_id: int, row_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_can_access_project(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         r = scene_row_in_project(row_id, project_id)
@@ -2497,7 +3147,7 @@ def create_app() -> Flask:
         if not aid:
             flash("Please sign in to continue.", "error")
             return redirect(url_for("login"))
-        acc = Account.query.get(aid)
+        acc = db.session.get(Account, aid)
         if acc is None:
             session.clear()
             flash("Please sign in to continue.", "error")
@@ -2638,9 +3288,807 @@ def create_app() -> Flask:
             abort(404)
         return send_from_directory(upload_root, filename)
 
+    _music_supported_ext = (".wav", ".mp3", ".mp4")
+    _music_tag_palette = ("red", "orange", "yellow", "green", "blue", "purple")
+
+    def _music_parse_color_tags(raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        parts = [p.strip().lower() for p in str(raw).split(",")]
+        out: list[str] = []
+        for p in parts:
+            if p in _music_tag_palette and p not in out:
+                out.append(p)
+        return out
+
+    def _music_color_tags_to_db(tags: list[str]) -> str | None:
+        clean: list[str] = []
+        for t in tags:
+            v = (t or "").strip().lower()
+            if v in _music_tag_palette and v not in clean:
+                clean.append(v)
+        return ",".join(clean) if clean else None
+
+    def _music_mount_base_real(mount: MusicMount) -> str:
+        return os.path.realpath(os.path.abspath(mount.base_path))
+
+    def _music_file_under_mount(file_path: str, mount: MusicMount) -> str | None:
+        """Resolved file path if it exists as a file and stays under mount.base_path."""
+        try:
+            real_f = os.path.realpath(os.path.abspath(file_path))
+            base = _music_mount_base_real(mount)
+        except OSError:
+            return None
+        prefix = base + os.sep
+        if real_f != base and not real_f.startswith(prefix):
+            return None
+        if not os.path.isfile(real_f):
+            return None
+        return real_f
+
+    def ensure_project_main_audio_library(project_id: int) -> ProjectAudioLibrary:
+        row = (
+            ProjectAudioLibrary.query.filter_by(project_id=project_id, parent_id=None)
+            .order_by(ProjectAudioLibrary.id.asc())
+            .first()
+        )
+        if row is not None:
+            if (row.name or "").strip().lower() != "main":
+                row.name = "Main"
+                db.session.commit()
+            return row
+        row = ProjectAudioLibrary(project_id=project_id, name="Main", parent_id=None)
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    def _music_get_or_create_for_mount_rel(
+        mount: MusicMount, rel_path: str
+    ) -> MusicFile | None:
+        """Return indexed row for mount+relative path; create a row if file exists."""
+        rel = (rel_path or "").strip().replace("\\", "/")
+        parts = [p for p in rel.split("/") if p and p != "."]
+        if any(p == ".." for p in parts):
+            return None
+        if not parts:
+            return None
+        name = parts[-1]
+        if not name.lower().endswith(_music_supported_ext):
+            return None
+        try:
+            base = _music_mount_base_real(mount)
+        except OSError:
+            return None
+        target = os.path.realpath(os.path.join(base, *parts))
+        prefix = base + os.sep
+        if target != base and not target.startswith(prefix):
+            return None
+        if not os.path.isfile(target):
+            return None
+        row = MusicFile.query.filter_by(file_path=target).first()
+        if row is not None:
+            if row.mount_id is None:
+                row.mount_id = mount.id
+            return row
+        rel_fold = "/".join(parts[:-1])
+        ext = (name.rsplit(".", 1)[-1] if "." in name else "").lower()
+        row = MusicFile(
+            mount_id=mount.id,
+            file_path=target,
+            name=name,
+            folder=rel_fold,
+            duration=0.0,
+            type=ext,
+        )
+        db.session.add(row)
+        return row
+
+    def scan_mount(mount: MusicMount) -> int:
+        """Walk one mount; insert MusicFile rows (mutagen duration). Returns count added."""
+        from mutagen import File as MutagenFile
+
+        base_path = _music_mount_base_real(mount)
+        if not os.path.isdir(base_path):
+            raise FileNotFoundError(base_path)
+
+        added = 0
+        pending = 0
+        for root, _dirs, files in os.walk(base_path):
+            for fname in files:
+                if not fname.lower().endswith(_music_supported_ext):
+                    continue
+                full_path = os.path.join(root, fname)
+                try:
+                    resolved = os.path.realpath(full_path)
+                except OSError:
+                    continue
+                prefix = base_path + os.sep
+                if resolved != base_path and not resolved.startswith(prefix):
+                    continue
+                if not os.path.isfile(resolved):
+                    continue
+                if MusicFile.query.filter_by(file_path=resolved).first() is not None:
+                    continue
+                duration = 0.0
+                try:
+                    audio = MutagenFile(resolved)
+                    if audio is not None and getattr(audio, "info", None) is not None:
+                        duration = float(getattr(audio.info, "length", 0) or 0)
+                except Exception:
+                    duration = 0.0
+                ext = (fname.rsplit(".", 1)[-1] if "." in fname else "").lower()
+                rel_fold = os.path.relpath(root, base_path)
+                folder_display = "" if rel_fold in (".", "") else rel_fold
+                db.session.add(
+                    MusicFile(
+                        mount_id=mount.id,
+                        file_path=resolved,
+                        name=fname,
+                        folder=folder_display,
+                        duration=duration,
+                        type=ext,
+                    )
+                )
+                added += 1
+                pending += 1
+                if pending >= 256:
+                    db.session.commit()
+                    pending = 0
+        if pending:
+            db.session.commit()
+        return added
+
+    @app.route("/music-library/")
+    @app.route("/music-library")
+    def music_library():
+        def _serialize_folder_nodes(children: dict[str, dict[str, object]]) -> list[dict[str, object]]:
+            items: list[dict[str, object]] = []
+            for name in sorted(children.keys(), key=lambda s: s.lower()):
+                node = children[name]
+                items.append(
+                    {
+                        "name": node["name"],
+                        "path": node["path"],
+                        "children": _serialize_folder_nodes(node["children"]),  # type: ignore[index]
+                    }
+                )
+            return items
+
+        q = (request.args.get("q") or "").strip()
+        query = MusicFile.query.options(joinedload(MusicFile.mount))
+        search_files: list[MusicFile] = []
+        if q:
+            like = f"%{q}%"
+            query = query.filter(
+                or_(MusicFile.name.ilike(like), MusicFile.folder.ilike(like))
+            )
+            search_files = query.order_by(MusicFile.created_at.desc()).all()
+
+        folder_rows = (
+            db.session.query(
+                MusicFile.mount_id.label("mount_id"),
+                MusicMount.name.label("mount_name"),
+                MusicFile.folder.label("folder"),
+            )
+            .outerjoin(MusicMount, MusicMount.id == MusicFile.mount_id)
+            .distinct()
+            .order_by(MusicMount.name.asc(), MusicFile.folder.asc())
+            .all()
+        )
+        mounts_map: dict[str, dict[str, object]] = {}
+        for r in folder_rows:
+            m_id = int(r.mount_id) if r.mount_id is not None else 0
+            m_name = ((r.mount_name or "").strip() if r.mount_name is not None else "") or "Unassigned mount"
+            mkey = f"{m_id}:{m_name}"
+            if mkey not in mounts_map:
+                mounts_map[mkey] = {
+                    "mount_id": m_id,
+                    "mount": m_name,
+                    "children": {},
+                }
+            folder_raw = (r.folder or "").strip().replace("\\", "/")
+            if folder_raw in ("", "."):
+                continue
+            current = mounts_map[mkey]["children"]  # type: ignore[index]
+            parts = [p for p in folder_raw.split("/") if p]
+            built = []
+            for p in parts:
+                built.append(p)
+                if p not in current:
+                    current[p] = {"name": p, "path": "/".join(built), "children": {}}  # type: ignore[index]
+                current = current[p]["children"]  # type: ignore[index]
+
+        folder_tree: list[dict[str, object]] = []
+        for mkey in sorted(mounts_map.keys(), key=lambda k: str(mounts_map[k]["mount"]).lower()):
+            mount_node = mounts_map[mkey]
+            folder_tree.append(
+                {
+                    "mount_id": mount_node["mount_id"],
+                    "mount": mount_node["mount"],
+                    "children": _serialize_folder_nodes(mount_node["children"]),  # type: ignore[index]
+                }
+            )
+
+        count_rows = (
+            db.session.query(
+                MusicFile.mount_id,
+                MusicFile.folder,
+                func.count(MusicFile.id).label("n"),
+            )
+            .group_by(MusicFile.mount_id, MusicFile.folder)
+            .all()
+        )
+        by_mount_folder_counts: dict[int, dict[str, int]] = defaultdict(dict)
+        for r in count_rows:
+            mid = int(r.mount_id) if r.mount_id is not None else 0
+            fold = (r.folder or "").strip().replace("\\", "/")
+            by_mount_folder_counts[mid][fold] = int(r.n or 0)
+
+        def subtree_file_count(mount_id: int, path_prefix: str) -> int:
+            path_prefix = (path_prefix or "").strip().replace("\\", "/")
+            total = 0
+            folder_map = by_mount_folder_counts.get(mount_id, {})
+            for fpath, n in folder_map.items():
+                if not path_prefix:
+                    continue
+                if fpath == path_prefix or fpath.startswith(path_prefix + "/"):
+                    total += n
+            return total
+
+        def root_indexed_file_count(mount_id: int) -> int:
+            folder_map = by_mount_folder_counts.get(mount_id, {})
+            return int(folder_map.get("", 0)) + int(folder_map.get(".", 0))
+
+        folder_subtree_counts: dict[str, int] = {}
+
+        def walk_folder_nodes(nodes: list[dict[str, object]], mid: int) -> None:
+            for node in nodes:
+                path = str((node.get("path") or "")).strip().replace("\\", "/")
+                key = f"{mid}:{path}"
+                folder_subtree_counts[key] = subtree_file_count(mid, path)
+                children = node.get("children") or []
+                if isinstance(children, list):
+                    walk_folder_nodes(children, mid)  # type: ignore[arg-type]
+
+        for branch in folder_tree:
+            bid = int(branch["mount_id"])  # type: ignore[arg-type]
+            kids = branch.get("children") or []
+            if isinstance(kids, list):
+                walk_folder_nodes(kids, bid)
+
+        folder_root_file_counts: dict[int, int] = {}
+        for branch in folder_tree:
+            bid = int(branch["mount_id"])  # type: ignore[arg-type]
+            folder_root_file_counts[bid] = root_indexed_file_count(bid)
+
+        usage_top: list[dict[str, object]] = []
+        usage_recent: list[dict[str, object]] = []
+        try:
+            top_q = (
+                db.session.query(AudioUsage.file_id, func.count(AudioUsage.id).label("cnt"))
+                .group_by(AudioUsage.file_id)
+                .order_by(func.count(AudioUsage.id).desc())
+                .limit(10)
+                .all()
+            )
+            for file_id, cnt in top_q:
+                mf = db.session.get(MusicFile, int(file_id))
+                usage_top.append(
+                    {
+                        "id": int(file_id),
+                        "name": mf.name if mf else "Unknown",
+                        "count": int(cnt),
+                    }
+                )
+            recent_rows = AudioUsage.query.order_by(AudioUsage.created_at.desc()).limit(10).all()
+            for row in recent_rows:
+                mf = row.file
+                usage_recent.append(
+                    {
+                        "file_id": int(row.file_id),
+                        "name": mf.name if mf else "Unknown",
+                        "action": str(row.action or ""),
+                        "at": row.created_at.isoformat() if row.created_at else "",
+                    }
+                )
+        except Exception:
+            usage_top = []
+            usage_recent = []
+
+        actor = account_from_session()
+        visible = visible_project_ids_for_account(actor)
+        project_query = Project.query.order_by(Project.name.asc())
+        if visible is not None:
+            if not visible:
+                project_rows = []
+            else:
+                project_rows = project_query.filter(Project.id.in_(list(visible))).all()
+        else:
+            project_rows = project_query.all()
+        project_audio_targets: dict[int, list[dict[str, object]]] = {}
+        if project_rows:
+            pids = [int(p.id) for p in project_rows]
+            libs = (
+                ProjectAudioLibrary.query.filter(ProjectAudioLibrary.project_id.in_(pids))
+                .order_by(ProjectAudioLibrary.parent_id.asc(), ProjectAudioLibrary.name.asc())
+                .all()
+            )
+            by_pid: dict[int, list[ProjectAudioLibrary]] = defaultdict(list)
+            for l in libs:
+                by_pid[int(l.project_id)].append(l)
+            for p in project_rows:
+                ensure_project_main_audio_library(int(p.id))
+                libs_for_project = by_pid.get(int(p.id), [])
+                if not libs_for_project:
+                    libs_for_project = (
+                        ProjectAudioLibrary.query.filter_by(project_id=int(p.id))
+                        .order_by(ProjectAudioLibrary.parent_id.asc(), ProjectAudioLibrary.name.asc())
+                        .all()
+                    )
+                project_audio_targets[int(p.id)] = [
+                    {"id": int(l.id), "name": l.name, "parent_id": (int(l.parent_id) if l.parent_id else None)}
+                    for l in libs_for_project
+                ]
+
+        mounts = MusicMount.query.order_by(MusicMount.created_at.asc()).all()
+
+        music_total_files = int(MusicFile.query.count())
+        music_total_folders = int(len(folder_rows))
+        music_recent_preview = (
+            MusicFile.query.options(joinedload(MusicFile.mount))
+            .order_by(MusicFile.created_at.desc())
+            .limit(8)
+            .all()
+        )
+
+        file_usage_counts: dict[int, int] = {}
+        if search_files:
+            sids = [int(f.id) for f in search_files]
+            if sids:
+                for fid, cnt in (
+                    db.session.query(AudioUsage.file_id, func.count(AudioUsage.id))
+                    .filter(AudioUsage.file_id.in_(sids))
+                    .group_by(AudioUsage.file_id)
+                    .all()
+                ):
+                    file_usage_counts[int(fid)] = int(cnt or 0)
+
+        return render_template(
+            "music_library.html",
+            search_files=search_files,
+            folder_tree=folder_tree,
+            folder_subtree_counts=folder_subtree_counts,
+            folder_root_file_counts=folder_root_file_counts,
+            mounts=mounts,
+            projects_for_audio=project_rows,
+            project_audio_targets=project_audio_targets,
+            query=q,
+            usage_top=usage_top,
+            usage_recent=usage_recent,
+            music_total_files=music_total_files,
+            music_total_folders=music_total_folders,
+            music_recent_preview=music_recent_preview,
+            file_usage_counts=file_usage_counts,
+        )
+
+    @app.route("/music-library/files")
+    def music_library_files():
+        folder = (request.args.get("folder") or "").strip()
+        mount_id = request.args.get("mount_id", type=int)
+        name_q = (request.args.get("q") or "").strip()
+        query = MusicFile.query
+        if mount_id is not None:
+            query = query.filter(MusicFile.mount_id == int(mount_id))
+        query = query.filter(MusicFile.folder == folder)
+        if name_q:
+            like = f"%{name_q}%"
+            query = query.filter(MusicFile.name.ilike(like))
+        files = query.order_by(MusicFile.name.asc()).all()
+        usage_by_id: dict[int, int] = {}
+        if files:
+            fids = [int(f.id) for f in files]
+            for fid, cnt in (
+                db.session.query(AudioUsage.file_id, func.count(AudioUsage.id))
+                .filter(AudioUsage.file_id.in_(fids))
+                .group_by(AudioUsage.file_id)
+                .all()
+            ):
+                usage_by_id[int(fid)] = int(cnt or 0)
+        return jsonify(
+            [
+                {
+                    "id": f.id,
+                    "name": f.name,
+                    "duration": float(f.duration or 0),
+                    "folder": f.folder or "",
+                    "mount_id": int(f.mount_id) if f.mount_id is not None else None,
+                    "file_path": f.file_path,
+                    "type": (f.type or "").strip(),
+                    "usage_count": int(usage_by_id.get(int(f.id), 0)),
+                }
+                for f in files
+            ]
+        )
+
+    @app.route("/music-library/mount/add/", methods=["POST"])
+    @app.route("/music-library/mount/add", methods=["POST"])
+    def music_library_mount_add():
+        actor = account_from_session()
+        if not account_can_manage_music_mounts(actor):
+            flash("Only administrators and super users can manage music mounts.", "error")
+            return redirect(url_for("music_library"))
+        raw = (request.form.get("base_path") or "").strip()
+        if not raw:
+            flash("Mount path is required.", "error")
+            return redirect(url_for("music_library"))
+        try:
+            resolved = os.path.realpath(os.path.abspath(os.path.expanduser(raw)))
+        except OSError:
+            flash("Invalid path.", "error")
+            return redirect(url_for("music_library"))
+        if not os.path.exists(resolved):
+            flash("Path does not exist.", "error")
+            return redirect(url_for("music_library"))
+        if not os.path.isdir(resolved):
+            flash("Path must be a directory.", "error")
+            return redirect(url_for("music_library"))
+        if MusicMount.query.filter_by(base_path=resolved).first() is not None:
+            flash("That mount path is already registered.", "warning")
+            return redirect(url_for("music_library"))
+        label = os.path.basename(resolved.rstrip(os.sep)) or resolved
+        db.session.add(MusicMount(name=label, base_path=resolved))
+        db.session.commit()
+        flash("Mount added.", "success")
+        return redirect(url_for("music_library"))
+
+    @app.route("/music-library/browse/<int:mount_id>/")
+    @app.route("/music-library/browse/<int:mount_id>")
+    def browse_mount(mount_id: int):
+        actor = account_from_session()
+        if not account_can_manage_music_mounts(actor):
+            flash("Only administrators and super users can access mount browsing.", "error")
+            return redirect(url_for("music_library"))
+        m = db.session.get(MusicMount, mount_id)
+        if m is None:
+            abort(404)
+        rel = (request.args.get("path") or "").strip().replace("\\", "/")
+        parts = [p for p in rel.split("/") if p and p != "."]
+        if any(p == ".." for p in parts):
+            abort(400)
+        rel_norm = "/".join(parts)
+        try:
+            base = _music_mount_base_real(m)
+        except OSError:
+            abort(404)
+        if not os.path.isdir(base):
+            abort(404)
+        target = os.path.realpath(os.path.join(base, *parts)) if parts else base
+        prefix = base + os.sep
+        if target != base and not target.startswith(prefix):
+            abort(403)
+        if not os.path.isdir(target):
+            abort(404)
+        items: list[dict[str, str | bool]] = []
+        folder_key = rel_norm if rel_norm else ""
+        existing_rows = MusicFile.query.filter_by(mount_id=m.id, folder=folder_key).all()
+        indexed_by_name = {r.name: r for r in existing_rows}
+        try:
+            entry_names = os.listdir(target)
+        except OSError:
+            abort(403)
+
+        def _is_dir(n: str) -> bool:
+            try:
+                return os.path.isdir(os.path.join(target, n))
+            except OSError:
+                return False
+
+        for name in sorted(entry_names, key=lambda x: (not _is_dir(x), x.lower())):
+            item_path = os.path.join(target, name)
+            child_rel = f"{rel_norm}/{name}" if rel_norm else name
+            try:
+                is_dir = os.path.isdir(item_path)
+            except OSError:
+                continue
+            playable = (
+                not is_dir
+                and name.lower().endswith(_music_supported_ext)
+            )
+            indexed = indexed_by_name.get(name)
+            items.append(
+                {
+                    "name": name,
+                    "is_dir": is_dir,
+                    "path": child_rel,
+                    "playable": playable,
+                    "file_id": indexed.id if indexed else None,
+                    "color_tags": _music_parse_color_tags(indexed.color_tag if indexed else ""),
+                    "comments": (indexed.comments if indexed else "") or "",
+                }
+            )
+        parent_path = ""
+        if rel_norm:
+            parent_path = "/".join(rel_norm.split("/")[:-1])
+        return render_template(
+            "browse.html",
+            mount=m,
+            items=items,
+            path=rel_norm,
+            parent_path=parent_path,
+        )
+
+    @app.route("/music-library/mount/<int:mount_id>/play/")
+    @app.route("/music-library/mount/<int:mount_id>/play")
+    def browse_play_file(mount_id: int):
+        """Stream a file under a mount by relative path (browse view; not indexed required)."""
+        actor = account_from_session()
+        if not account_can_manage_music_mounts(actor):
+            abort(403)
+        m = db.session.get(MusicMount, mount_id)
+        if m is None:
+            abort(404)
+        rel = (request.args.get("path") or "").strip().replace("\\", "/")
+        parts = [p for p in rel.split("/") if p and p != "."]
+        if any(p == ".." for p in parts):
+            abort(400)
+        if not parts:
+            abort(404)
+        fname = parts[-1]
+        if not fname.lower().endswith(_music_supported_ext):
+            abort(404)
+        try:
+            base = _music_mount_base_real(m)
+        except OSError:
+            abort(404)
+        target = os.path.realpath(os.path.join(base, *parts))
+        prefix = base + os.sep
+        if target != base and not target.startswith(prefix):
+            abort(403)
+        if not os.path.isfile(target):
+            abort(404)
+        mt, _enc = mimetypes.guess_type(target)
+        return send_file(
+            target, conditional=True, mimetype=mt or "application/octet-stream"
+        )
+
+    @app.route("/music-library/mount/<int:mount_id>/tag/", methods=["POST"])
+    @app.route("/music-library/mount/<int:mount_id>/tag", methods=["POST"])
+    def music_library_mount_tag(mount_id: int):
+        """Update color_tag/comments for a file under this mount (DB metadata only)."""
+        actor = account_from_session()
+        if not account_can_manage_music_mounts(actor):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        m = db.session.get(MusicMount, mount_id)
+        if m is None:
+            return jsonify({"ok": False, "error": "mount_not_found"}), 404
+        payload = request.get_json(silent=True) or {}
+        raw_path = (payload.get("path") or request.form.get("path") or "").strip()
+        row = _music_get_or_create_for_mount_rel(m, raw_path)
+        if row is None:
+            return jsonify({"ok": False, "error": "invalid_path"}), 400
+        raw_color_tags = payload.get("color_tags")
+        if raw_color_tags is None:
+            raw_color_tags = request.form.getlist("color_tags")
+        if raw_color_tags is None:
+            raw_color_tags = []
+        if isinstance(raw_color_tags, str):
+            color_tags = _music_parse_color_tags(raw_color_tags)
+        elif isinstance(raw_color_tags, list):
+            color_tags = _music_parse_color_tags(",".join([str(x) for x in raw_color_tags]))
+        else:
+            color_tags = []
+        raw_comments = (payload.get("comments") or request.form.get("comments") or "").strip()
+        row.color_tag = _music_color_tags_to_db(color_tags)
+        row.comments = raw_comments[:5000] or None
+        db.session.commit()
+        return jsonify(
+            {
+                "ok": True,
+                "file_id": row.id,
+                "color_tags": _music_parse_color_tags(row.color_tag),
+                "comments": row.comments or "",
+            }
+        )
+
+    @app.route("/music-library/file/<int:file_id>/meta/", methods=["POST"])
+    @app.route("/music-library/file/<int:file_id>/meta", methods=["POST"])
+    def music_library_file_meta(file_id: int):
+        """Update color tags/favorite for an indexed music file (DB metadata only)."""
+        row = db.session.get(MusicFile, file_id)
+        if row is None:
+            return jsonify({"ok": False, "error": "file_not_found"}), 404
+        payload = request.get_json(silent=True) or {}
+        raw_color_tags = payload.get("color_tags")
+        if raw_color_tags is None:
+            raw_color_tags = request.form.getlist("color_tags")
+        if isinstance(raw_color_tags, str):
+            color_tags = _music_parse_color_tags(raw_color_tags)
+        elif isinstance(raw_color_tags, list):
+            color_tags = _music_parse_color_tags(",".join([str(x) for x in raw_color_tags]))
+        else:
+            color_tags = []
+        raw_favorite = payload.get("is_favorite")
+        if raw_favorite is None:
+            raw_favorite = request.form.get("is_favorite")
+        is_favorite = str(raw_favorite).strip().lower() in {"1", "true", "yes", "on"}
+        row.color_tag = _music_color_tags_to_db(color_tags)
+        row.is_favorite = bool(is_favorite)
+        db.session.commit()
+        return jsonify(
+            {
+                "ok": True,
+                "file_id": row.id,
+                "color_tags": _music_parse_color_tags(row.color_tag),
+                "is_favorite": bool(row.is_favorite),
+            }
+        )
+
+    @app.route("/music-library/mount/<int:mount_id>/scan/")
+    @app.route("/music-library/mount/<int:mount_id>/scan")
+    def music_library_scan_mount(mount_id: int):
+        actor = account_from_session()
+        if not account_can_manage_music_mounts(actor):
+            flash("Only administrators and super users can manage music mounts.", "error")
+            return redirect(url_for("music_library"))
+        m = db.session.get(MusicMount, mount_id)
+        if m is None:
+            abort(404)
+        try:
+            n = scan_mount(m)
+            flash(f"Scan complete. {n} new file(s) indexed for “{m.name}”.", "success")
+        except FileNotFoundError:
+            flash(f"Mount path is not available: {m.base_path}", "error")
+        except Exception:
+            app.logger.exception("music_library_scan_mount")
+            flash("Scan failed. Check server logs.", "error")
+        return redirect(url_for("music_library"))
+
+    @app.route("/music-library/mount/<int:mount_id>/remove/", methods=["POST"])
+    @app.route("/music-library/mount/<int:mount_id>/remove", methods=["POST"])
+    def music_library_mount_remove(mount_id: int):
+        """Unmount library path and remove its indexed files from DB only."""
+        actor = account_from_session()
+        if not account_can_manage_music_mounts(actor):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        m = db.session.get(MusicMount, mount_id)
+        if m is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        removed_files = MusicFile.query.filter_by(mount_id=mount_id).count()
+        MusicFile.query.filter_by(mount_id=mount_id).delete(synchronize_session=False)
+        db.session.delete(m)
+        db.session.commit()
+        return jsonify({"ok": True, "removed_files": int(removed_files)})
+
+    @app.route("/audio/<int:file_id>")
+    def stream_audio(file_id: int):
+        mf = db.session.get(MusicFile, file_id)
+        if mf is None:
+            abort(404)
+        if not os.path.exists(mf.file_path):
+            abort(404)
+        if mf.mount_id is not None:
+            mount = db.session.get(MusicMount, mf.mount_id)
+            if mount is None:
+                abort(403)
+            real_f = _music_file_under_mount(mf.file_path, mount)
+            if real_f is None:
+                abort(403)
+        else:
+            try:
+                real_f = os.path.realpath(os.path.abspath(mf.file_path))
+            except OSError:
+                abort(404)
+            if not os.path.isfile(real_f):
+                abort(404)
+            allowed = False
+            for m in MusicMount.query.all():
+                base = _music_mount_base_real(m)
+                pref = base + os.sep
+                if real_f == base or real_f.startswith(pref):
+                    allowed = True
+                    break
+            if not allowed:
+                abort(403)
+        mt, _enc = mimetypes.guess_type(real_f)
+        return send_file(
+            real_f, conditional=True, mimetype=mt or "application/octet-stream"
+        )
+
+    @app.route("/audio/track", methods=["POST"])
+    def track_audio():
+        actor = account_from_session()
+        if actor is None:
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        payload = request.get_json(silent=True) or {}
+        raw_file_id = payload.get("file_id")
+        action = str(payload.get("action") or "").strip().lower()
+        raw_project_id = payload.get("project_id")
+        try:
+            file_id = int(raw_file_id)
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_file_id"}), 400
+        row = db.session.get(MusicFile, file_id)
+        if row is None:
+            return jsonify({"ok": False, "error": "file_not_found"}), 404
+        if action not in {"play", "drag", "copy"}:
+            return jsonify({"ok": False, "error": "invalid_action"}), 400
+
+        project_id: int | None = None
+        if raw_project_id not in (None, ""):
+            try:
+                parsed_project_id = int(raw_project_id)
+            except (TypeError, ValueError):
+                parsed_project_id = None
+            if parsed_project_id is not None and account_can_access_project(actor, parsed_project_id):
+                project_id = parsed_project_id
+
+        db.session.add(
+            AudioUsage(
+                file_id=int(row.id),
+                project_id=project_id,
+                user_id=int(actor.id),
+                action=action,
+            )
+        )
+        db.session.commit()
+        return jsonify({"ok": True})
+
+    @app.route("/music-library/show/<int:file_id>")
+    def music_library_show_in_finder(file_id: int):
+        """macOS only: reveal indexed file in Finder (DB/index only; no file mutation)."""
+        mf = db.session.get(MusicFile, file_id)
+        if mf is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        if os.name != "posix":
+            return jsonify({"ok": False, "error": "unsupported_platform"}), 400
+
+        real_f: str | None = None
+        if mf.mount_id is not None:
+            mount = db.session.get(MusicMount, mf.mount_id)
+            if mount is None:
+                return jsonify({"ok": False, "error": "forbidden"}), 403
+            real_f = _music_file_under_mount(mf.file_path, mount)
+            if real_f is None:
+                return jsonify({"ok": False, "error": "forbidden"}), 403
+        else:
+            # Legacy rows without mount_id: allow only if path stays under any registered mount.
+            try:
+                candidate = os.path.realpath(os.path.abspath(mf.file_path))
+            except OSError:
+                candidate = ""
+            if not candidate or not os.path.isfile(candidate):
+                return jsonify({"ok": False, "error": "not_found"}), 404
+            for m in MusicMount.query.all():
+                base = _music_mount_base_real(m)
+                pref = base + os.sep
+                if candidate == base or candidate.startswith(pref):
+                    real_f = candidate
+                    break
+            if real_f is None:
+                return jsonify({"ok": False, "error": "forbidden"}), 403
+
+        if not os.path.exists(real_f):
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        try:
+            subprocess.run(["open", "-R", real_f], check=False)
+        except Exception:
+            return jsonify({"ok": False, "error": "open_failed"}), 500
+        return jsonify({"ok": True})
+
+    @app.route("/music-library/delete/<int:file_id>/", methods=["POST"])
+    @app.route("/music-library/delete/<int:file_id>", methods=["POST"])
+    def delete_music_file(file_id: int):
+        """Remove index row only; never deletes audio from disk."""
+        mf = db.session.get(MusicFile, file_id)
+        if mf is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        db.session.delete(mf)
+        db.session.commit()
+        return jsonify({"ok": True})
+
     @app.route("/")
     def index():
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         vis = visible_project_ids_for_account(acc)
         user_count = User.query.count()
         if vis is None:
@@ -2693,7 +4141,7 @@ def create_app() -> Flask:
                     )
                     .filter(
                         Booking.booked_for_id == uid_bt,
-                        Booking.booking_date == date.today(),
+                        Booking.booking_date == today_cairo(),
                         Booking.is_active.is_(True),
                     )
                     .order_by(Booking.start_time.asc())
@@ -2712,6 +4160,8 @@ def create_app() -> Flask:
                         "is_full_day": bool(bt.is_full_day),
                     }
 
+        machine_room_tasks = fetch_dashboard_machine_room_tasks(acc)
+
         return render_template(
             "index.html",
             user_count=user_count,
@@ -2719,6 +4169,7 @@ def create_app() -> Flask:
             open_tasks=open_tasks,
             project_count=project_count,
             booking_today_card=booking_today_card,
+            machine_room_tasks=machine_room_tasks,
         )
 
     @app.route("/chat/threads", methods=["GET"])
@@ -2730,9 +4181,94 @@ def create_app() -> Flask:
             return jsonify({"threads": []})
         return jsonify({"threads": build_chat_threads_for_dashboard(acc)})
 
+    @app.route("/ui/fragment/dashboard-machine-room-tasks")
+    def ui_fragment_dashboard_machine_room_tasks():
+        acc = account_from_session()
+        if acc is None:
+            abort(403)
+        machine_room_tasks = fetch_dashboard_machine_room_tasks(acc)
+        return render_template(
+            "partials/fragment_dashboard_mr_tasks_section.html",
+            machine_room_tasks=machine_room_tasks,
+        )
+
+    @app.route("/ui/fragment/machine-room/tasks-zone", defaults={"tab_slug": None})
+    @app.route("/ui/fragment/machine-room/tasks-zone/<tab_slug>")
+    def ui_fragment_machine_room_tasks_zone(tab_slug: str | None):
+        actor = account_from_session()
+        if actor is None or not account_is_machine_room_role(actor):
+            abort(403)
+        if tab_slug is not None and tab_slug not in ("progress", "finished"):
+            abort(404)
+        bundle = machine_room_tasks_page_bundle(actor, fragment_tab_slug=tab_slug)
+        if bundle is None:
+            abort(403)
+        return render_template("partials/fragment_mr_tasks_refresh_zone.html", **bundle)
+
+    @app.route("/ui/fragment/tasks/my-stream-slot")
+    def ui_fragment_tasks_my_stream_slot():
+        acc = account_from_session()
+        if acc is None or account_is_machine_room_role(acc):
+            abort(403)
+        du = User.query.filter_by(account_id=acc.id).first() if acc else None
+        if du is None:
+            return render_template(
+                "partials/fragment_tasks_my_stream_slot.html",
+                my_tasks=[],
+            )
+        all_tasks = all_tasks_for_tasks_list_page(acc)
+        my_tasks = sorted(
+            [t for t in all_tasks if t.user_id == du.id],
+            key=lambda t: t.created_at,
+            reverse=True,
+        )
+        return render_template(
+            "partials/fragment_tasks_my_stream_slot.html",
+            my_tasks=my_tasks,
+        )
+
+    @app.route("/ui/fragment/project/<int:project_id>/tasks-panel-body")
+    def ui_fragment_project_tasks_panel_body(project_id: int):
+        acc = account_from_session()
+        if acc is None:
+            abort(403)
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            abort(403)
+        project_tasks_all = (
+            Task.query.options(
+                joinedload(Task.group), joinedload(Task.assignee), joinedload(Task.project)
+            )
+            .filter_by(project_id=p.id)
+            .order_by(Task.created_at.desc())
+            .all()
+        )
+        active_tasks = [
+            t
+            for t in project_tasks_all
+            if not t.archived and t.status in ("open", "in_progress")
+        ]
+        member_ids = {m.user_id for m in p.memberships}
+        if member_ids:
+            member_users = (
+                User.query.options(joinedload(User.job_title))
+                .filter(User.id.in_(member_ids))
+                .all()
+            )
+        else:
+            member_users = []
+        has_title_presets = TaskGroupTitle.query.count() > 0
+        return render_template(
+            "partials/fragment_project_tasks_panel_body.html",
+            project=p,
+            active_tasks=active_tasks,
+            has_title_presets=has_title_presets,
+            member_users=member_users,
+        )
+
     @app.route("/projects")
     def projects_list():
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         vis = visible_project_ids_for_account(acc)
         q = (
             Project.query.options(
@@ -2797,6 +4333,52 @@ def create_app() -> Flask:
             project_members=project_members,
             query=query,
         )
+
+    @app.route("/machine-room/tasks")
+    def machine_room_tasks():
+        """Legacy / bare URL → redirect to path-based tab (preserves filters)."""
+        actor = account_from_session()
+        if actor is None:
+            abort(403)
+        if not account_is_machine_room_role(actor):
+            flash("That page is only available for Machine Room accounts.", "error")
+            return redirect(url_for("index"))
+        flat = request.args.to_dict(flat=True)
+        tab = (flat.pop("tab", None) or "progress").strip().lower()
+        if tab not in ("progress", "finished"):
+            tab = "progress"
+        qd: dict = {}
+        for k, v in flat.items():
+            if not v and v != 0:
+                continue
+            if k in ("project_id", "user_id", "pg", "pf"):
+                try:
+                    qd[k] = int(v)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                qd[k] = v
+        if qd.get("pg") == 1:
+            qd.pop("pg", None)
+        if qd.get("pf") == 1:
+            qd.pop("pf", None)
+        return redirect(url_for("machine_room_tasks_tab", tab_slug=tab, **qd))
+
+    @app.route("/machine-room/tasks/<tab_slug>")
+    def machine_room_tasks_tab(tab_slug: str):
+        """Tasks assigned to MR directory users; tab in path: progress | finished."""
+        if tab_slug not in ("progress", "finished"):
+            abort(404)
+        actor = account_from_session()
+        if actor is None:
+            abort(403)
+        if not account_is_machine_room_role(actor):
+            flash("That page is only available for Machine Room accounts.", "error")
+            return redirect(url_for("index"))
+        bundle = machine_room_tasks_page_bundle(actor)
+        if bundle is None:
+            abort(403)
+        return render_template("machine_room_tasks.html", **bundle)
 
     def build_machine_project_context(p: Project) -> dict:
         production_episode_count = max(0, int(p.number_of_episodes or 0))
@@ -2869,7 +4451,7 @@ def create_app() -> Flask:
             if production_episode_count
             else 0
         )
-        today = date.today()
+        today = today_cairo()
         machine_booking_active = Booking.query.filter_by(
             project_id=p.id, is_active=True
         ).count()
@@ -2981,13 +4563,11 @@ def create_app() -> Flask:
         if not account_may_use_machine_project_view(actor):
             abort(403)
         machine_ctx = build_machine_project_context(p)
-        vfx_ctx = build_vfx_management_context(p)
         return render_template(
             "machine_project.html",
             project=p,
             workflow_active="overview",
             **machine_ctx,
-            **vfx_ctx,
         )
 
     @app.route("/machine/project/<int:project_id>/hard-disks", methods=["POST"])
@@ -3068,11 +4648,10 @@ def create_app() -> Flask:
         if actor is None:
             return jsonify({"ok": False, "error": "forbidden"}), 403
         uid = directory_user_id_for_account(actor)
-        if uid is None:
+        visible = visible_project_ids_for_account(actor)
+        vis = _notification_visible_filter(uid=uid, visible=visible)
+        if vis is None:
             return jsonify({"ok": True, "notifications": []})
-        # Evaluate stale review warnings on fetch to avoid background jobs.
-        evaluate_vfx_review_notifications()
-        db.session.commit()
         raw_limit = (request.args.get("limit") or "50").strip()
         try:
             limit = max(1, min(200, int(raw_limit)))
@@ -3080,14 +4659,14 @@ def create_app() -> Flask:
             limit = 50
         kind = (request.args.get("type") or "all").strip().lower()
         q = (
-            Notification.query.filter_by(user_id=uid)
-            .filter(Notification.is_resolved.is_(False))
+            Notification.query.filter(_notification_unresolved_filter())
+            .filter(vis)
             .order_by(Notification.created_at.desc(), Notification.id.desc())
         )
         if kind in ("alert", "activity"):
-            q = q.filter(Notification.type == kind)
+            q = q.filter(db.func.lower(db.func.coalesce(Notification.type, "")) == kind)
         rows = q.limit(limit).all()
-        return jsonify({"ok": True, "notifications": [_notification_to_dict(n) for n in rows]})
+        return jsonify({"ok": True, "notifications": [serialize_notification(n) for n in rows]})
 
     @app.route("/notifications/read-all", methods=["POST"])
     def notifications_mark_all_read():
@@ -3095,12 +4674,11 @@ def create_app() -> Flask:
         if actor is None:
             return jsonify({"ok": False, "error": "forbidden"}), 403
         uid = directory_user_id_for_account(actor)
-        if uid is None:
+        visible = visible_project_ids_for_account(actor)
+        vis = _notification_visible_filter(uid=uid, visible=visible)
+        if vis is None:
             return jsonify({"ok": True})
-        for r in Notification.query.filter(
-            Notification.user_id == uid,
-            Notification.is_read.is_(False),
-        ).all():
+        for r in Notification.query.filter(vis, Notification.is_read.is_(False)).all():
             r.is_read = True
         db.session.commit()
         return jsonify({"ok": True})
@@ -3109,13 +4687,10 @@ def create_app() -> Flask:
         actor = account_from_session()
         if actor is None:
             return jsonify({"ok": False, "error": "forbidden"}), 403
-        uid = directory_user_id_for_account(actor)
-        if uid is None:
-            return jsonify({"ok": False, "error": "forbidden"}), 403
         n = db.session.get(Notification, notification_id)
         if n is None:
             return jsonify({"ok": False, "error": "not_found"}), 404
-        if int(n.user_id or 0) != int(uid):
+        if not _notification_row_may_mutate(actor, n):
             return jsonify({"ok": False, "error": "forbidden"}), 403
         if field_name == "is_acknowledged":
             n.is_acknowledged = True
@@ -3163,6 +4738,22 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "forbidden"}), 403
 
         data = request.get_json(silent=True) or {}
+        action = (data.get("action") or "create_link").strip().lower()
+        if action not in ("create_link", "start_copy"):
+            action = "create_link"
+        start_copy = action == "start_copy"
+        copy_mins: int | None = None
+        if start_copy:
+            try:
+                copy_mins = int(data.get("copy_time_minutes"))
+            except (TypeError, ValueError):
+                copy_mins = None
+            if copy_mins is None or copy_mins < 1:
+                return jsonify({"ok": False, "error": "invalid_copy_time"}), 400
+            assign_uid = directory_user_id_for_account(actor)
+            if assign_uid is None:
+                return jsonify({"ok": False, "error": "no_directory_user"}), 400
+
         try:
             disk_id = int(data.get("disk_id"))
         except (TypeError, ValueError):
@@ -3226,6 +4817,40 @@ def create_app() -> Flask:
                 notes=notes,
             )
         )
+        copy_task_id: int | None = None
+        if start_copy:
+            if ProjectMember.query.filter_by(project_id=p.id, user_id=assign_uid).first() is None:
+                db.session.add(ProjectMember(project_id=p.id, user_id=assign_uid))
+            dm_group = TaskGroup.query.filter_by(name="DI / Machine").first()
+            dm_gid = int(dm_group.id) if dm_group is not None else None
+            starter = db.session.get(User, assign_uid)
+            starter_label = (starter.name or "").strip() if starter is not None else actor.display_name
+            copy_task = Task(
+                title="Copy Material",
+                description="",
+                user_id=int(assign_uid),
+                group_id=dm_gid,
+                project_id=p.id,
+                status="open",
+                priority="high",
+                copy_started_at=_utc_now(),
+                copy_estimated_minutes=int(copy_mins),
+                copy_day_name=day_name[:80],
+                copy_unit_number=int(unit_number),
+            )
+            db.session.add(copy_task)
+            db.session.flush()
+            copy_task_id = int(copy_task.id)
+            _notification_emit_to_project(
+                project_id=p.id,
+                rule=f"copy_task_started|{copy_task_id}",
+                n_type="activity",
+                severity="info",
+                title="Copy task started",
+                message=f"{starter_label} started copying material ({day_name[:80]}, Unit {unit_number}).",
+                entity_type="task",
+                entity_id=copy_task_id,
+            )
         try:
             emit_shooting_day_created_activity(day, "machine")
             db.session.commit()
@@ -3234,7 +4859,12 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "conflict"}), 409
         evaluate_hdd_notifications(hd.id)
         db.session.commit()
-        return jsonify({"ok": True})
+        emit_tasks_feed_changed(p.id)
+        out: dict = {"ok": True}
+        if start_copy:
+            out["copy_started"] = True
+            out["task_id"] = copy_task_id
+        return jsonify(out)
 
     @app.route("/machine/project/<int:project_id>/hard-disks/<int:disk_id>/usage", methods=["POST"])
     def machine_project_hard_disk_usage_add(project_id: int, disk_id: int):
@@ -3331,9 +4961,9 @@ def create_app() -> Flask:
 
     @app.route("/projects/new", methods=["POST"])
     def projects_create():
-        actor = Account.query.get(session.get("account_id"))
-        if actor is None or not account_is_elevated(actor):
-            flash("Only administrators and super users can create projects.", "error")
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_create_projects(actor):
+            flash("Only administrators, super users, and producers can create projects.", "error")
             return redirect(url_for("projects_list"))
         name = (request.form.get("name") or "").strip()
         project_type = (request.form.get("project_type") or "").strip()
@@ -3367,6 +4997,7 @@ def create_app() -> Flask:
         )
         db.session.add(p)
         db.session.commit()
+        ensure_project_main_audio_library(p.id)
         creator_uid = directory_user_id_for_account(actor)
         if creator_uid is not None:
             if ProjectMember.query.filter_by(project_id=p.id, user_id=creator_uid).first() is None:
@@ -3377,7 +5008,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/reorder", methods=["POST"])
     def projects_reorder():
-        actor = Account.query.get(session.get("account_id"))
+        actor = db.session.get(Account, session.get("account_id"))
         if actor is None or not actor.is_admin:
             return jsonify({"ok": False, "error": "forbidden"}), 403
         data = request.get_json(silent=True) or {}
@@ -3405,13 +5036,15 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>")
     def project_detail(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(acc, p.id):
             flash("You do not have access to that project.", "error")
             return redirect(url_for("projects_list"))
         project_tasks_all = (
-            Task.query.options(joinedload(Task.group), joinedload(Task.assignee))
+            Task.query.options(
+                joinedload(Task.group), joinedload(Task.assignee), joinedload(Task.project)
+            )
             .filter_by(project_id=p.id)
             .order_by(Task.created_at.desc())
             .all()
@@ -3482,15 +5115,118 @@ def create_app() -> Flask:
             workflow_active="overview",
         )
 
+    @app.route("/projects/<int:project_id>/audio-library")
+    def project_audio_library(project_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        main_audio_library = ensure_project_main_audio_library(p.id)
+        audio_libraries = (
+            ProjectAudioLibrary.query.filter_by(project_id=p.id)
+            .order_by(ProjectAudioLibrary.parent_id.asc(), ProjectAudioLibrary.name.asc())
+            .all()
+        )
+        linked_audio_folders = (
+            ProjectAudioFolder.query.options(
+                joinedload(ProjectAudioFolder.mount),
+                joinedload(ProjectAudioFolder.library),
+            )
+            .filter_by(project_id=p.id)
+            .order_by(ProjectAudioFolder.created_at.desc())
+            .all()
+        )
+        audio_library_folders: dict[int, list[dict[str, object]]] = defaultdict(list)
+        if linked_audio_folders:
+            links_by_key: dict[tuple[int, int, str], ProjectAudioFolder] = {}
+            for link in linked_audio_folders:
+                key = (
+                    int(link.library_id or 0),
+                    int(link.mount_id or 0),
+                    (link.folder_path or ""),
+                )
+                links_by_key[key] = link
+
+            file_rows = (
+                db.session.query(
+                    ProjectAudioFolder.library_id.label("library_id"),
+                    ProjectAudioFolder.mount_id.label("mount_id"),
+                    ProjectAudioFolder.folder_path.label("folder_path"),
+                    MusicFile.id.label("file_id"),
+                    MusicFile.name.label("file_name"),
+                    MusicFile.file_path.label("file_path"),
+                    MusicFile.duration.label("duration"),
+                    MusicFile.color_tag.label("color_tag"),
+                    MusicFile.is_favorite.label("is_favorite"),
+                )
+                .join(
+                    MusicFile,
+                    and_(
+                        MusicFile.mount_id == ProjectAudioFolder.mount_id,
+                        MusicFile.folder == ProjectAudioFolder.folder_path,
+                    ),
+                )
+                .filter(ProjectAudioFolder.project_id == p.id)
+                .order_by(
+                    ProjectAudioFolder.library_id.asc(),
+                    ProjectAudioFolder.mount_id.asc(),
+                    ProjectAudioFolder.folder_path.asc(),
+                    MusicFile.name.asc(),
+                )
+                .all()
+            )
+            grouped_files: dict[tuple[int, int, str], list[dict[str, object]]] = defaultdict(list)
+            for row in file_rows:
+                gkey = (int(row.library_id or 0), int(row.mount_id or 0), row.folder_path or "")
+                grouped_files[gkey].append(
+                    {
+                        "id": int(row.file_id),
+                        "name": row.file_name or "",
+                        "file_path": row.file_path or "",
+                        "duration": float(row.duration or 0),
+                        "color_tags": _music_parse_color_tags(row.color_tag),
+                        "is_favorite": bool(row.is_favorite),
+                    }
+                )
+
+            for key, link in links_by_key.items():
+                lib_id, _mount_id, folder_path = key
+                mount_name = (link.mount.name if link.mount else "Mount") or "Mount"
+                audio_library_folders[lib_id].append(
+                    {
+                        "link_id": int(link.id),
+                        "folder_path": folder_path,
+                        "mount_name": mount_name,
+                        "files": grouped_files.get(key, []),
+                    }
+                )
+
+            for lib_id in list(audio_library_folders.keys()):
+                audio_library_folders[lib_id].sort(
+                    key=lambda x: (str(x["mount_name"]).lower(), str(x["folder_path"]).lower())
+                )
+        return render_template(
+            "project_audio_library.html",
+            project=p,
+            main_audio_library=main_audio_library,
+            audio_libraries=audio_libraries,
+            linked_audio_folders=linked_audio_folders,
+            audio_library_folders=dict(audio_library_folders),
+            workflow_active="audio",
+        )
+
     @app.route("/projects/<int:project_id>/completed")
     def project_completed_tasks(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(acc, p.id):
             flash("You do not have access to that project.", "error")
             return redirect(url_for("projects_list"))
         project_tasks_all = (
-            Task.query.options(joinedload(Task.group), joinedload(Task.assignee))
+            Task.query.options(
+                joinedload(Task.group), joinedload(Task.assignee), joinedload(Task.project)
+            )
             .filter_by(project_id=p.id)
             .order_by(Task.created_at.desc())
             .all()
@@ -3506,7 +5242,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/production")
     def project_production(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(acc, p.id):
             flash("You do not have access to that project.", "error")
@@ -3538,7 +5274,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/production/day/<int:day_id>")
     def project_production_day(project_id: int, day_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(acc, p.id):
             flash("You do not have access to that project.", "error")
@@ -3589,107 +5325,859 @@ def create_app() -> Flask:
             workflow_active="shooting",
         )
 
-    def build_vfx_management_context(p: Project) -> dict:
-        """Shared VFX panel context for production VFX page and Machine Room project view."""
-        pending_vfx_rows = (
+    def _vfx_media_is_remote(s: str | None) -> bool:
+        u = (s or "").strip().lower()
+        return u.startswith("http://") or u.startswith("https://")
+
+    def _vfx_is_video_media(s: str | None) -> bool:
+        raw = (s or "").strip()
+        if not raw:
+            return False
+        path = urlparse(raw).path if _vfx_media_is_remote(raw) else raw
+        ext = os.path.splitext(path)[1].lower()
+        return ext in {".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi"}
+
+    def _next_scene_display_number_for_episode(project_id: int, episode_number: int) -> int:
+        rows = (
             ShootingDayScene.query.join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
             .filter(
-                ShootingDay.project_id == p.id,
-                ShootingDayScene.needs_vfx.is_(True),
+                ShootingDay.project_id == int(project_id),
+                ShootingDayScene.episode_number == int(episode_number),
             )
             .all()
         )
-        created_any = False
-        for row in pending_vfx_rows:
-            before = VfxShot.query.filter_by(shooting_day_scene_id=row.id).first()
-            if before is None:
-                ensure_vfx_shot_for_scene(row, force=True)
-                created_any = True
-        if created_any:
-            db.session.commit()
-        shots = (
-            VfxShot.query.options(
-                joinedload(VfxShot.assignee).joinedload(User.job_title),
-                joinedload(VfxShot.vendor),
-                joinedload(VfxShot.source_scene),
+        mx = 0
+        for sc in rows:
+            n = _parse_scene_number_from_label(sc.scene_label, fallback=sc.scene_number or 1)
+            mx = max(mx, n)
+        return max(1, mx + 1)
+
+    def _vfx_scene_aggregate_dot(shots: list[VfxShot]) -> str:
+        if not shots:
+            return "pending"
+        statuses = [(getattr(s, "status", None) or "pending").lower() for s in shots]
+        if any(x == "pending" for x in statuses):
+            return "pending"
+        if all(x == "approved" for x in statuses):
+            return "approved"
+        if any(x in ("review", "sent") for x in statuses):
+            return "review"
+        return "pending"
+
+    def _vfx_version_preview_url(project_id: int, image: str) -> str:
+        raw = (image or "").strip()
+        if not raw:
+            return ""
+        if _vfx_media_is_remote(raw):
+            return raw
+        return url_for("project_vfx_version_file", project_id=project_id, filename=raw)
+
+    def _scene_ref_preview_url(project_id: int, video_url: str) -> str:
+        raw = (video_url or "").strip()
+        if not raw:
+            return ""
+        if _vfx_media_is_remote(raw):
+            return raw
+        return url_for("project_vfx_scene_reference_file", project_id=project_id, filename=raw)
+
+    def build_vfx_editor_payload(p: Project) -> dict:
+        is_tv = _project_type_is_tv_series(p.project_type)
+        rows = (
+            ShootingDayScene.query.join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+            .options(
+                joinedload(ShootingDayScene.vfx_shots).joinedload(VfxShot.versions),
+                joinedload(ShootingDayScene.vfx_shots).joinedload(VfxShot.comments).joinedload(
+                    VfxShotComment.user
+                ),
+                joinedload(ShootingDayScene.scene_references),
             )
-            .filter(VfxShot.project_id == p.id)
-            .order_by(VfxShot.updated_at.desc(), VfxShot.id.desc())
+            .filter(ShootingDay.project_id == p.id)
+            .order_by(
+                ShootingDay.shooting_date.asc(),
+                ShootingDay.id.asc(),
+                ShootingDayScene.episode_number.asc(),
+                ShootingDayScene.scene_number.asc(),
+                ShootingDayScene.id.asc(),
+            )
             .all()
         )
-        total_shots = len(shots)
-        status_counts: dict[str, int] = {k: 0 for k in VFX_STATUSES}
-        for shot in shots:
-            st = (shot.status or "pending").strip().lower()
-            if st not in status_counts:
-                st = "pending"
-            status_counts[st] += 1
-        delivered_pct = int(round(100.0 * status_counts["delivered"] / total_shots)) if total_shots else 0
-        in_progress_pct = (
-            int(round(100.0 * status_counts["in_progress"] / total_shots)) if total_shots else 0
-        )
-        in_review_count = status_counts.get("internal_review", 0) + status_counts.get("client_review", 0)
-        by_episode = sorted(
+        scenes_out: list[dict] = []
+        for sc in rows:
+            shots = sorted(sc.vfx_shots or [], key=lambda s: int(s.shot_number or 0))
+            sc_num = _parse_scene_number_from_label(sc.scene_label, fallback=sc.scene_number or 1)
+            group_key = max(1, int(sc.episode_number or 1))
+            group_label = f"Eps{group_key:02d}" if is_tv else f"Reel{group_key:02d}"
+            shot_list: list[dict] = []
+            for sh in shots:
+                versions = sorted(sh.versions or [], key=lambda v: int(v.version_number or 0))
+                cv = max((int(v.version_number or 0) for v in versions), default=0)
+                comments_sorted = sorted(
+                    sh.comments or [],
+                    key=lambda c: (c.created_at or now_local(), c.id),
+                )
+                shot_list.append(
+                    {
+                        "id": sh.id,
+                        "shotCode": sh.shot_code,
+                        "department": (sh.department or "animation").strip().lower(),
+                        "vendor": (sh.vendor or "in_house").strip().lower(),
+                        "vendorName": sh.vendor_name or "",
+                        "shotRefFrame": sh.shot_ref_frame or "",
+                        "shotRefFrameUrl": _vfx_version_preview_url(p.id, sh.shot_ref_frame or ""),
+                        "shotRefFrameIsVideo": _vfx_is_video_media(sh.shot_ref_frame),
+                        "status": (sh.status or "pending").strip().lower(),
+                        "sentAt": isoformat_stored_instant(
+                            sh.sent_at if isinstance(sh.sent_at, datetime) else None
+                        ),
+                        "currentVersion": cv,
+                        "versions": [
+                            {
+                                "id": v.id,
+                                "versionNumber": int(v.version_number or 0),
+                                "image": v.image or "",
+                                "previewUrl": _vfx_version_preview_url(p.id, v.image or ""),
+                                "isVideo": _vfx_is_video_media(v.image),
+                                "comment": v.comment or "",
+                                "createdAt": isoformat_stored_instant(
+                                    v.created_at if isinstance(v.created_at, datetime) else None
+                                ),
+                            }
+                            for v in versions
+                        ],
+                        "comments": [
+                            {
+                                "id": c.id,
+                                "userId": c.user_id,
+                                "userName": (c.user.name if c.user else "Unknown"),
+                                "body": c.body or "",
+                                "parentId": c.parent_id,
+                                "resolved": bool(c.resolved),
+                                "createdAt": isoformat_stored_instant(
+                                    c.created_at if isinstance(c.created_at, datetime) else None
+                                ),
+                            }
+                            for c in comments_sorted
+                        ],
+                    }
+                )
+            has_review = any((s.status or "").lower() == "review" for s in shots)
+            refs = [rf for rf in (sc.scene_references or [])]
+            scene_preview = refs[0] if refs else None
+            scenes_out.append(
+                {
+                    "id": sc.id,
+                    "groupKey": group_key,
+                    "groupLabel": group_label,
+                    "sceneDisplayNumber": sc_num,
+                    "sceneTitle": f"Scene {sc_num}",
+                    "sceneLabel": sc.scene_label or "",
+                    "sceneNotes": sc.notes or "",
+                    "needsVfx": bool(sc.needs_vfx),
+                    "hasReviewShot": has_review,
+                    "shotCount": len(shots),
+                    "aggregateDot": _vfx_scene_aggregate_dot(shots),
+                    "scenePreviewUrl": (
+                        _scene_ref_preview_url(p.id, scene_preview.video_url or "") if scene_preview else ""
+                    ),
+                    "scenePreviewIsVideo": (
+                        _vfx_is_video_media(scene_preview.video_url) if scene_preview else False
+                    ),
+                    "scenePreviewReferenceId": int(scene_preview.id) if scene_preview else None,
+                    "references": [
+                        {
+                            "id": rf.id,
+                            "videoUrl": rf.video_url or "",
+                            "previewUrl": _scene_ref_preview_url(p.id, rf.video_url or ""),
+                            "isRemote": _vfx_media_is_remote(rf.video_url),
+                            "isVideo": _vfx_is_video_media(rf.video_url),
+                            "notes": rf.notes or "",
+                        }
+                        for rf in refs
+                    ],
+                    "shots": shot_list,
+                }
+            )
+        groups_map: dict[int, list[dict]] = defaultdict(list)
+        for s in scenes_out:
+            groups_map[int(s["groupKey"])].append(s)
+        if is_tv:
+            max_ep = max(0, int(p.number_of_episodes or 0))
+            for epn in range(1, max_ep + 1):
+                groups_map.setdefault(epn, [])
+        groups = [
             {
-                int(shot.episode_number or 0)
-                for shot in shots
-                if int(shot.episode_number or 0) > 0
+                "key": k,
+                "label": (f"Eps{k:02d}" if is_tv else f"Reel{k:02d}"),
+                "scenes": groups_map[k],
             }
-        )
-        artist_users = (
-            User.query.join(ProjectMember, ProjectMember.user_id == User.id)
-            .options(joinedload(User.job_title))
-            .filter(ProjectMember.project_id == p.id)
-            .order_by(User.name.asc(), User.id.asc())
-            .all()
-        )
-        vendors = (
-            Vendor.query.order_by(Vendor.name.asc(), Vendor.id.asc()).all()
-        )
-        complexities = sorted(
-            {
-                (shot.complexity or "medium").strip().lower()
-                for shot in shots
-                if (shot.complexity or "").strip()
-            }
+            for k in sorted(groups_map.keys())
+        ]
+        default_day = (
+            ShootingDay.query.filter_by(project_id=p.id)
+            .order_by(ShootingDay.shooting_date.desc(), ShootingDay.id.desc())
+            .first()
         )
         return {
-            "vfx_shots": shots,
-            "vfx_status_counts": status_counts,
-            "vfx_total_shots": total_shots,
-            "vfx_in_review_count": in_review_count,
-            "vfx_delivered_pct": delivered_pct,
-            "vfx_in_progress_pct": in_progress_pct,
-            "vfx_episode_options": by_episode,
-            "vfx_artist_users": artist_users,
-            "vfx_vendors": vendors,
-            "vfx_statuses": VFX_STATUSES,
-            "vfx_priorities": VFX_PRIORITIES,
-            "vfx_complexities": (tuple(complexities) if complexities else VFX_COMPLEXITIES),
+            "projectId": p.id,
+            "isTv": is_tv,
+            "statuses": list(VFX_EDITOR_STATUSES),
+            "departments": list(VFX_DEPARTMENTS),
+            "groups": groups,
+            "scenes": scenes_out,
+            "hasShootingDays": default_day is not None,
+            "defaultShootingDayId": int(default_day.id) if default_day else None,
         }
 
-    @app.route("/projects/<int:project_id>/production/vfx")
-    def project_production_vfx(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+    def build_vfx_editor_context(p: Project) -> dict:
+        return {
+            "vfx_editor_payload": build_vfx_editor_payload(p),
+            "vfx_editor_statuses": VFX_EDITOR_STATUSES,
+        }
+
+    @app.route("/projects/<int:project_id>/vfx", methods=["GET"])
+    def project_vfx(project_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(acc, p.id):
             flash("You do not have access to that project.", "error")
             return redirect(url_for("projects_list"))
-        vfx_ctx = build_vfx_management_context(p)
+        ctx = build_vfx_editor_context(p)
         return render_template(
-            "project_production.html",
+            "project_vfx_editor.html",
             project=p,
-            production_section="vfx",
-            shooting_days=[],
-            production_day_totals={},
-            production_day_progress={},
             workflow_active="vfx",
-            **vfx_ctx,
+            vfx_directory_user_id=directory_user_id_for_account(acc),
+            **ctx,
         )
+
+    @app.route("/projects/<int:project_id>/vfx/data", methods=["GET"])
+    def project_vfx_data(project_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(p)})
+
+    @app.route("/projects/<int:project_id>/vfx/version-file/<path:filename>", methods=["GET"])
+    def project_vfx_version_file(project_id: int, filename: str):
+        actor = account_from_session()
+        if actor is None or not account_can_access_project(actor, project_id):
+            abort(403)
+        if "/" in filename or "\\" in filename or ".." in filename or filename.startswith("."):
+            abort(404)
+        ver = (
+            VfxVersion.query.join(VfxShot, VfxVersion.shot_id == VfxShot.id)
+            .filter(VfxShot.project_id == project_id, VfxVersion.image == filename)
+            .first()
+        )
+        shot_ref = (
+            VfxShot.query.filter_by(project_id=project_id, shot_ref_frame=filename).first()
+            if ver is None
+            else None
+        )
+        if ver is None and shot_ref is None:
+            abort(404)
+        return send_from_directory(vfx_version_upload_root, filename)
+
+    @app.route("/projects/<int:project_id>/vfx/api/scenes/<int:scene_id>", methods=["POST"])
+    def project_vfx_api_scene_update(project_id: int, scene_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        scene = shooting_day_scene_for_project(scene_id, project_id)
+        if scene is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        data = request.get_json(silent=True) or {}
+        if "scene_label" in data:
+            label = str(data.get("scene_label") or "").strip()
+            if not label:
+                return jsonify({"ok": False, "error": "scene_label_required"}), 400
+            if len(label) > 120:
+                return jsonify({"ok": False, "error": "scene_label_too_long"}), 400
+            scene.scene_label = label
+            scene.scene_number = _parse_scene_number_from_label(label, fallback=scene.scene_number or 1)
+        if "notes" in data:
+            notes = str(data.get("notes") or "").strip()
+            if len(notes) > 20_000:
+                return jsonify({"ok": False, "error": "notes_too_long"}), 400
+            scene.notes = notes
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/api/scenes/create", methods=["POST"])
+    def project_vfx_api_scene_create(project_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        data = request.get_json(silent=True) or {}
+        try:
+            group_key = int(data.get("group_key"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_group"}), 400
+        if group_key < 1:
+            return jsonify({"ok": False, "error": "invalid_group"}), 400
+        if _project_type_is_tv_series(p.project_type):
+            max_ep = max(0, int(p.number_of_episodes or 0))
+            if max_ep < 1:
+                return jsonify({"ok": False, "error": "no_episodes_configured"}), 400
+            if group_key > max_ep:
+                return jsonify({"ok": False, "error": "invalid_episode"}), 400
+            ep_num = group_key
+        else:
+            ep_num = min(999, max(1, group_key))
+        try:
+            opt_day = int(data.get("shooting_day_id") or 0)
+        except (TypeError, ValueError):
+            opt_day = 0
+        if opt_day:
+            d = shooting_day_in_project(opt_day, project_id)
+        else:
+            d = (
+                ShootingDay.query.filter_by(project_id=project_id)
+                .order_by(ShootingDay.shooting_date.desc(), ShootingDay.id.desc())
+                .first()
+            )
+        if d is None:
+            return jsonify({"ok": False, "error": "no_shooting_day"}), 400
+        raw_scene = (data.get("scene_label") or "").strip()
+        if not raw_scene:
+            raw_scene = str(_next_scene_display_number_for_episode(project_id, ep_num))
+        if len(raw_scene) > 120:
+            return jsonify({"ok": False, "error": "scene_too_long"}), 400
+        notes = (data.get("notes") or "").strip()
+        if len(notes) > 20_000:
+            return jsonify({"ok": False, "error": "notes_too_long"}), 400
+        dur_sec_i = 0
+        dur_min = 0
+        sn = _parse_scene_number_from_label(raw_scene, fallback=1)
+        row = ShootingDayScene(
+            shooting_day_id=d.id,
+            scene_id=next_legacy_scene_id_for_day(d.id),
+            episode_number=ep_num,
+            scene_label=raw_scene,
+            scene_number=max(1, int(sn or 1)),
+            duration=dur_min,
+            duration_seconds=dur_sec_i,
+            actual_duration_minutes=dur_min,
+            notes=notes,
+            status="pending",
+            sync_done=False,
+            first_edit_done=False,
+            needs_vfx=True,
+        )
+        db.session.add(row)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(p)})
+
+    @app.route("/projects/<int:project_id>/vfx/api/shots/<int:shot_id>", methods=["POST"])
+    def project_vfx_api_shot_update(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
+        if shot is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        data = request.get_json(silent=True) or {}
+        if "status" in data:
+            st = str(data.get("status") or "").strip().lower()
+            if st not in VFX_EDITOR_STATUSES:
+                return jsonify({"ok": False, "error": "invalid_status"}), 400
+            shot.status = st
+            if st == "sent" and shot.sent_at is None:
+                shot.sent_at = now_local()
+        if "department" in data:
+            dep = str(data.get("department") or "").strip().lower()
+            if dep not in VFX_DEPARTMENTS:
+                return jsonify({"ok": False, "error": "invalid_department"}), 400
+            shot.department = dep
+        if "shot_code" in data:
+            code = str(data.get("shot_code") or "").strip()
+            if not code:
+                return jsonify({"ok": False, "error": "shot_code_required"}), 400
+            if len(code) > 64 or not re.fullmatch(r"[A-Za-z0-9_-]+", code):
+                return jsonify({"ok": False, "error": "invalid_shot_code"}), 400
+            clash = VfxShot.query.filter(
+                VfxShot.project_id == project_id,
+                VfxShot.shot_code == code,
+                VfxShot.id != shot.id,
+            ).first()
+            if clash is not None:
+                return jsonify({"ok": False, "error": "shot_code_exists"}), 400
+            shot.shot_code = code
+        if "vendor" in data:
+            vendor = str(data.get("vendor") or "").strip().lower()
+            if vendor not in ("in_house", "external"):
+                return jsonify({"ok": False, "error": "invalid_vendor"}), 400
+            shot.vendor = vendor
+            if vendor != "external":
+                shot.vendor_name = ""
+        if "vendor_name" in data:
+            vendor_name = str(data.get("vendor_name") or "").strip()
+            if len(vendor_name) > 120:
+                return jsonify({"ok": False, "error": "vendor_name_too_long"}), 400
+            shot.vendor_name = vendor_name
+        if "sent_at" in data:
+            raw_sent = str(data.get("sent_at") or "").strip()
+            if not raw_sent:
+                shot.sent_at = None
+            else:
+                try:
+                    shot.sent_at = datetime.fromisoformat(raw_sent)
+                except ValueError:
+                    return jsonify({"ok": False, "error": "invalid_sent_at"}), 400
+        if "shot_briefing" in data:
+            briefing = str(data.get("shot_briefing") or "").strip()
+            if len(briefing) > 20_000:
+                return jsonify({"ok": False, "error": "briefing_too_long"}), 400
+            shot.shot_briefing = briefing
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/api/shots/<int:shot_id>/ref-frame", methods=["POST"])
+    def project_vfx_api_shot_ref_frame(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
+        if shot is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        file_part = request.files.get("image_file") or request.files.get("file")
+        if file_part is None or not (file_part.filename or "").strip():
+            return jsonify({"ok": False, "error": "file_required"}), 400
+        orig = secure_filename(file_part.filename) or "ref"
+        ext = os.path.splitext(orig)[1].lower()
+        if ext not in VFX_VERSION_ALLOWED_EXT:
+            return jsonify({"ok": False, "error": "unsupported_format"}), 400
+        raw = file_part.read()
+        if len(raw) > VFX_VERSION_MAX_BYTES:
+            return jsonify({"ok": False, "error": "file_too_large"}), 400
+        fname = f"ref{shot.id}-{uuid.uuid4().hex}{ext}"
+        dest = os.path.join(vfx_version_upload_root, fname)
+        try:
+            with open(dest, "wb") as f:
+                f.write(raw)
+        except OSError:
+            return jsonify({"ok": False, "error": "save_failed"}), 500
+        old = (shot.shot_ref_frame or "").strip()
+        if old and not _vfx_media_is_remote(old):
+            remove_vfx_version_file(old)
+        shot.shot_ref_frame = fname
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/api/shots/<int:shot_id>/delete", methods=["POST"])
+    def project_vfx_api_shot_delete(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
+        if shot is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        for ver in shot.versions or []:
+            img = (ver.image or "").strip()
+            if img and not _vfx_media_is_remote(img):
+                remove_vfx_version_file(img)
+        rf = (shot.shot_ref_frame or "").strip()
+        if rf and not _vfx_media_is_remote(rf):
+            remove_vfx_version_file(rf)
+        db.session.delete(shot)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/api/scenes/<int:scene_id>/shots", methods=["POST"])
+    def project_vfx_api_scene_add_shot_json(project_id: int, scene_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        scene = shooting_day_scene_for_project(scene_id, project_id)
+        if scene is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        if not bool(scene.needs_vfx):
+            return jsonify({"ok": False, "error": "needs_vfx_required"}), 400
+        data = request.get_json(silent=True) or {}
+        dep = str(data.get("department") or "animation").strip().lower()
+        if dep not in VFX_DEPARTMENTS:
+            return jsonify({"ok": False, "error": "invalid_department"}), 400
+        ep_num = max(1, int(scene.episode_number or 1))
+        scene_num = _parse_scene_number_from_label(scene.scene_label, fallback=scene.scene_number or 1)
+        shot_num = _next_vfx_shot_number(scene.id)
+        shot = VfxShot(
+            project_id=project_id,
+            scene_id=scene.id,
+            episode_number=ep_num,
+            reel_number=None,
+            shot_number=shot_num,
+            shot_code=_build_vfx_shot_code(ep_num, scene_num, shot_num),
+            shot_briefing="",
+            department=dep,
+            status="pending",
+            created_at=now_local(),
+        )
+        db.session.add(shot)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/api/scenes/<int:scene_id>/shots/bulk", methods=["POST"])
+    def project_vfx_api_scene_bulk_shots(project_id: int, scene_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        scene = shooting_day_scene_for_project(scene_id, project_id)
+        if scene is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        if not bool(scene.needs_vfx):
+            return jsonify({"ok": False, "error": "needs_vfx_required"}), 400
+        data = request.get_json(silent=True) or {}
+        start_n = max(1, int(data.get("start") or 1))
+        end_n = max(start_n, int(data.get("end") or 10))
+        if end_n > 99:
+            return jsonify({"ok": False, "error": "range_too_large"}), 400
+        ep_num = max(1, int(scene.episode_number or 1))
+        scene_num = _parse_scene_number_from_label(scene.scene_label, fallback=scene.scene_number or 1)
+        existing_nums = {int(s.shot_number) for s in (scene.vfx_shots or [])}
+        cycle = list(VFX_DEPARTMENTS)
+        created = 0
+        for n in range(start_n, end_n + 1):
+            if n in existing_nums:
+                continue
+            dep = cycle[(n - 1) % len(cycle)]
+            sh = VfxShot(
+                project_id=project_id,
+                scene_id=scene.id,
+                episode_number=ep_num,
+                reel_number=None,
+                shot_number=n,
+                shot_code=_build_vfx_shot_code(ep_num, scene_num, n),
+                shot_briefing="",
+                department=dep,
+                status="pending",
+                created_at=now_local(),
+            )
+            db.session.add(sh)
+            created += 1
+        db.session.commit()
+        return jsonify(
+            {"ok": True, "created": created, "payload": build_vfx_editor_payload(Project.query.get(project_id))}
+        )
+
+    @app.route("/projects/<int:project_id>/vfx/api/shots/<int:shot_id>/versions", methods=["POST"])
+    def project_vfx_api_add_version(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
+        if shot is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        image = ""
+        comment = ""
+        file_part = request.files.get("image_file") or request.files.get("file")
+        if file_part and (file_part.filename or "").strip():
+            orig = secure_filename(file_part.filename) or "version"
+            ext = os.path.splitext(orig)[1].lower()
+            if ext not in VFX_VERSION_ALLOWED_EXT:
+                return jsonify({"ok": False, "error": "unsupported_format"}), 400
+            raw = file_part.read()
+            if len(raw) > VFX_VERSION_MAX_BYTES:
+                return jsonify({"ok": False, "error": "file_too_large"}), 400
+            fname = f"vfx{shot.id}-{uuid.uuid4().hex}{ext}"
+            dest = os.path.join(vfx_version_upload_root, fname)
+            try:
+                with open(dest, "wb") as f:
+                    f.write(raw)
+            except OSError:
+                return jsonify({"ok": False, "error": "save_failed"}), 500
+            image = fname
+            comment = (request.form.get("comment") or "").strip()
+        if not image and request.is_json:
+            body = request.get_json(silent=True) or {}
+            image = (body.get("image") or "").strip()
+            comment = (body.get("comment") or "").strip()
+        elif not image:
+            image = (request.form.get("image") or "").strip()
+            comment = (request.form.get("comment") or "").strip()
+        if not image:
+            return jsonify({"ok": False, "error": "image_required"}), 400
+        if len(comment) > 20_000:
+            return jsonify({"ok": False, "error": "comment_too_long"}), 400
+        next_version = (
+            db.session.query(func.max(VfxVersion.version_number)).filter(VfxVersion.shot_id == shot.id).scalar()
+        )
+        ver = VfxVersion(
+            shot_id=shot.id,
+            version_number=max(0, int(next_version or 0)) + 1,
+            image=image,
+            comment=comment,
+            created_at=now_local(),
+        )
+        db.session.add(ver)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/api/shots/<int:shot_id>/comments", methods=["POST"])
+    def project_vfx_api_shot_comment_add(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        uid = directory_user_id_for_account(acc)
+        if uid is None:
+            return jsonify({"ok": False, "error": "no_directory_user"}), 403
+        shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
+        if shot is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        data = request.get_json(silent=True) or {}
+        body = (data.get("body") or "").strip()
+        if not body:
+            return jsonify({"ok": False, "error": "empty_body"}), 400
+        if len(body) > 20_000:
+            return jsonify({"ok": False, "error": "body_too_long"}), 400
+        parent_id = data.get("parent_id")
+        pid: int | None = None
+        if parent_id is not None and str(parent_id).strip() != "":
+            try:
+                pid = int(parent_id)
+            except (TypeError, ValueError):
+                pid = None
+            if pid is not None:
+                parent = VfxShotComment.query.filter_by(id=pid, shot_id=shot.id).first()
+                if parent is None:
+                    return jsonify({"ok": False, "error": "invalid_parent"}), 400
+        row = VfxShotComment(
+            shot_id=shot.id,
+            user_id=uid,
+            parent_id=pid,
+            body=body,
+            resolved=False,
+            created_at=now_local(),
+        )
+        db.session.add(row)
+        db.session.commit()
+        u = db.session.get(User, uid)
+        comment_out = {
+            "id": row.id,
+            "userId": uid,
+            "userName": (u.name if u else "Unknown"),
+            "body": row.body,
+            "parentId": row.parent_id,
+            "resolved": False,
+            "createdAt": isoformat_stored_instant(row.created_at),
+        }
+        return jsonify({"ok": True, "comment": comment_out})
+
+    @app.route("/projects/<int:project_id>/vfx/api/comments/<int:comment_id>/resolve", methods=["POST"])
+    def project_vfx_api_comment_resolve(project_id: int, comment_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        row = (
+            VfxShotComment.query.join(VfxShot, VfxShotComment.shot_id == VfxShot.id)
+            .filter(VfxShotComment.id == comment_id, VfxShot.project_id == project_id)
+            .first()
+        )
+        if row is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        row.resolved = True
+        db.session.commit()
+        return jsonify({"ok": True, "commentId": comment_id, "resolved": True})
+
+    @app.route("/projects/<int:project_id>/vfx/scenes/<int:scene_id>/shots", methods=["POST"])
+    def project_vfx_scene_add_shot(project_id: int, scene_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        scene = shooting_day_scene_for_project(scene_id, project_id)
+        if scene is None:
+            abort(404)
+        if not bool(scene.needs_vfx):
+            flash("This scene is not marked as Needs VFX.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        ep_num = max(1, int(scene.episode_number or 1))
+        scene_num = _parse_scene_number_from_label(scene.scene_label, fallback=scene.scene_number or 1)
+        shot_num = _next_vfx_shot_number(scene.id)
+        dep = (request.form.get("department") or "animation").strip().lower()
+        if dep not in VFX_DEPARTMENTS:
+            dep = "animation"
+        shot = VfxShot(
+            project_id=project_id,
+            scene_id=scene.id,
+            episode_number=ep_num,
+            reel_number=None,
+            shot_number=shot_num,
+            shot_code=_build_vfx_shot_code(ep_num, scene_num, shot_num),
+            shot_briefing="",
+            department=dep,
+            status="pending",
+            created_at=now_local(),
+        )
+        db.session.add(shot)
+        db.session.commit()
+        if (request.headers.get("X-VFX-Response") or "").strip().lower() == "json":
+            return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+        flash(f"Shot created: {shot.shot_code}", "success")
+        return redirect(url_for("project_vfx", project_id=project_id))
+
+    @app.route("/projects/<int:project_id>/vfx/shots/<int:shot_id>/update", methods=["POST"])
+    def project_vfx_shot_update(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        shot = (
+            VfxShot.query.options(joinedload(VfxShot.scene).joinedload(ShootingDayScene.shooting_day))
+            .filter_by(id=shot_id, project_id=project_id)
+            .first()
+        )
+        if shot is None:
+            abort(404)
+        status = (request.form.get("status") or shot.status or "pending").strip().lower()
+        if status not in VFX_EDITOR_STATUSES:
+            flash("Invalid shot status.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        briefing = (request.form.get("shot_briefing") or "").strip()
+        if len(briefing) > 20_000:
+            flash("Shot briefing is too long.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        dep = (request.form.get("department") or shot.department or "animation").strip().lower()
+        if dep not in VFX_DEPARTMENTS:
+            flash("Invalid department.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        shot.status = status
+        shot.shot_briefing = briefing
+        shot.department = dep
+        db.session.commit()
+        flash(f"Updated {shot.shot_code}.", "success")
+        return redirect(url_for("project_vfx", project_id=project_id))
+
+    @app.route("/projects/<int:project_id>/vfx/shots/<int:shot_id>/versions", methods=["POST"])
+    def project_vfx_add_version(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
+        if shot is None:
+            abort(404)
+        image = (request.form.get("image") or "").strip()
+        comment = (request.form.get("comment") or "").strip()
+        if not image:
+            flash("Version image URL/path is required.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        if len(comment) > 20_000:
+            flash("Version comment is too long.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        next_version = (
+            db.session.query(func.max(VfxVersion.version_number))
+            .filter(VfxVersion.shot_id == shot.id)
+            .scalar()
+        )
+        ver = VfxVersion(
+            shot_id=shot.id,
+            version_number=max(0, int(next_version or 0)) + 1,
+            image=image,
+            comment=comment,
+            created_at=now_local(),
+        )
+        db.session.add(ver)
+        db.session.commit()
+        flash(f"Added {shot.shot_code} v{ver.version_number}.", "success")
+        return redirect(url_for("project_vfx", project_id=project_id))
+
+    @app.route("/projects/<int:project_id>/vfx/scenes/<int:scene_id>/references", methods=["POST"])
+    def project_vfx_add_scene_reference(project_id: int, scene_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        scene = shooting_day_scene_for_project(scene_id, project_id)
+        if scene is None:
+            abort(404)
+        video_url = (request.form.get("video_url") or "").strip()
+        video_file = request.files.get("video_file")
+        if video_file and (video_file.filename or "").strip():
+            orig = secure_filename(video_file.filename) or "reference"
+            ext = os.path.splitext(orig)[1].lower()
+            if ext not in SCENE_REF_ALLOWED_EXT:
+                flash("Unsupported video format.", "error")
+                return redirect(url_for("project_vfx", project_id=project_id))
+            raw = video_file.read()
+            if len(raw) > SCENE_REF_MAX_BYTES:
+                flash("Video file is too large.", "error")
+                return redirect(url_for("project_vfx", project_id=project_id))
+            fname = f"sc{scene.id}-{uuid.uuid4().hex}{ext}"
+            dest = os.path.join(scene_ref_upload_root, fname)
+            try:
+                with open(dest, "wb") as f:
+                    f.write(raw)
+            except OSError:
+                flash("Could not save uploaded video.", "error")
+                return redirect(url_for("project_vfx", project_id=project_id))
+            video_url = fname
+        notes = (request.form.get("notes") or "").strip()
+        if not video_url:
+            flash("Reference video URL/path is required.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        if len(notes) > 20_000:
+            flash("Reference notes are too long.", "error")
+            return redirect(url_for("project_vfx", project_id=project_id))
+        ref = SceneReference(
+            scene_id=scene.id,
+            video_url=video_url,
+            notes=notes,
+            created_at=now_local(),
+        )
+        db.session.add(ref)
+        db.session.commit()
+        if (request.headers.get("X-VFX-Response") or "").strip().lower() == "json":
+            return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+        flash("Scene reference added.", "success")
+        return redirect(url_for("project_vfx", project_id=project_id))
+
+    @app.route("/projects/<int:project_id>/vfx/api/references/<int:reference_id>/delete", methods=["POST"])
+    def project_vfx_api_reference_delete(project_id: int, reference_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        ref = (
+            SceneReference.query.join(ShootingDayScene, SceneReference.scene_id == ShootingDayScene.id)
+            .join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+            .filter(
+                SceneReference.id == reference_id,
+                ShootingDay.project_id == project_id,
+            )
+            .first()
+        )
+        if ref is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        if not _vfx_media_is_remote(ref.video_url):
+            remove_scene_reference_file(ref.video_url)
+        db.session.delete(ref)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/scene-reference-file/<path:filename>", methods=["GET"])
+    def project_vfx_scene_reference_file(project_id: int, filename: str):
+        actor = account_from_session()
+        if actor is None or not account_can_access_project(actor, project_id):
+            abort(403)
+        if "/" in filename or "\\" in filename or ".." in filename or filename.startswith("."):
+            abort(404)
+        ref = (
+            SceneReference.query.join(ShootingDayScene, SceneReference.scene_id == ShootingDayScene.id)
+            .join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+            .filter(
+                ShootingDay.project_id == project_id,
+                SceneReference.video_url == filename,
+            )
+            .first()
+        )
+        if ref is None:
+            abort(404)
+        return send_from_directory(scene_ref_upload_root, filename)
 
     @app.route("/projects/<int:project_id>/episodes", methods=["GET", "POST"])
     def project_episodes(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(acc, p.id):
             flash("You do not have access to that project.", "error")
@@ -3741,7 +6229,7 @@ def create_app() -> Flask:
         methods=["POST"],
     )
     def shooting_day_assign_scene(project_id: int, day_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_can_access_project(acc, project_id):
             flash("You do not have access to that project.", "error")
             return redirect(url_for("projects_list"))
@@ -3798,8 +6286,6 @@ def create_app() -> Flask:
             needs_vfx=needs_vfx,
         )
         db.session.add(row)
-        db.session.flush()
-        ensure_vfx_shot_for_scene(row)
         db.session.commit()
         flash("Row added to this shooting day.", "success")
         return redirect(
@@ -3811,7 +6297,7 @@ def create_app() -> Flask:
         methods=["POST"],
     )
     def shooting_day_scene_update(project_id: int, link_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_can_access_project(acc, project_id):
             flash("You do not have access to that project.", "error")
             return redirect(url_for("projects_list"))
@@ -3861,16 +6347,6 @@ def create_app() -> Flask:
         link.first_edit_done = request.form.get("first_edit_done") == "1"
         link.needs_vfx = request.form.get("needs_vfx") == "1"
         link.status = "done" if (link.sync_done and link.first_edit_done) else "pending"
-        shot = VfxShot.query.filter_by(shooting_day_scene_id=link.id).first()
-        if link.needs_vfx:
-            shot = ensure_vfx_shot_for_scene(link)
-        if shot is not None:
-            shot.project_id = link.shooting_day.project_id
-            shot.shooting_day_id = link.shooting_day_id
-            shot.episode_number = max(1, int(link.episode_number or 1))
-            shot.scene_number = _parse_scene_number_from_label(link.scene_label, fallback=link.scene_number or 1)
-            if not (shot.description or "").strip():
-                shot.description = (link.scene_label or "").strip() or f"Scene {shot.scene_number}"
         db.session.commit()
         flash("Shooting day row updated.", "success")
         return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
@@ -3880,7 +6356,7 @@ def create_app() -> Flask:
         methods=["POST"],
     )
     def shooting_day_scene_delete(project_id: int, link_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_can_access_project(acc, project_id):
             flash("You do not have access to that project.", "error")
             return redirect(url_for("projects_list"))
@@ -3892,224 +6368,32 @@ def create_app() -> Flask:
             {Booking.scene_id: None},
             synchronize_session=False,
         )
-        shot = VfxShot.query.filter_by(shooting_day_scene_id=link_id).first()
-        if shot is not None:
-            Booking.query.filter_by(vfx_shot_id=shot.id).update(
-                {Booking.vfx_shot_id: None},
-                synchronize_session=False,
+        shot_ids = [int(s.id) for s in (link.vfx_shots or [])]
+        if shot_ids:
+            for sh in link.vfx_shots or []:
+                rf = (sh.shot_ref_frame or "").strip()
+                if rf and not _vfx_media_is_remote(rf):
+                    remove_vfx_version_file(rf)
+            for ver in VfxVersion.query.filter(VfxVersion.shot_id.in_(shot_ids)).all():
+                img = (ver.image or "").strip()
+                if img and not (
+                    img.lower().startswith("http://") or img.lower().startswith("https://")
+                ):
+                    remove_vfx_version_file(img)
+            VfxShotComment.query.filter(VfxShotComment.shot_id.in_(shot_ids)).delete(
+                synchronize_session=False
             )
-            db.session.delete(shot)
+            VfxVersion.query.filter(VfxVersion.shot_id.in_(shot_ids)).delete(synchronize_session=False)
+            VfxShot.query.filter(VfxShot.id.in_(shot_ids)).delete(synchronize_session=False)
+        for rf in SceneReference.query.filter_by(scene_id=link_id).all():
+            remove_scene_reference_file(rf.video_url)
+        SceneReference.query.filter_by(scene_id=link_id).delete(synchronize_session=False)
         db.session.delete(link)
         db.session.commit()
+        if (request.headers.get("X-VFX-Response") or "").strip().lower() == "json":
+            return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
         flash("Scene row removed from this day.", "success")
         return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
-
-    @app.route("/projects/<int:project_id>/vfx/shots/<int:shot_id>", methods=["PATCH"])
-    def project_vfx_shot_update(project_id: int, shot_id: int):
-        acc = Account.query.get(session.get("account_id"))
-        if not account_can_access_project(acc, project_id):
-            return jsonify({"error": "forbidden"}), 403
-        shot = vfx_shot_for_project(shot_id, project_id)
-        if shot is None:
-            return jsonify({"error": "not_found"}), 404
-        if not request.is_json:
-            return jsonify({"error": "validation", "message": "JSON body required."}), 400
-        data = request.get_json(silent=True) or {}
-        if not isinstance(data, dict):
-            return jsonify({"error": "validation", "message": "Invalid body."}), 400
-
-        if (shot.status or "").strip().lower() == "delivered":
-            return (
-                jsonify(
-                    {
-                        "error": "validation",
-                        "message": "Delivered shots are locked.",
-                    }
-                ),
-                400,
-            )
-
-        prev_status = (shot.status or "pending").strip().lower()
-        status_in = (data.get("status") or shot.status or "pending").strip().lower()
-        if status_in not in VFX_STATUS_INDEX:
-            return jsonify({"error": "validation", "message": "Invalid status."}), 400
-        if not _vfx_status_transition_ok(shot.status, status_in):
-            return (
-                jsonify(
-                    {
-                        "error": "validation",
-                        "message": "Status must follow workflow order without skipping.",
-                    }
-                ),
-                400,
-            )
-
-        priority_in = (data.get("priority") or shot.priority or "medium").strip().lower()
-        if priority_in not in VFX_PRIORITIES:
-            return jsonify({"error": "validation", "message": "Invalid priority."}), 400
-
-        complexity_in = (data.get("complexity") or shot.complexity or "medium").strip().lower()
-        if complexity_in not in VFX_COMPLEXITIES:
-            return jsonify({"error": "validation", "message": "Invalid complexity."}), 400
-
-        assigned_artist_id: int | None = None
-        raw_assigned_to = data.get("assigned_artist_id", data.get("assigned_to"))
-        if raw_assigned_to is not None and str(raw_assigned_to).strip() != "":
-            try:
-                assigned_artist_id = int(raw_assigned_to)
-            except (TypeError, ValueError):
-                return jsonify({"error": "validation", "message": "Invalid assignee."}), 400
-            pm = ProjectMember.query.filter_by(project_id=project_id, user_id=assigned_artist_id).first()
-            if pm is None:
-                return jsonify({"error": "validation", "message": "Assignee must be on this project."}), 400
-        assigned_vendor_id: int | None = None
-        raw_vendor_id = data.get("assigned_vendor_id")
-        if raw_vendor_id is not None and str(raw_vendor_id).strip() != "":
-            try:
-                assigned_vendor_id = int(raw_vendor_id)
-            except (TypeError, ValueError):
-                return jsonify({"error": "validation", "message": "Invalid vendor."}), 400
-            vendor_obj = Vendor.query.get(assigned_vendor_id)
-            if vendor_obj is None:
-                return jsonify({"error": "validation", "message": "Vendor not found."}), 400
-
-        assigned_vendor_name = (data.get("assigned_vendor") or "").strip()
-        if len(assigned_vendor_name) > 120:
-            return jsonify({"error": "validation", "message": "Vendor name is too long."}), 400
-        if status_in != "pending" and assigned_artist_id is None and assigned_vendor_id is None and not assigned_vendor_name:
-            return (
-                jsonify(
-                    {
-                        "error": "validation",
-                        "message": "Assign an artist or vendor before moving status forward.",
-                    }
-                ),
-                400,
-            )
-
-        description = (data.get("description") or "").strip()
-        if len(description) > 20_000:
-            return jsonify({"error": "validation", "message": "Description is too long."}), 400
-
-        try:
-            estimated_days = max(0, int(data.get("estimated_days") or 0))
-            actual_days = max(0, int(data.get("actual_days") or 0))
-        except (TypeError, ValueError):
-            return jsonify({"error": "validation", "message": "Days must be whole numbers."}), 400
-        try:
-            estimated_cost = max(0.0, float(data.get("estimated_cost") or 0))
-            actual_cost = max(0.0, float(data.get("actual_cost") or 0))
-        except (TypeError, ValueError):
-            return jsonify({"error": "validation", "message": "Costs must be numeric."}), 400
-        currency = (data.get("currency") or shot.currency or "USD").strip().upper()
-        if len(currency) > 8:
-            return jsonify({"error": "validation", "message": "Currency is too long."}), 400
-
-        shot.status = status_in
-        shot.priority = priority_in
-        shot.complexity = complexity_in
-        shot.assigned_artist_id = assigned_artist_id
-        shot.assigned_vendor_id = assigned_vendor_id
-        shot.assigned_to = assigned_artist_id
-        shot.assigned_vendor = assigned_vendor_name
-        shot.description = description
-        shot.estimated_days = estimated_days
-        shot.actual_days = actual_days
-        shot.estimated_cost = estimated_cost
-        shot.actual_cost = actual_cost
-        shot.currency = currency
-        shot.version = max(1, int(shot.version or 1)) + 1
-        shot.version_number = max(1, int(shot.version_number or 1)) + 1
-        shot.updated_at = datetime.now(timezone.utc)
-        db.session.commit()
-        if status_in == "delivered" and prev_status != "delivered":
-            emit_vfx_delivered_activity(shot)
-            db.session.commit()
-        evaluate_vfx_review_notifications(project_id)
-        db.session.commit()
-        assignee = shot.assignee
-        assignee_label = ""
-        if assignee is not None:
-            role_name = (
-                (assignee.job_title.name or "").strip()
-                if assignee.job_title is not None and assignee.job_title.name
-                else ""
-            )
-            assignee_label = (assignee.name or "").strip()
-            if role_name:
-                assignee_label += f" — {role_name}"
-        vendor = shot.vendor
-        vendor_label = ""
-        if vendor is not None:
-            vendor_label = (vendor.name or "").strip()
-            if (vendor.vendor_type or "").strip():
-                vendor_label += f" ({vendor.vendor_type})"
-        return jsonify(
-            {
-                "ok": True,
-                "shot": {
-                    "id": shot.id,
-                    "status": shot.status,
-                    "priority": shot.priority,
-                    "complexity": shot.complexity,
-                    "version": int(shot.version_number or shot.version or 1),
-                    "assigned_artist_id": shot.assigned_artist_id,
-                    "assigned_vendor_id": shot.assigned_vendor_id,
-                    "assigned_to": shot.assigned_to,
-                    "assigned_vendor": shot.assigned_vendor or "",
-                    "assigned_label": assignee_label,
-                    "vendor_label": vendor_label,
-                    "description": shot.description or "",
-                    "estimated_days": int(shot.estimated_days or 0),
-                    "actual_days": int(shot.actual_days or 0),
-                    "estimated_cost": float(shot.estimated_cost or 0),
-                    "actual_cost": float(shot.actual_cost or 0),
-                    "currency": shot.currency or "USD",
-                    "updated_at": (
-                        shot.updated_at.isoformat(timespec="seconds") if shot.updated_at else None
-                    ),
-                },
-            }
-        )
-
-    @app.route("/projects/<int:project_id>/vfx/shots/<int:shot_id>/comments", methods=["POST"])
-    def project_vfx_shot_comment_add(project_id: int, shot_id: int):
-        acc = Account.query.get(session.get("account_id"))
-        if not account_can_access_project(acc, project_id):
-            return jsonify({"error": "forbidden"}), 403
-        shot = vfx_shot_for_project(shot_id, project_id)
-        if shot is None:
-            return jsonify({"error": "not_found"}), 404
-        uid = directory_user_id_for_account(acc)
-        if uid is None:
-            return jsonify({"error": "validation", "message": "No linked user for this account."}), 400
-        body = request.get_json(silent=True) if request.is_json else {}
-        if not isinstance(body, dict):
-            body = {}
-        txt = (body.get("comment") or "").strip()
-        if not txt:
-            return jsonify({"error": "validation", "message": "Comment is required."}), 400
-        if len(txt) > 5000:
-            return jsonify({"error": "validation", "message": "Comment is too long."}), 400
-        c = VfxComment(vfx_shot_id=shot.id, user_id=uid, comment=txt)
-        db.session.add(c)
-        shot.version = max(1, int(shot.version or 1)) + 1
-        shot.version_number = max(1, int(shot.version_number or 1)) + 1
-        shot.updated_at = datetime.now(timezone.utc)
-        db.session.commit()
-        who = User.query.get(uid)
-        return jsonify(
-            {
-                "ok": True,
-                "comment": {
-                    "id": c.id,
-                    "text": c.comment,
-                    "user": (who.name or who.email).strip() if who else "User",
-                    "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
-                },
-                "version": int(shot.version_number or shot.version or 1),
-            }
-        )
 
     @app.route("/projects/<int:project_id>/scenes/<int:scene_id>/mark-done", methods=["POST"])
     def production_scene_mark_done(project_id: int, scene_id: int):
@@ -4117,7 +6401,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/chat/messages", methods=["GET", "POST"])
     def project_chat_messages(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         viewer_uid = directory_user_id_for_account(acc)
@@ -4276,7 +6560,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/chat/messages/<int:message_id>", methods=["DELETE"])
     def project_chat_message_delete(project_id: int, message_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         uid = directory_user_id_for_account(acc)
@@ -4297,7 +6581,7 @@ def create_app() -> Flask:
             )
         if not m.is_deleted:
             m.is_deleted = True
-            m.deleted_at = datetime.now(timezone.utc)
+            m.deleted_at = now_local()
             db.session.commit()
             socketio.emit(
                 "chat_updated",
@@ -4321,7 +6605,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/chat/messages/<int:message_id>/reaction", methods=["POST"])
     def project_chat_message_reaction(project_id: int, message_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         uid = directory_user_id_for_account(acc)
@@ -4382,7 +6666,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/chat/attachments/<path:filename>")
     def project_chat_attachment(project_id: int, filename: str):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, project_id):
             abort(403)
         if "/" in filename or "\\" in filename or ".." in filename or filename.startswith("."):
@@ -4418,7 +6702,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/chat/team", methods=["GET"])
     def project_chat_team(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         member_ids = {
@@ -4441,7 +6725,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/chat/unread-count")
     def project_chat_unread_count(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         n = chat_unread_count_for_account(acc, project_id)
@@ -4449,7 +6733,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/chat/mark-read", methods=["POST"])
     def project_chat_mark_read(project_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, project_id):
             return jsonify({"error": "forbidden"}), 403
         chat_mark_project_read(acc, project_id)
@@ -4457,7 +6741,7 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/edit", methods=["GET", "POST"])
     def project_edit(project_id: int):
-        actor = Account.query.get(session.get("account_id"))
+        actor = db.session.get(Account, session.get("account_id"))
         if actor is None or not account_is_elevated(actor):
             flash("Only administrators and super users can edit project details.", "error")
             return redirect(url_for("project_detail", project_id=project_id))
@@ -4506,9 +6790,9 @@ def create_app() -> Flask:
 
     @app.route("/projects/<int:project_id>/members/add", methods=["GET", "POST"])
     def project_members_add(project_id: int):
-        actor = Account.query.get(session.get("account_id"))
-        if actor is None or not account_is_elevated(actor):
-            flash("Only administrators and super users can change project teams.", "error")
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_manage_project_team(actor):
+            flash("Only administrators, super users, and producers can change project teams.", "error")
             return redirect(url_for("projects_list"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(actor, p.id):
@@ -4516,33 +6800,63 @@ def create_app() -> Flask:
             return redirect(url_for("projects_list"))
         if request.method == "GET":
             return redirect(url_for("project_detail", project_id=p.id))
-        uid = request.form.get("user_id", type=int)
+        raw_ids = request.form.getlist("user_ids")
+        if not raw_ids:
+            single = request.form.get("user_id")
+            if single:
+                raw_ids = [single]
+        candidate_ids: list[int] = []
+        for raw in raw_ids:
+            try:
+                uid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if uid not in candidate_ids:
+                candidate_ids.append(uid)
+        if not candidate_ids:
+            flash("Choose at least one user from the list to add.", "error")
+            return redirect(url_for("project_detail", project_id=p.id))
+
+        existing_ids = {
+            int(m.user_id)
+            for m in ProjectMember.query.filter_by(project_id=p.id).all()
+            if m.user_id is not None
+        }
+        users_by_id = {
+            int(u.id): u for u in User.query.filter(User.id.in_(candidate_ids)).all()
+        }
         added = 0
-        if not uid:
-            flash("Choose a user from the list to add.", "error")
-            return redirect(url_for("project_detail", project_id=p.id))
-        u = User.query.get(uid)
-        if not u:
-            flash("That user was not found.", "error")
-            return redirect(url_for("project_detail", project_id=p.id))
-        if ProjectMember.query.filter_by(project_id=p.id, user_id=uid).first():
-            flash("That user is already on this project.", "error")
-            return redirect(url_for("project_detail", project_id=p.id))
-        db.session.add(ProjectMember(project_id=p.id, user_id=uid))
+        skipped_missing = 0
+        skipped_existing = 0
+        for uid in candidate_ids:
+            if uid not in users_by_id:
+                skipped_missing += 1
+                continue
+            if uid in existing_ids:
+                skipped_existing += 1
+                continue
+            db.session.add(ProjectMember(project_id=p.id, user_id=uid))
+            existing_ids.add(uid)
+            added += 1
         try:
             db.session.commit()
         except sa_exc.IntegrityError:
             db.session.rollback()
-            flash("Could not add team member (duplicate or database error).", "error")
+            flash("Could not add one or more team members (duplicate or database error).", "error")
             return redirect(url_for("project_detail", project_id=p.id))
-        flash("Team member added to the project.", "success")
+        if added:
+            flash(f"Added {added} team member(s) to the project.", "success")
+        if skipped_existing:
+            flash(f"{skipped_existing} selected user(s) were already on this project.", "warning")
+        if skipped_missing:
+            flash(f"{skipped_missing} selected user(s) were not found.", "error")
         return redirect(url_for("project_detail", project_id=p.id))
 
     @app.route("/projects/<int:project_id>/members/<int:user_id>/remove", methods=["GET", "POST"])
     def project_member_remove(project_id: int, user_id: int):
-        actor = Account.query.get(session.get("account_id"))
-        if actor is None or not account_is_elevated(actor):
-            flash("Only administrators and super users can change project teams.", "error")
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_manage_project_team(actor):
+            flash("Only administrators, super users, and producers can change project teams.", "error")
             return redirect(url_for("projects_list"))
         p = Project.query.get_or_404(project_id)
         if not account_can_access_project(actor, p.id):
@@ -4559,28 +6873,423 @@ def create_app() -> Flask:
         flash("Removed from project team.", "success")
         return redirect(url_for("project_detail", project_id=p.id))
 
+    @app.route("/project/<int:project_id>/audio-library/create", methods=["POST"])
+    def project_audio_library_create(project_id: int):
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_manage_project_team(actor):
+            flash("Only administrators, super users, and producers can manage project audio libraries.", "error")
+            return redirect(url_for("project_audio_library", project_id=project_id))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(actor, p.id):
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        name = (request.form.get("name") or "").strip()
+        if not name:
+            flash("Library name is required.", "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        parent_id = request.form.get("parent_id", type=int)
+        if parent_id:
+            parent = db.session.get(ProjectAudioLibrary, int(parent_id))
+            if parent is None or int(parent.project_id) != int(p.id):
+                flash("Invalid parent library.", "error")
+                return redirect(url_for("project_audio_library", project_id=p.id))
+        else:
+            parent = ensure_project_main_audio_library(p.id)
+            parent_id = int(parent.id)
+        row = ProjectAudioLibrary(project_id=p.id, name=name[:255], parent_id=parent_id)
+        db.session.add(row)
+        db.session.commit()
+        flash("Audio sub-library created.", "success")
+        return redirect(url_for("project_audio_library", project_id=p.id))
+
+    @app.route("/project/<int:project_id>/audio-library/move", methods=["POST"])
+    def project_audio_library_move(project_id: int):
+        wants_json = "application/json" in (request.headers.get("Accept") or "").lower()
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_manage_project_team(actor):
+            msg = "Only administrators, super users, and producers can manage project audio libraries."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=project_id))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(actor, p.id):
+            msg = "You do not have access to that project."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("projects_list"))
+        payload = request.get_json(silent=True) or {}
+        library_id = payload.get("library_id", request.form.get("library_id", type=int))
+        target_parent_id = payload.get(
+            "target_parent_id", request.form.get("target_parent_id", type=int)
+        )
+        try:
+            library_id = int(library_id)
+        except (TypeError, ValueError):
+            library_id = 0
+        if library_id <= 0:
+            msg = "Invalid library."
+            if wants_json:
+                return jsonify({"ok": False, "error": "invalid", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        lib = db.session.get(ProjectAudioLibrary, library_id)
+        if lib is None or int(lib.project_id) != int(p.id):
+            msg = "Library not found."
+            if wants_json:
+                return jsonify({"ok": False, "error": "not_found", "message": msg}), 404
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        if target_parent_id in ("", None):
+            target_parent_id = None
+            target_parent = None
+        else:
+            try:
+                target_parent_id = int(target_parent_id)
+            except (TypeError, ValueError):
+                target_parent_id = 0
+            target_parent = db.session.get(ProjectAudioLibrary, target_parent_id)
+            if target_parent is None or int(target_parent.project_id) != int(p.id):
+                msg = "Target parent library not found."
+                if wants_json:
+                    return jsonify({"ok": False, "error": "invalid_parent", "message": msg}), 400
+                flash(msg, "error")
+                return redirect(url_for("project_audio_library", project_id=p.id))
+        if target_parent_id is not None and int(target_parent_id) == int(lib.id):
+            msg = "A library cannot be moved into itself."
+            if wants_json:
+                return jsonify({"ok": False, "error": "cycle", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        # Keep the auto-created main library as root.
+        if str(lib.name or "").strip().lower() == "main" and lib.parent_id is None:
+            msg = "Main library must stay at the root level."
+            if wants_json:
+                return jsonify({"ok": False, "error": "main_locked", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        # Prevent cycles: target parent cannot be a descendant of the moved library.
+        if target_parent_id is not None:
+            parent_cursor = target_parent
+            while parent_cursor is not None:
+                if int(parent_cursor.id) == int(lib.id):
+                    msg = "Invalid move: cannot move a library into its own descendant."
+                    if wants_json:
+                        return jsonify({"ok": False, "error": "cycle", "message": msg}), 400
+                    flash(msg, "error")
+                    return redirect(url_for("project_audio_library", project_id=p.id))
+                parent_cursor = (
+                    db.session.get(ProjectAudioLibrary, int(parent_cursor.parent_id))
+                    if parent_cursor.parent_id
+                    else None
+                )
+        lib.parent_id = target_parent_id
+        db.session.commit()
+        msg = "Library moved."
+        if wants_json:
+            return jsonify(
+                {
+                    "ok": True,
+                    "message": msg,
+                    "library_id": int(lib.id),
+                    "parent_id": (int(lib.parent_id) if lib.parent_id else None),
+                }
+            )
+        flash(msg, "success")
+        return redirect(url_for("project_audio_library", project_id=p.id))
+
+    @app.route("/project/<int:project_id>/audio-library/delete/<int:library_id>", methods=["POST"])
+    def project_audio_library_delete(project_id: int, library_id: int):
+        wants_json = "application/json" in (request.headers.get("Accept") or "").lower()
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_manage_project_team(actor):
+            msg = "Only administrators, super users, and producers can manage project audio libraries."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=project_id))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(actor, p.id):
+            msg = "You do not have access to that project."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("projects_list"))
+        lib = db.session.get(ProjectAudioLibrary, int(library_id))
+        if lib is None or int(lib.project_id) != int(p.id):
+            msg = "Library not found."
+            if wants_json:
+                return jsonify({"ok": False, "error": "not_found", "message": msg}), 404
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+
+        main_library = ensure_project_main_audio_library(p.id)
+        if int(lib.id) == int(main_library.id):
+            msg = "Main library cannot be removed."
+            if wants_json:
+                return jsonify({"ok": False, "error": "main_locked", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+
+        fallback_parent_id = (
+            int(lib.parent_id) if lib.parent_id else int(main_library.id)
+        )
+
+        for child in ProjectAudioLibrary.query.filter_by(parent_id=lib.id).all():
+            child.parent_id = fallback_parent_id
+        for linked in ProjectAudioFolder.query.filter_by(project_id=p.id, library_id=lib.id).all():
+            linked.library_id = fallback_parent_id
+
+        db.session.delete(lib)
+        db.session.commit()
+        msg = "Library removed."
+        if wants_json:
+            return jsonify({"ok": True, "message": msg, "fallback_parent_id": fallback_parent_id})
+        flash(msg, "success")
+        return redirect(url_for("project_audio_library", project_id=p.id))
+
+    @app.route("/project/<int:project_id>/audio-library/link-folder", methods=["POST"])
+    def project_audio_library_link_folder(project_id: int):
+        wants_json = "application/json" in (request.headers.get("Accept") or "").lower()
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None:
+            msg = "Please sign in to continue."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=project_id))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(actor, p.id):
+            msg = "You do not have access to that project."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("projects_list"))
+        library_id = request.form.get("library_id", type=int)
+        mount_id = request.form.get("mount_id", type=int)
+        folder_path = (request.form.get("folder_path") or "").strip().replace("\\", "/")
+        if library_id is None or mount_id is None:
+            msg = "Library and mount are required."
+            if wants_json:
+                return jsonify({"ok": False, "error": "invalid", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        lib = db.session.get(ProjectAudioLibrary, int(library_id))
+        if lib is None or int(lib.project_id) != int(p.id):
+            msg = "Invalid target library."
+            if wants_json:
+                return jsonify({"ok": False, "error": "invalid_library", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        mount = db.session.get(MusicMount, int(mount_id))
+        if mount is None:
+            msg = "Invalid mount."
+            if wants_json:
+                return jsonify({"ok": False, "error": "invalid_mount", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        exists = ProjectAudioFolder.query.filter_by(
+            project_id=p.id,
+            library_id=lib.id,
+            mount_id=mount.id,
+            folder_path=folder_path,
+        ).first()
+        if exists is None:
+            db.session.add(
+                ProjectAudioFolder(
+                    project_id=p.id,
+                    library_id=lib.id,
+                    mount_id=mount.id,
+                    folder_path=folder_path,
+                )
+            )
+            db.session.commit()
+            msg = "Indexed folder linked to project library."
+            if wants_json:
+                return jsonify({"ok": True, "linked": True, "message": msg})
+            flash(msg, "success")
+        else:
+            msg = "That folder is already linked to this library."
+            if wants_json:
+                return jsonify({"ok": True, "linked": False, "message": msg})
+            flash(msg, "warning")
+        return redirect(url_for("project_audio_library", project_id=p.id))
+
+    @app.route("/project/<int:project_id>/audio-library/unlink-folder/<int:link_id>", methods=["POST"])
+    def project_audio_library_unlink_folder(project_id: int, link_id: int):
+        wants_json = "application/json" in (request.headers.get("Accept") or "").lower()
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_manage_project_team(actor):
+            msg = "Only administrators, super users, and producers can manage project audio libraries."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=project_id))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(actor, p.id):
+            msg = "You do not have access to that project."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("projects_list"))
+        link = db.session.get(ProjectAudioFolder, link_id)
+        if link is None or int(link.project_id) != int(p.id):
+            msg = "Linked folder not found."
+            if wants_json:
+                return jsonify({"ok": False, "error": "not_found", "message": msg}), 404
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        db.session.delete(link)
+        db.session.commit()
+        msg = "Folder removed from project audio library."
+        if wants_json:
+            return jsonify({"ok": True, "message": msg})
+        flash(msg, "success")
+        return redirect(url_for("project_audio_library", project_id=p.id))
+
+    @app.route("/project/<int:project_id>/audio-library/move-folder/<int:link_id>", methods=["POST"])
+    def project_audio_library_move_folder(project_id: int, link_id: int):
+        wants_json = "application/json" in (request.headers.get("Accept") or "").lower()
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_manage_project_team(actor):
+            msg = "Only administrators, super users, and producers can manage project audio libraries."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=project_id))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(actor, p.id):
+            msg = "You do not have access to that project."
+            if wants_json:
+                return jsonify({"ok": False, "error": "forbidden", "message": msg}), 403
+            flash(msg, "error")
+            return redirect(url_for("projects_list"))
+        link = db.session.get(ProjectAudioFolder, int(link_id))
+        if link is None or int(link.project_id) != int(p.id):
+            msg = "Linked folder not found."
+            if wants_json:
+                return jsonify({"ok": False, "error": "not_found", "message": msg}), 404
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        payload = request.get_json(silent=True) or {}
+        target_library_id = payload.get("target_library_id", request.form.get("target_library_id", type=int))
+        try:
+            target_library_id = int(target_library_id)
+        except (TypeError, ValueError):
+            target_library_id = 0
+        target_lib = db.session.get(ProjectAudioLibrary, target_library_id)
+        if target_lib is None or int(target_lib.project_id) != int(p.id):
+            msg = "Target library not found."
+            if wants_json:
+                return jsonify({"ok": False, "error": "invalid_library", "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+        if int(link.library_id) == int(target_lib.id):
+            msg = "Folder is already in that library."
+            if wants_json:
+                return jsonify({"ok": True, "moved": False, "message": msg})
+            flash(msg, "warning")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+
+        dupe = ProjectAudioFolder.query.filter_by(
+            project_id=p.id,
+            library_id=target_lib.id,
+            mount_id=link.mount_id,
+            folder_path=link.folder_path,
+        ).first()
+        if dupe is not None and int(dupe.id) != int(link.id):
+            db.session.delete(link)
+            db.session.commit()
+            msg = "Folder already existed in target library. Duplicate link removed."
+            if wants_json:
+                return jsonify({"ok": True, "moved": True, "deduped": True, "message": msg})
+            flash(msg, "success")
+            return redirect(url_for("project_audio_library", project_id=p.id))
+
+        link.library_id = int(target_lib.id)
+        db.session.commit()
+        msg = "Folder moved to target library."
+        if wants_json:
+            return jsonify({"ok": True, "moved": True, "message": msg})
+        flash(msg, "success")
+        return redirect(url_for("project_audio_library", project_id=p.id))
+
+    @app.route("/project/<int:project_id>/audio-library/<int:library_id>/files")
+    def project_audio_library_files(project_id: int, library_id: int):
+        actor = db.session.get(Account, session.get("account_id"))
+        if actor is None or not account_can_access_project(actor, project_id):
+            return jsonify({"error": "forbidden"}), 403
+        lib = db.session.get(ProjectAudioLibrary, library_id)
+        if lib is None or int(lib.project_id) != int(project_id):
+            return jsonify({"error": "not_found"}), 404
+        rows = (
+            MusicFile.query.join(
+                ProjectAudioFolder,
+                and_(
+                    MusicFile.mount_id == ProjectAudioFolder.mount_id,
+                    MusicFile.folder == ProjectAudioFolder.folder_path,
+                ),
+            )
+            .filter(ProjectAudioFolder.project_id == project_id)
+            .filter(ProjectAudioFolder.library_id == library_id)
+            .order_by(MusicFile.name.asc())
+            .all()
+        )
+        return jsonify(
+            [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "duration": float(r.duration or 0),
+                    "folder": r.folder or "",
+                }
+                for r in rows
+            ]
+        )
+
     @app.route("/projects/<int:project_id>/delete", methods=["POST"])
     def projects_delete(project_id: int):
         actor = account_from_session()
         if actor is None or not actor.is_admin:
             abort(403)
         p = Project.query.get_or_404(project_id)
-        # Important: several project-scoped relationships (notably `VfxShot.project_id`)
-        # are `NOT NULL` and are *not* configured with ORM cascades from `Project`.
-        # If we delete the `Project` first, SQLAlchemy may attempt to dissociate rows
-        # by setting those FKs to NULL, causing IntegrityError.
-        # So we remove dependent rows first.
+        # Remove dependent rows first before deleting the project.
         for b in Booking.query.filter_by(project_id=p.id).all():
             db.session.delete(b)
-
-        shots = VfxShot.query.filter_by(project_id=p.id).all()
-        shot_ids = [s.id for s in shots]
-        if shot_ids:
-            VfxComment.query.filter(VfxComment.vfx_shot_id.in_(shot_ids)).delete(
+        scene_ids = [
+            int(sc.id)
+            for sc in (
+                ShootingDayScene.query.join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+                .filter(ShootingDay.project_id == p.id)
+                .all()
+            )
+        ]
+        if scene_ids:
+            shot_rows = VfxShot.query.filter(VfxShot.scene_id.in_(scene_ids)).all()
+            shot_ids = [int(s.id) for s in shot_rows]
+            if shot_ids:
+                for sh in shot_rows:
+                    rf = (sh.shot_ref_frame or "").strip()
+                    if rf and not _vfx_media_is_remote(rf):
+                        remove_vfx_version_file(rf)
+                for ver in VfxVersion.query.filter(VfxVersion.shot_id.in_(shot_ids)).all():
+                    img = (ver.image or "").strip()
+                    if img and not (
+                        img.lower().startswith("http://") or img.lower().startswith("https://")
+                    ):
+                        remove_vfx_version_file(img)
+                VfxShotComment.query.filter(VfxShotComment.shot_id.in_(shot_ids)).delete(
+                    synchronize_session=False
+                )
+                VfxVersion.query.filter(VfxVersion.shot_id.in_(shot_ids)).delete(synchronize_session=False)
+            VfxShot.query.filter(VfxShot.scene_id.in_(scene_ids)).delete(synchronize_session=False)
+            for rf in SceneReference.query.filter(SceneReference.scene_id.in_(scene_ids)).all():
+                remove_scene_reference_file(rf.video_url)
+            SceneReference.query.filter(SceneReference.scene_id.in_(scene_ids)).delete(
                 synchronize_session=False
             )
-        for shot in shots:
-            db.session.delete(shot)
+
         for cm in ChatMessage.query.filter_by(project_id=p.id).all():
             if cm.image_path:
                 remove_chat_upload_file(cm.image_path)
@@ -4739,7 +7448,7 @@ def create_app() -> Flask:
 
     @app.route("/tasks")
     def tasks_list():
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         vis = visible_project_ids_for_account(acc)
         task_groups = TaskGroup.query.order_by(TaskGroup.sort_order, TaskGroup.name).all()
         uid = directory_user_id_for_account(acc)
@@ -4748,26 +7457,7 @@ def create_app() -> Flask:
             selected_sort = ""
 
         # Tasks page filters are client-side; load full visible set (JSON APIs unchanged).
-        if vis is None:
-            q = Task.query.filter(Task.archived.is_(False))
-        elif not vis:
-            if uid is None:
-                q = Task.query.filter(text("1=0"))
-            else:
-                q = Task.query.filter(Task.user_id == uid, Task.archived.is_(False))
-        elif uid is not None:
-            q = Task.query.filter(
-                or_(Task.project_id.in_(vis), Task.user_id == uid),
-                Task.archived.is_(False),
-            )
-        else:
-            q = Task.query.filter(Task.project_id.in_(vis), Task.archived.is_(False))
-
-        all_tasks = (
-            q.options(joinedload(Task.assignee), joinedload(Task.project))
-            .order_by(Task.created_at.desc())
-            .all()
-        )
+        all_tasks = all_tasks_for_tasks_list_page(acc)
 
         tasks_by_group: dict[int | None, list[Task]] = defaultdict(list)
         for t in all_tasks:
@@ -4859,8 +7549,8 @@ def create_app() -> Flask:
                 "status": t.status,
                 "priority": (t.priority or "medium"),
                 "archived": bool(t.archived),
-                "created_at": t.created_at.isoformat() if t.created_at else "",
-                "completed_at": t.completed_at.isoformat() if t.completed_at else "",
+                "created_at": isoformat_stored_instant(t.created_at),
+                "completed_at": isoformat_stored_instant(t.completed_at),
                 "project": {"id": p.id, "name": p.name} if p is not None else None,
                 "user": {"id": u.id, "name": u.name} if u is not None else None,
             }
@@ -4904,7 +7594,7 @@ def create_app() -> Flask:
         if not project:
             flash("Invalid project.", "error")
             return _redirect_after_task_action()
-        actor = Account.query.get(session.get("account_id"))
+        actor = db.session.get(Account, session.get("account_id"))
         vis = visible_project_ids_for_account(actor)
         if vis is not None and project.id not in vis:
             flash("You cannot create tasks for that project.", "error")
@@ -4938,6 +7628,7 @@ def create_app() -> Flask:
         )
         db.session.add(t)
         db.session.commit()
+        emit_tasks_feed_changed(project.id)
         if user.account_id is not None and (
             actor is None or user.account_id != actor.id
         ):
@@ -4957,30 +7648,207 @@ def create_app() -> Flask:
 
     @app.route("/tasks/<int:task_id>/status", methods=["POST"])
     def tasks_set_status(task_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         t = Task.query.get_or_404(task_id)
-        if not account_may_update_task_status(t, acc):
-            flash("You cannot update that task’s status.", "error")
+
+        def _tasks_status_error_redirect() -> Response:
+            raw = (request.form.get("next") or "").strip()
+            if raw.startswith("/") and not raw.startswith("//"):
+                return redirect(raw)
             return redirect(url_for("tasks_list"))
-        if t.archived:
-            flash("Unarchive the task before changing its status.", "error")
-            return _redirect_after_task_action()
+
         status = (request.form.get("status") or "").strip().lower()
         if status not in ("open", "in_progress", "done"):
             flash("Invalid status.", "error")
-            return redirect(url_for("tasks_list"))
+            return _tasks_status_error_redirect()
+        assignee_ok = account_may_update_task_status(t, acc)
+        mr_stream_ok = account_may_machine_room_operate_stream_task(t, acc) and status in (
+            "open",
+            "in_progress",
+        )
+        if not assignee_ok and not mr_stream_ok:
+            flash("You cannot update that task’s status.", "error")
+            return _tasks_status_error_redirect()
+        if status == "done" and not assignee_ok:
+            flash("You cannot mark that task done from here.", "error")
+            return _tasks_status_error_redirect()
+        if t.archived:
+            flash("Unarchive the task before changing its status.", "error")
+            return _redirect_after_task_action()
         t.status = status
         if status == "done":
-            t.completed_at = datetime.now(timezone.utc)
+            t.completed_at = now_local()
         else:
             t.completed_at = None
         db.session.commit()
+        emit_tasks_feed_changed(t.project_id)
         flash("Task status updated.", "success")
+        return _redirect_after_task_action()
+
+    @app.route("/tasks/<int:task_id>/machine-room/finish", methods=["POST"])
+    def tasks_machine_room_stream_finish(task_id: int):
+        """Machine Room: force-complete a live copy/convert task; copy may optionally start Convert."""
+        acc = db.session.get(Account, session.get("account_id"))
+        t = Task.query.get_or_404(task_id)
+        if not account_may_machine_room_operate_stream_task(t, acc):
+            flash("You cannot finish that task.", "error")
+            return _redirect_after_task_action()
+        if t.archived:
+            flash("Unarchive the task before changing its status.", "error")
+            return _redirect_after_task_action()
+        title_norm = (t.title or "").strip()
+        raw_sc = (request.form.get("start_convert") or "").strip().lower()
+        start_convert = raw_sc in ("1", "true", "yes", "on")
+        try:
+            convert_minutes = int((request.form.get("convert_minutes") or "0").strip())
+        except (TypeError, ValueError):
+            convert_minutes = 0
+        if title_norm == MR_STREAM_COPY_TITLE and start_convert and convert_minutes < 1:
+            flash("Enter a convert estimate of at least 1 minute, or choose not to start Convert.", "error")
+            return _redirect_after_task_action()
+        now = now_local()
+        est = max(0, int(t.copy_estimated_minutes or 0))
+        if est > 0:
+            t.copy_started_at = now - timedelta(minutes=est)
+        else:
+            t.copy_started_at = now
+        t.status = "done"
+        t.completed_at = now
+        pid = int(t.project_id) if t.project_id is not None else None
+        day_nm = (t.copy_day_name or "").strip() or "—"
+        unit_nm = t.copy_unit_number if t.copy_unit_number is not None else "—"
+        pname = (t.project.name or "").strip() if t.project is not None else ""
+        if pid is not None:
+            if title_norm == MR_STREAM_COPY_TITLE:
+                _notification_emit_to_project(
+                    project_id=pid,
+                    rule=f"mr_copy_finished|{t.id}",
+                    n_type="activity",
+                    severity="info",
+                    title="Copy task finished",
+                    message=(
+                        f"Machine Room marked the copy finished ({day_nm}, Unit {unit_nm})"
+                        + (f" on {pname}." if pname else ".")
+                    ),
+                    entity_type="task",
+                    entity_id=int(t.id),
+                )
+                if start_convert and convert_minutes >= 1:
+                    new_t = Task(
+                        title=MR_STREAM_CONVERT_TITLE,
+                        description="",
+                        user_id=int(t.user_id),
+                        group_id=int(t.group_id) if t.group_id is not None else None,
+                        project_id=pid,
+                        status="in_progress",
+                        priority=(t.priority or "medium"),
+                        copy_started_at=now,
+                        copy_estimated_minutes=max(1, min(convert_minutes, 2880)),
+                        copy_day_name=t.copy_day_name,
+                        copy_unit_number=t.copy_unit_number,
+                    )
+                    db.session.add(new_t)
+                    db.session.flush()
+                    nid = int(new_t.id)
+                    _notification_emit_to_project(
+                        project_id=pid,
+                        rule=f"mr_convert_started|{nid}",
+                        n_type="activity",
+                        severity="info",
+                        title="Convert task started",
+                        message=(
+                            f"Machine Room started a Convert task ({day_nm}, Unit {unit_nm}, "
+                            f"~{int(new_t.copy_estimated_minutes or 0)}m)"
+                            + (f" on {pname}." if pname else ".")
+                        ),
+                        entity_type="task",
+                        entity_id=nid,
+                    )
+                    flash("Copy finished and Convert task started. Project members were notified.", "success")
+                else:
+                    _notification_emit_to_project(
+                        project_id=pid,
+                        rule=f"mr_convert_declined|{t.id}",
+                        n_type="activity",
+                        severity="info",
+                        title="Convert not started",
+                        message=(
+                            "Machine Room finished the copy and chose not to start a Convert task "
+                            f"({day_nm}, Unit {unit_nm})"
+                            + (f" on {pname}." if pname else ".")
+                        ),
+                        entity_type="task",
+                        entity_id=int(t.id),
+                    )
+                    flash("Task finished. Project members were notified.", "success")
+            elif title_norm == MR_STREAM_CONVERT_TITLE:
+                _notification_emit_to_project(
+                    project_id=pid,
+                    rule=f"mr_convert_finished|{t.id}",
+                    n_type="activity",
+                    severity="info",
+                    title="Convert task finished",
+                    message=(
+                        f"Machine Room marked the convert finished ({day_nm}, Unit {unit_nm})"
+                        + (f" on {pname}." if pname else ".")
+                    ),
+                    entity_type="task",
+                    entity_id=int(t.id),
+                )
+                flash("Task finished. Project members were notified.", "success")
+        else:
+            flash("Task finished.", "success")
+        db.session.commit()
+        emit_tasks_feed_changed(pid)
+        return _redirect_after_task_action()
+
+    @app.route("/tasks/<int:task_id>/machine-room/cancel-delete", methods=["POST"])
+    def tasks_machine_room_stream_cancel_delete(task_id: int):
+        """Machine Room: delete a live copy task and notify the project team."""
+        acc = db.session.get(Account, session.get("account_id"))
+        t = Task.query.get_or_404(task_id)
+        if not account_may_machine_room_operate_stream_task(t, acc):
+            flash("You cannot remove that task.", "error")
+            return _redirect_after_task_action()
+        pid = int(t.project_id) if t.project_id is not None else None
+        tid = int(t.id)
+        day_nm = (t.copy_day_name or "").strip() or "—"
+        unit_nm = t.copy_unit_number if t.copy_unit_number is not None else "—"
+        assignee_label = ""
+        if t.assignee is not None:
+            assignee_label = (t.assignee.name or t.assignee.email or "").strip()
+        if pid is not None:
+            pname = (t.project.name or "").strip() if t.project is not None else ""
+            title_norm = (t.title or "").strip()
+            is_conv = title_norm == MR_STREAM_CONVERT_TITLE
+            _notification_emit_to_project(
+                project_id=pid,
+                rule=(f"mr_convert_cancelled|{tid}" if is_conv else f"mr_copy_cancelled|{tid}"),
+                n_type="activity",
+                severity="warning",
+                title=("Convert task cancelled" if is_conv else "Copy task cancelled"),
+                message=(
+                    (
+                        "Machine Room cancelled and deleted the convert task "
+                        if is_conv
+                        else "Machine Room cancelled and deleted the copy task "
+                    )
+                    + f"({day_nm}, Unit {unit_nm})"
+                    + (f" on {pname}" if pname else "")
+                    + (f", assigned to {assignee_label}." if assignee_label else ".")
+                ),
+                entity_type="task",
+                entity_id=tid,
+            )
+        db.session.delete(t)
+        db.session.commit()
+        emit_tasks_feed_changed(pid)
+        flash("Task removed. Project members were notified.", "success")
         return _redirect_after_task_action()
 
     @app.route("/tasks/<int:task_id>/archive", methods=["POST"])
     def tasks_archive(task_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         t = Task.query.get_or_404(task_id)
         if not account_may_archive_task(t, acc):
             flash("You cannot archive that task.", "error")
@@ -4993,12 +7861,13 @@ def create_app() -> Flask:
             return _redirect_after_task_action()
         t.archived = True
         db.session.commit()
+        emit_tasks_feed_changed(t.project_id)
         flash("Task archived.", "success")
         return _redirect_after_task_action()
 
     @app.route("/tasks/<int:task_id>/unarchive", methods=["POST"])
     def tasks_unarchive(task_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         t = Task.query.get_or_404(task_id)
         if not account_may_archive_task(t, acc):
             flash("You cannot restore that task.", "error")
@@ -5008,18 +7877,21 @@ def create_app() -> Flask:
             return _redirect_after_task_action()
         t.archived = False
         db.session.commit()
+        emit_tasks_feed_changed(t.project_id)
         flash("Task restored from archive.", "success")
         return _redirect_after_task_action()
 
     @app.route("/tasks/<int:task_id>/delete", methods=["POST"])
     def tasks_delete(task_id: int):
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         t = Task.query.get_or_404(task_id)
         if not task_visible_to_account(t, acc):
             flash("You do not have access to that task.", "error")
             return _redirect_after_task_action()
+        del_pid = t.project_id
         db.session.delete(t)
         db.session.commit()
+        emit_tasks_feed_changed(del_pid)
         flash("Task deleted.", "success")
         return _redirect_after_task_action()
 
@@ -5203,10 +8075,11 @@ def create_app() -> Flask:
             t.status = status
             t.priority = priority
             if status == "done" and t.completed_at is None:
-                t.completed_at = datetime.now(timezone.utc)
+                t.completed_at = now_local()
             if status != "done":
                 t.completed_at = None
             db.session.commit()
+            emit_tasks_feed_changed(t.project_id)
             flash("Task updated.", "success")
         raw_next = (request.form.get("next") or "").strip()
         if raw_next.startswith("/") and not raw_next.startswith("//"):
@@ -5219,8 +8092,10 @@ def create_app() -> Flask:
         if actor is None or not actor.is_admin:
             abort(403)
         t = Task.query.get_or_404(task_id)
+        ctl_pid = t.project_id
         db.session.delete(t)
         db.session.commit()
+        emit_tasks_feed_changed(ctl_pid)
         flash("Task deleted.", "success")
         raw_next = (request.form.get("next") or "").strip()
         if raw_next.startswith("/") and not raw_next.startswith("//"):
@@ -5382,13 +8257,14 @@ def create_app() -> Flask:
                     ser = URLSafeTimedSerializer(app.config["SECRET_KEY"], salt=SOCKET_AUTH_SALT)
                     data = ser.loads(raw, max_age=SOCKET_AUTH_MAX_AGE)
                     cand = data.get("account_id")
-                    if cand is not None and Account.query.get(int(cand)) is not None:
+                    if cand is not None and db.session.get(Account, int(cand)) is not None:
                         aid = int(cand)
                 except (BadSignature, SignatureExpired, TypeError, ValueError):
                     aid = None
         if not aid:
             return False
         join_room(f"user_{aid}")
+        join_room("tasks_feed")
         return True
 
     @socketio.on("join_project")
@@ -5399,7 +8275,7 @@ def create_app() -> Flask:
             pid = int(data.get("project_id"))
         except (TypeError, ValueError):
             return
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if not account_may_use_project_chat(acc, pid):
             return
         prev = session.get("socket_chat_project_id")
@@ -5417,7 +8293,7 @@ def create_app() -> Flask:
         raw = data.get("project_ids")
         if not isinstance(raw, list):
             return
-        acc = Account.query.get(session.get("account_id"))
+        acc = db.session.get(Account, session.get("account_id"))
         if acc is None:
             return
         validated: list[int] = []
@@ -5454,15 +8330,32 @@ def create_app() -> Flask:
             session.pop("socket_chat_project_id", None)
             session.modified = True
 
+    # Expose ORM classes for `tests/` (GET /notifications panel checks, etc.).
+    app.extensions["tm_test_models"] = {
+        "Account": Account,
+        "User": User,
+        "Project": Project,
+        "ProjectMember": ProjectMember,
+        "Notification": Notification,
+    }
+
     return app
 
 
 app = create_app()
 
 if __name__ == "__main__":
+    # Default 5001: macOS AirPlay uses 5000 on ::1, so http://localhost:5000 often
+    # hits AirTunes (403) instead of this app. Override with PORT / HOST if needed.
+    _port = int(os.environ.get("PORT", "5001"))
+    _host = os.environ.get("HOST", "127.0.0.1")
+    _debug = True
+    if (not _debug) or (os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
+        print(f"\n  Open in browser: http://{_host}:{_port}/\n", flush=True)
     socketio.run(
         app,
-        debug=True,
-        port=int(os.environ.get("PORT", "5000")),
+        host=_host,
+        debug=_debug,
+        port=_port,
         allow_unsafe_werkzeug=True,
     )

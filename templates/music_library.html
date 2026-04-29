@@ -1,0 +1,1003 @@
+{% extends "base.html" %}
+{% block title %}Music Library · {{ app_name }}{% endblock %}
+{% block body_class %}music-library-workspace{% endblock %}
+
+{% block content %}
+{% set folder_subtree_counts = folder_subtree_counts|default({}, true) %}
+{% set folder_root_file_counts = folder_root_file_counts|default({}, true) %}
+{% set usage_top = usage_top|default([], true) %}
+{% set usage_recent = usage_recent|default([], true) %}
+{% set music_total_files = music_total_files|default(0, true) %}
+{% set music_total_folders = music_total_folders|default(0, true) %}
+{% set music_recent_preview = music_recent_preview|default([], true) %}
+{% set file_usage_counts = file_usage_counts|default({}, true) %}
+
+<header class="music-page-head">
+  <h1 class="music-page-title">Music Library</h1>
+  <p class="music-page-sub muted">Search first, then add mounts if you manage them. Mount cards sit above the three columns; folders stay in the left column.</p>
+</header>
+
+<div class="music-shell">
+  <div class="music-topbar music-topbar--browse">
+    {% if query %}
+    <div class="music-topbar-browse-row music-topbar-browse-row--search">
+      <a class="music-back-browse btn btn--ghost" href="{{ url_for('music_library') }}">← Browse library</a>
+      <input type="search" id="search" class="input music-search" name="q" value="{{ query }}" placeholder="Search library…" autocomplete="off" aria-label="Search library">
+    </div>
+    {% else %}
+    <div class="music-topbar-browse-row">
+      <nav id="music-folder-breadcrumb" class="music-breadcrumb muted" aria-label="Folder path">Music Library</nav>
+      <div class="music-topbar-actions">
+        <input type="search" id="folder-file-filter" class="input music-filter-input" placeholder="Filter files in folder…" autocomplete="off" disabled aria-label="Filter files in folder">
+        <input type="search" id="search" class="input music-search" name="q" value="{{ query }}" placeholder="Search library…" autocomplete="off" aria-label="Search library">
+        {% if current_account_can_manage_music_mounts %}
+        <a id="music-scan-active-mount" class="btn btn--secondary music-scan-mount-btn" href="#" hidden>Scan mount</a>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if current_account_can_manage_music_mounts %}
+  <form class="music-topbar music-topbar--mounts" method="post" action="{{ url_for('music_library_mount_add') }}">
+    <div class="music-topbar-mount-row">
+      <div
+        id="mount-drop-zone"
+        class="music-drop-zone drop-zone"
+        role="button"
+        tabindex="0"
+        aria-label="Drop a folder here to suggest a mount path"
+      >Drop folder here</div>
+      <input id="mount-path" class="input music-mount-input music-mount-path-input" type="text" name="base_path" placeholder="/Volumes/…" required autocomplete="off" aria-label="Mount path">
+      <button type="button" class="btn btn--ghost" id="mount-electron-choose-folder" hidden title="Choose folder (desktop app)">Choose…</button>
+      <button type="submit" class="btn btn--secondary">Add Mount</button>
+    </div>
+    <p class="music-topbar-hint muted">Path must exist on the server. Paste from Finder if needed.</p>
+  </form>
+  {% endif %}
+
+  {% if current_account_can_manage_music_mounts %}
+  <section class="music-mounts-strip" aria-label="Mounts">
+    <details class="music-mounts-panel music-mounts-panel--above-grid" open>
+      <summary class="music-mounts-summary"><span class="music-mounts-summary-title">Mounts</span><span class="music-mounts-summary-meta muted">Above folders · files · inspector</span></summary>
+      <div class="music-mounts-body">
+        {% if not mounts %}
+        <p class="empty muted music-mounts-empty">No mounts yet. Use the mount bar (drop zone &amp; path) under the search row.</p>
+        {% else %}
+        <div class="music-mount-cards" role="list">
+          {% for m in mounts %}
+          <article class="mount-card" id="mount-{{ m.id }}" data-mount-id="{{ m.id }}" role="listitem">
+            <div class="mount-card-head">
+              <strong class="mount-card-name">{{ m.name }}</strong>
+              <code class="mount-card-path muted">{{ m.base_path }}</code>
+            </div>
+            <div class="mount-card-actions">
+              <a class="btn btn--ghost" href="{{ url_for('browse_mount', mount_id=m.id) }}">Browse</a>
+              <a class="btn btn--secondary" href="{{ url_for('music_library_scan_mount', mount_id=m.id) }}">Scan</a>
+              <button type="button" class="btn btn--ghost btn-delete music-unmount-btn" data-mount-id="{{ m.id }}" data-mount-name="{{ m.name }}">Unmount</button>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </details>
+  </section>
+  {% endif %}
+
+  <div class="music-workspace">
+    <aside class="music-left-panel" aria-label="Folders">
+      {% if query %}
+      <p class="muted music-left-search-hint">Search mode — pick <a href="{{ url_for('music_library') }}">Browse library</a> to use the folder tree.</p>
+      {% else %}
+      <div class="music-folder-panel">
+        <div class="music-folder-panel-label muted">Folders</div>
+        {% if not folder_tree %}
+        <p class="empty muted">Scan a mount to see folders.</p>
+        {% else %}
+        {% macro render_nodes(nodes, mount_id, mount_name) %}
+        <ul class="music-tree-node-list music-folder-tree-list" role="list">
+          {% for node in nodes %}
+          {% set ck = mount_id|string ~ ':' ~ (node.path or '') %}
+          {% set fc = folder_subtree_counts.get(ck, 0) %}
+          <li class="music-tree-node-item">
+            <div class="folder-row">
+              <div class="folder-row-primary">
+                {% if node.children %}
+                <details class="music-tree-branch music-folder-branch">
+                  <summary class="music-tree-branch-summary" aria-label="Toggle {{ node.name }}"></summary>
+                  <div class="music-tree-branch-body">{{ render_nodes(node.children, mount_id, mount_name) }}</div>
+                </details>
+                {% else %}
+                <span class="music-tree-branch-spacer" aria-hidden="true"></span>
+                {% endif %}
+                <button type="button" class="folder-row-open music-tree-open" data-mount-id="{{ mount_id }}" data-mount-name="{{ mount_name|e }}" data-folder="{{ node.path }}"><span class="folder-row-icon" aria-hidden="true">📁</span><span class="folder-row-label">{{ node.name }}</span></button>
+              </div>
+              <span class="folder-row-count muted tabular-nums">{{ fc }}</span>
+              <button type="button" class="folder-row-link music-tree-link-folder" title="Link folder to project" aria-label="Link folder to project" data-mount-id="{{ mount_id }}" data-folder="{{ node.path }}">+</button>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endmacro %}
+        {% for branch in folder_tree %}
+        <section class="music-tree-mount music-folder-mount-block" data-mount-id="{{ branch.mount_id }}" data-mount-name="{{ branch.mount|e }}">
+          <div class="music-folder-mount-title muted">{{ branch.mount }}</div>
+          <div class="folder-row folder-row--root">
+            <div class="folder-row-primary">
+              <span class="music-tree-branch-spacer" aria-hidden="true"></span>
+              <button type="button" class="folder-row-open music-tree-open music-tree-open-root" data-mount-id="{{ branch.mount_id }}" data-mount-name="{{ branch.mount|e }}" data-folder=""><span class="folder-row-icon" aria-hidden="true">📂</span><span class="folder-row-label">Root</span></button>
+            </div>
+            <span class="folder-row-count muted tabular-nums">{{ folder_root_file_counts.get(branch.mount_id, 0) }}</span>
+            <button type="button" class="folder-row-link music-tree-link-folder" title="Link root folder to project" aria-label="Link root folder to project" data-mount-id="{{ branch.mount_id }}" data-folder="">+</button>
+          </div>
+          {{ render_nodes(branch.children, branch.mount_id, branch.mount) }}
+        </section>
+        {% endfor %}
+        {% endif %}
+      </div>
+      {% endif %}
+    </aside>
+
+    <main class="music-center-panel" aria-label="Files">
+      <h2 class="visually-hidden" id="file-list-title">Files</h2>
+      {% if query %}
+      <p class="muted music-center-mode-hint">Search results</p>
+      <ul class="music-library-list music-file-list-ul" id="file-list" role="list">
+        {% for file in search_files %}
+        {% set total_s = (file.duration or 0)|int %}
+        {% set mm = total_s // 60 %}
+        {% set ss = total_s % 60 %}
+        {% set uc = file_usage_counts.get(file.id, 0) %}
+        <li id="file-{{ file.id }}" class="file-row music-library-row tm-audio-file-row" tabindex="0" role="row" data-file-id="{{ file.id }}" data-file-name="{{ file.name|e }}" data-file-path="{{ (file.file_path or '')|e }}" data-folder="{{ (file.folder or '')|e }}" data-mount-id="{{ file.mount_id or '' }}" data-duration="{{ file.duration or 0 }}" data-type="{{ (file.type or '')|e }}" data-usage-count="{{ uc }}">
+          <button type="button" class="music-row-play music-library-play" onclick="event.stopPropagation();play({{ file.id|tojson }}, this)" aria-label="Play {{ file.name }}">▶</button>
+          <div class="file-row-main">
+            <span class="file-row-name music-library-name--draggable" draggable="true" ondragstart="dragFile(event, {{ file.id|tojson }}, {{ file.name|tojson }})">{{ file.name }}</span>
+            <span class="file-row-sub muted">{{ file.folder or "Root" }}</span>
+          </div>
+          <span class="file-row-dur tabular-nums">{{ "%02d:%02d"|format(mm, ss) }}</span>
+          <span class="file-row-type muted">{{ file.type or "—" }}</span>
+          <div class="tm-audio-file-progress" aria-hidden="true"></div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div id="file-list" class="music-center-list-host">
+        <div id="music-center-empty-state" class="music-center-empty">
+          <div class="music-center-empty-icon" aria-hidden="true">◇</div>
+          <h3 class="music-center-empty-title">Select a folder</h3>
+          <p class="music-center-empty-text muted">Choose a folder from the left panel to load audio files.</p>
+          <dl class="music-center-empty-stats">
+            <div><dt>Indexed files</dt><dd class="tabular-nums">{{ music_total_files }}</dd></div>
+            <div><dt>Indexed folders</dt><dd class="tabular-nums">{{ music_total_folders }}</dd></div>
+          </dl>
+          {% if music_recent_preview %}
+          <div class="music-center-empty-recent">
+            <div class="music-center-empty-recent-label muted">Recently indexed</div>
+            <ul class="music-center-empty-recent-list" role="list">
+              {% for rf in music_recent_preview %}
+              <li class="music-center-empty-recent-item"><span class="music-center-empty-recent-name">{{ rf.name }}</span>{% if rf.mount %}<span class="muted"> · {{ rf.mount.name }}</span>{% endif %}</li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </main>
+
+    <aside class="music-right-panel" id="music-right-panel" aria-label="Inspector">
+      <button type="button" class="music-inspector-toggle" id="music-inspector-toggle" aria-expanded="false" aria-controls="music-right-panel-inner">Inspector</button>
+      <div id="music-right-panel-inner" class="music-right-panel-inner">
+        <div id="music-library-inspector" class="music-library-inspector">
+          <div class="music-inspector-heading muted">Inspector</div>
+          <p class="music-library-inspector-empty muted" id="music-library-inspector-placeholder">Select a file</p>
+          <div id="music-library-inspector-body" class="music-library-inspector-body" hidden>
+            <h3 id="music-inspector-name" class="music-inspector-title"></h3>
+            <p id="music-inspector-folder" class="music-inspector-path muted"></p>
+            <dl class="music-inspector-dl">
+              <div><dt>Duration</dt><dd id="music-inspector-duration">—</dd></div>
+              <div><dt>Type</dt><dd id="music-inspector-type">—</dd></div>
+              <div><dt>Plays</dt><dd id="music-inspector-usage" class="tabular-nums">—</dd></div>
+            </dl>
+            <div class="music-inspector-actions">
+              <button type="button" class="btn btn--secondary" id="music-inspector-add-project">Add to project</button>
+              <button type="button" class="btn btn--ghost" id="music-inspector-copy">Copy path</button>
+              <button type="button" class="btn btn--ghost" id="music-inspector-finder">Show in Finder</button>
+              <button type="button" class="btn btn--ghost btn-delete" id="music-inspector-remove">Remove from index</button>
+            </div>
+          </div>
+        </div>
+        <div class="music-side-usage">
+          <div class="music-inspector-heading muted">Usage</div>
+          <div class="music-side-usage-cols">
+            <div class="music-side-usage-block">
+              <h3 class="music-side-usage-title">Most used</h3>
+              {% if usage_top %}
+              <ol class="music-usage-list music-side-usage-list" role="list">
+                {% for row in usage_top %}
+                <li><span class="music-usage-name">{{ row.name }}</span> <span class="muted tabular-nums">{{ row.count }}×</span></li>
+                {% endfor %}
+              </ol>
+              {% else %}
+              <p class="empty muted music-side-usage-empty">No data yet</p>
+              {% endif %}
+            </div>
+            <div class="music-side-usage-block">
+              <h3 class="music-side-usage-title">Recent</h3>
+              {% if usage_recent %}
+              <ol class="music-usage-list music-side-usage-list" role="list">
+                {% for row in usage_recent %}
+                <li><span class="music-usage-name">{{ row.name }}</span> <span class="muted">{{ row.action }}</span></li>
+                {% endfor %}
+              </ol>
+              {% else %}
+              <p class="empty muted music-side-usage-empty">No data yet</p>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="music-inspector-backdrop" class="music-inspector-backdrop" hidden aria-hidden="true"></div>
+    </aside>
+  </div>
+</div>
+
+<dialog id="project-audio-link-modal" class="music-link-modal">
+  <form method="dialog" class="music-link-modal-body">
+    <h3>Add to Project Library</h3>
+    <p class="muted" id="music-link-folder-preview">Folder: —</p>
+    <label class="field">
+      <span class="field-label">Project</span>
+      <select id="music-link-project" class="input">
+        <option value="">Choose project…</option>
+        {% for p in projects_for_audio %}
+        <option value="{{ p.id }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Library</span>
+      <select id="music-link-library" class="input">
+        <option value="">Choose library…</option>
+      </select>
+    </label>
+    <div class="music-link-modal-actions">
+      <button type="button" class="btn btn--ghost" onclick="closeProjectLinkModal()">Cancel</button>
+      <button type="button" class="btn btn--primary" onclick="submitProjectLink()">Link Folder</button>
+    </div>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  const dropZone = document.getElementById("mount-drop-zone");
+  const pathInput = document.getElementById("mount-path");
+
+  if (pathInput) {
+    pathInput.addEventListener("paste", function (ev) {
+      var t = ev.clipboardData && ev.clipboardData.getData("text");
+      if (t) {
+        ev.preventDefault();
+        pathInput.value = t.trim();
+      }
+    });
+  }
+
+  if (!dropZone || !pathInput) return;
+
+  dropZone.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    dropZone.classList.add("dragover");
+  });
+
+  dropZone.addEventListener("dragleave", function () {
+    dropZone.classList.remove("dragover");
+  });
+
+  dropZone.addEventListener("drop", function (e) {
+    e.preventDefault();
+    dropZone.classList.remove("dragover");
+
+    var files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length && window.taskManagerDesktop && typeof window.taskManagerDesktop.getPathForFile === "function") {
+      try {
+        var realPath = window.taskManagerDesktop.getPathForFile(files[0]);
+        if (realPath) {
+          if (window.taskManagerDesktop.statPath) {
+            window.taskManagerDesktop.statPath(realPath).then(function (st) {
+              if (!st || !st.exists) return;
+              if (st.isFile) {
+                var norm = String(realPath).replace(/\\/g, "/");
+                var idx = norm.lastIndexOf("/");
+                pathInput.value = idx > -1 ? norm.slice(0, idx) : realPath;
+              } else {
+                pathInput.value = realPath;
+              }
+            }).catch(function () {
+              pathInput.value = realPath;
+            });
+          } else {
+            pathInput.value = realPath;
+          }
+          return;
+        }
+      } catch (_err) {}
+    }
+
+    var items = e.dataTransfer && e.dataTransfer.items;
+    if (!items || items.length === 0) return;
+
+    var entry = items[0].webkitGetAsEntry && items[0].webkitGetAsEntry();
+    if (entry && entry.isDirectory) {
+      var folderName = entry.name;
+      pathInput.value = "/Volumes/" + folderName;
+      window.alert(
+        "Folder detected: " + folderName + "\nPlease confirm or edit the full mount path."
+      );
+    }
+  });
+
+  var chooseBtn = document.getElementById("mount-electron-choose-folder");
+  if (chooseBtn && window.taskManagerDesktop && typeof window.taskManagerDesktop.selectFolder === "function") {
+    chooseBtn.hidden = false;
+    chooseBtn.addEventListener("click", function () {
+      window.taskManagerDesktop.selectFolder().then(function (paths) {
+        if (paths && paths[0] && pathInput) pathInput.value = paths[0];
+      }).catch(function () {});
+    });
+  }
+})();
+
+(function () {
+  const search = document.getElementById("search");
+  if (!search) return;
+  const listUrl = {{ url_for("music_library")|tojson }};
+  function submitSearch() {
+    const q = (search.value || "").trim();
+    window.location = listUrl + "?q=" + encodeURIComponent(q);
+  }
+  search.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      submitSearch();
+    }
+  });
+  search.addEventListener("change", function () {
+    // Optional convenience: apply when field loses focus.
+    submitSearch();
+  });
+})();
+
+var linkMountId = null;
+var linkFolderPath = "";
+var projectAudioTargets = {{ project_audio_targets|tojson }};
+var MUSIC_SCAN_URL_TEMPLATE = {% if current_account_can_manage_music_mounts %}{{ url_for("music_library_scan_mount", mount_id=888888888)|tojson }}{% else %}""{% endif %};
+var musicLinkStorageKey = "musicLibraryLastLinkTargetV1";
+
+function getLastMusicLinkTarget() {
+  try {
+    var raw = window.localStorage.getItem(musicLinkStorageKey);
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    if (!parsed || !parsed.projectId || !parsed.libraryId) return null;
+    return {
+      projectId: String(parsed.projectId),
+      libraryId: String(parsed.libraryId),
+    };
+  } catch (_err) {
+    return null;
+  }
+}
+
+function saveLastMusicLinkTarget(projectId, libraryId) {
+  try {
+    window.localStorage.setItem(
+      musicLinkStorageKey,
+      JSON.stringify({
+        projectId: String(projectId || ""),
+        libraryId: String(libraryId || ""),
+      })
+    );
+  } catch (_err) {
+    // Ignore localStorage failures (private mode/quota/etc).
+  }
+}
+
+function play(id, btn) {
+  if (window.TMGlobalAudio) {
+    window.TMGlobalAudio.play(id, btn, {});
+  }
+}
+
+function togglePlay() {
+  if (window.TMGlobalAudio) {
+    window.TMGlobalAudio.togglePlay();
+  }
+}
+
+function updateMusicBreadcrumb(mountLabel, folderPath) {
+  var el = document.getElementById("music-folder-breadcrumb");
+  if (!el) return;
+  var parts = ["Music Library"];
+  if (mountLabel) parts.push(mountLabel);
+  if (folderPath) {
+    String(folderPath)
+      .split("/")
+      .filter(Boolean)
+      .forEach(function (p) {
+        parts.push(p);
+      });
+  } else if (mountLabel) {
+    parts.push("Root");
+  }
+  el.textContent = parts.join(" / ");
+}
+
+function trackUsage(fileId, action, projectId) {
+  if (!fileId || !action) return;
+  var payload = {
+    file_id: Number(fileId),
+    action: String(action),
+  };
+  if (projectId !== undefined && projectId !== null && projectId !== "") {
+    payload.project_id = Number(projectId);
+  }
+  fetch("/audio/track", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  }).catch(function () {
+    // Tracking must not block editing flow.
+  });
+}
+
+function dragFile(e, id, name) {
+  var url = window.location.origin + "/audio/" + id;
+  var safeName = (name || ("audio-" + id)) + "";
+  var ext = safeName.indexOf(".") >= 0 ? "" : ".wav";
+  if (e && e.dataTransfer) {
+    e.dataTransfer.setData("DownloadURL", "audio/wav:" + safeName + ext + ":" + url);
+    e.dataTransfer.setData("text/uri-list", url);
+    e.dataTransfer.effectAllowed = "copy";
+  }
+  trackUsage(id, "drag");
+}
+
+function copyPath(path, fileId) {
+  if (!path) return;
+  navigator.clipboard.writeText(path).then(function () {
+    if (fileId) trackUsage(fileId, "copy");
+  }).catch(function () {
+    alert("Could not copy path.");
+  });
+}
+
+function formatDuration(seconds) {
+  var total = Math.max(0, Math.floor(Number(seconds) || 0));
+  var mm = Math.floor(total / 60);
+  var ss = total % 60;
+  return String(mm).padStart(2, "0") + ":" + String(ss).padStart(2, "0");
+}
+
+function escAttr(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function renderFiles(files, folderLabel) {
+  var title = document.getElementById("file-list-title");
+  var container = document.getElementById("file-list");
+  if (!container) return;
+  if (title) {
+    title.textContent = folderLabel ? "Files · " + folderLabel : "Files";
+  }
+  if (!files || files.length === 0) {
+    container.className = "music-center-list-host";
+    container.innerHTML =
+      '<div class="music-center-empty music-center-empty--folder"><p class="muted">No indexed files in this folder.</p></div>';
+    if (window.TMGlobalAudio && window.TMGlobalAudio.setFileList) {
+      window.TMGlobalAudio.setFileList([]);
+    }
+    if (typeof window.clearMusicLibraryInspector === "function") {
+      window.clearMusicLibraryInspector();
+    }
+    return;
+  }
+  container.className = "music-center-list-host";
+  var rows = files
+    .map(function (f) {
+      var typeStr = f.type != null && String(f.type).trim() !== "" ? String(f.type).trim() : "";
+      if (!typeStr && f.name) {
+        var dot = String(f.name).lastIndexOf(".");
+        typeStr = dot >= 0 ? String(f.name).slice(dot + 1).toLowerCase() : "";
+      }
+      if (!typeStr) typeStr = "—";
+      return (
+        '<li id="file-' +
+        f.id +
+        '" class="file-row music-library-row tm-audio-file-row" tabindex="0" role="row" data-file-id="' +
+        f.id +
+        '" data-file-name="' +
+        escAttr(f.name || "") +
+        '" data-file-path="' +
+        escAttr(f.file_path || "") +
+        '" data-folder="' +
+        escAttr(f.folder || "") +
+        '" data-mount-id="' +
+        (f.mount_id != null ? String(f.mount_id) : "") +
+        '" data-duration="' +
+        (f.duration != null ? String(f.duration) : "0") +
+        '" data-type="' +
+        escAttr(typeStr) +
+        '" data-usage-count="' +
+        String(f.usage_count != null ? f.usage_count : 0) +
+        '">' +
+        '<button type="button" class="music-row-play music-library-play" onclick="event.stopPropagation();play(' +
+        f.id +
+        ', this)" aria-label="Play">▶</button>' +
+        '<div class="file-row-main">' +
+        '<span class="file-row-name music-library-name--draggable" draggable="true" ondragstart="dragFile(event, ' +
+        f.id +
+        ", " +
+        JSON.stringify(f.name || "") +
+        ')">' +
+        (f.name || "") +
+        "</span>" +
+        '<span class="file-row-sub muted">' +
+        (f.folder || "Root") +
+        "</span></div>" +
+        '<span class="file-row-dur tabular-nums">' +
+        formatDuration(f.duration) +
+        "</span>" +
+        '<span class="file-row-type muted">' +
+        typeStr +
+        "</span>" +
+        '<div class="tm-audio-file-progress" aria-hidden="true"></div>' +
+        "</li>"
+      );
+    })
+    .join("");
+  container.innerHTML = '<ul class="music-library-list music-file-list-ul" role="list">' + rows + "</ul>";
+  if (window.TMGlobalAudio && window.TMGlobalAudio.setFileList) {
+    window.TMGlobalAudio.setFileList(files.map(function (f) { return f.id; }));
+  }
+}
+
+function openFolder(mountId, folderPath, fileQuery) {
+  var container = document.getElementById("file-list");
+  var filterInput = document.getElementById("folder-file-filter");
+  if (container) {
+    container.className = "music-center-list-host";
+    container.innerHTML = '<p class="music-center-loading muted">Loading files…</p>';
+    if (window.TMGlobalAudio && window.TMGlobalAudio.setFileList) {
+      window.TMGlobalAudio.setFileList([]);
+    }
+  }
+  if (filterInput) {
+    filterInput.disabled = false;
+  }
+  var q = (fileQuery || "").trim();
+  fetch(
+    "/music-library/files?mount_id=" +
+      encodeURIComponent(mountId) +
+      "&folder=" +
+      encodeURIComponent(folderPath || "") +
+      "&q=" +
+      encodeURIComponent(q),
+    {
+      credentials: "same-origin",
+    }
+  )
+    .then(function (r) {
+      if (!r.ok) throw new Error("load_failed");
+      return r.json();
+    })
+    .then(function (files) {
+      renderFiles(files, (folderPath || "Root") + (q ? ' · filter: "' + q + '"' : ""));
+    })
+    .catch(function () {
+      if (!container) return;
+      container.className = "music-center-list-host";
+      container.innerHTML =
+        '<div class="music-center-empty music-center-empty--folder"><p class="muted">Could not load folder files.</p></div>';
+    });
+}
+
+function deleteFile(id) {
+  if (!confirm("Remove this file from library?")) return;
+  fetch("/music-library/delete/" + id, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  })
+    .then(function (r) {
+      var ct = r.headers.get("content-type") || "";
+      if (!r.ok || ct.indexOf("application/json") === -1) {
+        throw new Error("bad_response");
+      }
+      return r.json();
+    })
+    .then(function (res) {
+      if (res && res.ok) {
+        var row = document.getElementById("file-" + id);
+        if (row) row.remove();
+        if (typeof window.clearMusicLibraryInspectorIfFile === "function") {
+          window.clearMusicLibraryInspectorIfFile(id);
+        }
+        if (window.TMGlobalAudio && window.TMGlobalAudio.syncMusicLibraryFileListFromDom) {
+          window.TMGlobalAudio.syncMusicLibraryFileListFromDom();
+        }
+        if (window.TMGlobalAudio && window.TMGlobalAudio.notifyRowRemovedFromDom) {
+          window.TMGlobalAudio.notifyRowRemovedFromDom(id);
+        }
+      }
+    })
+    .catch(function () {
+      alert("Could not remove that entry. Refresh the page or sign in again.");
+    });
+}
+
+function showInFinder(id) {
+  fetch("/music-library/show/" + id, {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  })
+    .then(function (r) {
+      return r.json();
+    })
+    .then(function (res) {
+      if (!res || !res.ok) {
+        alert("Could not open Finder for this file.");
+      }
+    })
+    .catch(function () {
+      alert("Could not open Finder for this file.");
+    });
+}
+
+function fillProjectLibraries(projectId) {
+  var libSel = document.getElementById("music-link-library");
+  if (!libSel) return;
+  libSel.innerHTML = '<option value="">Choose library…</option>';
+  if (!projectId) return;
+  var libs = projectAudioTargets[Number(projectId)] || [];
+  libs.forEach(function (l) {
+    var opt = document.createElement("option");
+    opt.value = String(l.id);
+    opt.textContent = l.parent_id ? ("↳ " + l.name) : l.name;
+    libSel.appendChild(opt);
+  });
+}
+
+function openAddToProjectModal(mountId, folderPath) {
+  var dlg = document.getElementById("project-audio-link-modal");
+  if (!dlg) return;
+  linkMountId = Number(mountId);
+  linkFolderPath = String(folderPath || "");
+  var preview = document.getElementById("music-link-folder-preview");
+  if (preview) preview.textContent = "Folder: " + (linkFolderPath || "Root");
+  var pSel = document.getElementById("music-link-project");
+  var lSel = document.getElementById("music-link-library");
+  var last = getLastMusicLinkTarget();
+  if (pSel) {
+    pSel.value = (last && last.projectId) || "";
+    fillProjectLibraries(pSel.value);
+  }
+  if (lSel && last && last.libraryId) {
+    lSel.value = last.libraryId;
+  } else if (lSel) {
+    lSel.innerHTML = '<option value="">Choose library…</option>';
+  }
+  if (typeof dlg.showModal === "function") dlg.showModal();
+}
+
+function closeProjectLinkModal() {
+  var dlg = document.getElementById("project-audio-link-modal");
+  if (dlg) dlg.close();
+}
+
+function submitProjectLink() {
+  var pSel = document.getElementById("music-link-project");
+  var lSel = document.getElementById("music-link-library");
+  if (!pSel || !lSel || !linkMountId) return;
+  var projectId = pSel.value;
+  var libraryId = lSel.value;
+  if (!projectId || !libraryId) {
+    alert("Select project and library.");
+    return;
+  }
+  var body = new URLSearchParams();
+  body.set("library_id", libraryId);
+  body.set("mount_id", String(linkMountId));
+  body.set("folder_path", linkFolderPath);
+  fetch("/project/" + encodeURIComponent(projectId) + "/audio-library/link-folder", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Accept": "application/json",
+    },
+    body: body.toString(),
+  })
+    .then(function (r) {
+      return r.json().catch(function () { return { ok: false }; });
+    })
+    .then(function (res) {
+      if (!res || !res.ok) {
+        alert((res && res.message) || "Could not link folder.");
+        return;
+      }
+      saveLastMusicLinkTarget(projectId, libraryId);
+      closeProjectLinkModal();
+      alert((res && res.message) || "Folder linked.");
+    })
+    .catch(function () {
+      alert("Could not link folder.");
+    });
+}
+
+function unmountMount(id, name) {
+  if (!confirm('Unmount "' + name + '" and remove its indexed files from the library?')) return;
+  fetch("/music-library/mount/" + id + "/remove", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  })
+    .then(function (r) {
+      var ct = r.headers.get("content-type") || "";
+      if (!r.ok || ct.indexOf("application/json") === -1) {
+        throw new Error("bad_response");
+      }
+      return r.json();
+    })
+    .then(function (res) {
+      if (res && res.ok) {
+        window.location.reload();
+      }
+    })
+    .catch(function () {
+      alert("Could not unmount. Refresh and try again.");
+    });
+}
+
+(function () {
+  document.querySelectorAll(".music-unmount-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var id = btn.getAttribute("data-mount-id");
+      var name = btn.getAttribute("data-mount-name") || "this mount";
+      if (!id) return;
+      unmountMount(id, name);
+    });
+  });
+})();
+
+(function () {
+  var currentMountId = null;
+  var currentFolderPath = "";
+  var scanA = document.getElementById("music-scan-active-mount");
+  document.querySelectorAll(".music-tree-open").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var mountId = btn.getAttribute("data-mount-id");
+      var folder = btn.getAttribute("data-folder") || "";
+      if (!mountId) return;
+      document.querySelectorAll(".folder-row.active").forEach(function (el) {
+        el.classList.remove("active");
+      });
+      var frow = btn.closest(".folder-row");
+      if (frow) frow.classList.add("active");
+      document.querySelectorAll(".mount-card.active").forEach(function (c) {
+        c.classList.remove("active");
+      });
+      var card = document.querySelector('.mount-card[data-mount-id="' + String(mountId) + '"]');
+      if (card) card.classList.add("active");
+      if (scanA && MUSIC_SCAN_URL_TEMPLATE && MUSIC_SCAN_URL_TEMPLATE.indexOf("888888888") !== -1) {
+        scanA.href = MUSIC_SCAN_URL_TEMPLATE.replace("888888888", String(mountId));
+        scanA.hidden = false;
+      } else if (scanA) {
+        scanA.hidden = true;
+      }
+      currentMountId = mountId;
+      currentFolderPath = folder;
+      var mname = btn.getAttribute("data-mount-name");
+      if (!mname) {
+        var sec = btn.closest(".music-tree-mount");
+        mname = (sec && sec.getAttribute("data-mount-name")) || "";
+      }
+      updateMusicBreadcrumb(mname || "Mount " + mountId, folder);
+      var filterInput = document.getElementById("folder-file-filter");
+      if (filterInput) filterInput.value = "";
+      openFolder(mountId, folder, "");
+    });
+  });
+
+  var filterInput = document.getElementById("folder-file-filter");
+  if (filterInput) {
+    var timer;
+    filterInput.addEventListener("input", function () {
+      if (!currentMountId) return;
+      clearTimeout(timer);
+      var value = this.value || "";
+      timer = setTimeout(function () {
+        openFolder(currentMountId, currentFolderPath, value);
+      }, 250);
+    });
+  }
+
+  document.querySelectorAll(".music-tree-link-folder").forEach(function (btn) {
+    btn.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      var mountId = btn.getAttribute("data-mount-id");
+      var folder = btn.getAttribute("data-folder") || "";
+      if (!mountId) return;
+      openAddToProjectModal(mountId, folder);
+    });
+  });
+})();
+
+(function () {
+  var pSel = document.getElementById("music-link-project");
+  if (!pSel) return;
+  pSel.addEventListener("change", function () {
+    fillProjectLibraries(this.value);
+  });
+})();
+
+(function () {
+  var ph = document.getElementById("music-library-inspector-placeholder");
+  var body = document.getElementById("music-library-inspector-body");
+  var nm = document.getElementById("music-inspector-name");
+  var fd = document.getElementById("music-inspector-folder");
+  var durEl = document.getElementById("music-inspector-duration");
+  var typEl = document.getElementById("music-inspector-type");
+  var btnAdd = document.getElementById("music-inspector-add-project");
+  var btnCopy = document.getElementById("music-inspector-copy");
+  var btnFinder = document.getElementById("music-inspector-finder");
+  var btnRemove = document.getElementById("music-inspector-remove");
+  var usageEl = document.getElementById("music-inspector-usage");
+  var selectedId = null;
+
+  function typeFromName(name) {
+    var n = String(name || "");
+    var i = n.lastIndexOf(".");
+    return i >= 0 ? n.slice(i + 1).toLowerCase() : "";
+  }
+
+  function clearMusicLibraryInspector() {
+    selectedId = null;
+    if (ph) ph.hidden = false;
+    if (body) body.hidden = true;
+    document.querySelectorAll("#file-list li.tm-audio-file-row.active").forEach(function (el) {
+      el.classList.remove("active");
+    });
+  }
+
+  function clearMusicLibraryInspectorIfFile(id) {
+    if (selectedId !== null && Number(selectedId) === Number(id)) clearMusicLibraryInspector();
+  }
+
+  function populateFromRow(li) {
+    selectedId = li.getAttribute("data-file-id");
+    var name = li.getAttribute("data-file-name") || "";
+    var folder = li.getAttribute("data-folder") || "";
+    var path = li.getAttribute("data-file-path") || "";
+    var mountId = li.getAttribute("data-mount-id") || "";
+    var d = li.getAttribute("data-duration") || "0";
+    var t = (li.getAttribute("data-type") || "").trim();
+    if (!t || t === "—") {
+      t = typeFromName(name) || "—";
+    }
+    if (ph) ph.hidden = true;
+    if (body) body.hidden = false;
+    if (nm) nm.textContent = name || "—";
+    if (fd) fd.textContent = folder ? folder : "Root";
+    if (durEl) durEl.textContent = formatDuration(Number(d) || 0);
+    if (typEl) typEl.textContent = t || "—";
+    if (usageEl) {
+      var uc = li.getAttribute("data-usage-count");
+      usageEl.textContent = uc != null && uc !== "" ? String(uc) : "0";
+    }
+    if (btnAdd) {
+      btnAdd.disabled = !mountId;
+      btnAdd.onclick = function () {
+        if (mountId) openAddToProjectModal(Number(mountId), folder);
+      };
+    }
+    if (btnCopy) {
+      btnCopy.onclick = function () {
+        copyPath(path, selectedId ? Number(selectedId) : null);
+      };
+    }
+    if (btnFinder) {
+      btnFinder.onclick = function () {
+        if (selectedId) showInFinder(Number(selectedId));
+      };
+    }
+    if (btnRemove) {
+      btnRemove.onclick = function () {
+        if (selectedId) deleteFile(Number(selectedId));
+      };
+    }
+  }
+
+  var fl = document.getElementById("file-list");
+  if (fl) {
+    fl.addEventListener("click", function (ev) {
+      if (ev.target.closest(".music-library-play")) return;
+      var li = ev.target.closest("li.tm-audio-file-row");
+      if (!li || !fl.contains(li)) return;
+      document.querySelectorAll("#file-list li.tm-audio-file-row.active").forEach(function (el) {
+        el.classList.remove("active");
+      });
+      li.classList.add("active");
+      populateFromRow(li);
+      var fid = Number(li.getAttribute("data-file-id") || 0);
+      var playBtn = li.querySelector(".music-library-play");
+      if (fid > 0 && playBtn) {
+        play(fid, playBtn);
+      }
+    });
+  }
+
+  window.clearMusicLibraryInspector = clearMusicLibraryInspector;
+  window.clearMusicLibraryInspectorIfFile = clearMusicLibraryInspectorIfFile;
+})();
+
+(function () {
+  var panel = document.getElementById("music-right-panel");
+  var toggle = document.getElementById("music-inspector-toggle");
+  var backdrop = document.getElementById("music-inspector-backdrop");
+  if (!panel || !toggle) return;
+  function closePanel() {
+    panel.classList.remove("music-right-panel--open");
+    toggle.setAttribute("aria-expanded", "false");
+    if (backdrop) {
+      backdrop.hidden = true;
+      backdrop.setAttribute("aria-hidden", "true");
+    }
+  }
+  function openPanel() {
+    panel.classList.add("music-right-panel--open");
+    toggle.setAttribute("aria-expanded", "true");
+    if (backdrop) {
+      backdrop.hidden = false;
+      backdrop.setAttribute("aria-hidden", "false");
+    }
+  }
+  toggle.addEventListener("click", function () {
+    if (panel.classList.contains("music-right-panel--open")) {
+      closePanel();
+    } else {
+      openPanel();
+    }
+  });
+  if (backdrop) {
+    backdrop.addEventListener("click", closePanel);
+  }
+  window.addEventListener("resize", function () {
+    if (window.matchMedia("(min-width: 1025px)").matches) {
+      closePanel();
+    }
+  });
+})();
+
+{% if query %}
+(function () {
+  var ids = {{ search_files|map(attribute='id')|list|tojson }};
+  if (window.TMGlobalAudio && ids && ids.length) {
+    window.TMGlobalAudio.setFileList(ids);
+  }
+})();
+{% endif %}
+
+</script>
+{% endblock %}

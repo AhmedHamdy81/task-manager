@@ -4,11 +4,11 @@
 <div class="page-head">
   <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
   <h1>Edit project</h1>
-  <p class="muted">Update name, type, production house, and director.</p>
+  <p class="muted">Update name, type, production details, and schedule estimates.</p>
 </div>
 
 <section class="panel">
-  <form class="form-stack project-form" method="post" action="{{ url_for('project_edit', project_id=project.id) }}">
+  <form id="project-edit-form" class="form-stack project-form" method="post" action="{{ url_for('project_edit', project_id=project.id) }}">
     <div class="form-row project-form-row">
       <label class="field field--grow">
         <span class="field-label">Project name</span>
@@ -37,10 +37,62 @@
         <input type="text" name="director" required maxlength="200" value={{ (project.director or '')|tojson }} autocomplete="name">
       </label>
     </div>
+    <div class="project-stats-inputs">
+      <label class="field field--grow">
+        <span class="field-label">Number of episodes</span>
+        {% set _pt_edit = (project.project_type or '') %}
+        {% set _tv_edit = (_pt_edit|trim)|lower == 'tv series' %}
+        <input class="form-input" type="number" name="number_of_episodes" min="0" step="1" inputmode="numeric" aria-label="Number of episodes" value="{% if _tv_edit %}{{ project.number_of_episodes|default(0) }}{% else %}0{% endif %}" data-preserved-episodes="{{ project.number_of_episodes|default(0) }}">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Estimated shooting days</span>
+        <input class="form-input" type="number" name="estimated_shooting_days" min="0" step="1" inputmode="numeric" aria-label="Estimated shooting days" value="{{ project.estimated_shooting_days|default(0) }}">
+      </label>
+    </div>
     <div class="form-actions-row">
       <button type="submit" class="btn btn--primary">Save changes</button>
       <a class="btn btn--ghost" href="{{ url_for('project_detail', project_id=project.id) }}">Cancel</a>
     </div>
   </form>
+  <script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var form = document.getElementById("project-edit-form");
+    if (!form) return;
+    var typeInput = form.querySelector('input[name="project_type"]');
+    var epInput = form.querySelector('input[name="number_of_episodes"]');
+    if (!typeInput || !epInput) return;
+    var epLabel = epInput.closest("label.field");
+    function isTvSeries() {
+      return (typeInput.value || "").trim().toLowerCase() === "tv series";
+    }
+    var lastTv = isTvSeries();
+    function sync() {
+      var on = isTvSeries();
+      epInput.disabled = !on;
+      epInput.setAttribute("aria-disabled", on ? "false" : "true");
+      if (epLabel) epLabel.classList.toggle("field--muted", !on);
+      if (!on) {
+        if (lastTv) {
+          epInput.setAttribute("data-preserved-episodes", epInput.value || "0");
+        }
+        epInput.value = "0";
+      } else {
+        var p = epInput.getAttribute("data-preserved-episodes") || "0";
+        try {
+          epInput.value = String(Math.max(0, parseInt(p, 10) || 0));
+        } catch (e) {
+          epInput.value = "0";
+        }
+      }
+      lastTv = on;
+    }
+    typeInput.addEventListener("input", sync);
+    typeInput.addEventListener("change", sync);
+    epInput.addEventListener("input", function () {
+      if (isTvSeries()) epInput.setAttribute("data-preserved-episodes", epInput.value || "0");
+    });
+    sync();
+  });
+  </script>
 </section>
 {% endblock %}

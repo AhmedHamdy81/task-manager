@@ -42,10 +42,6 @@
       });
     });
 
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") closeNav();
-    });
-
     if (mq.addEventListener) {
       mq.addEventListener("change", function () {
         if (!mq.matches) closeNav();

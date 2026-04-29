@@ -1,0 +1,470 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Audio Library · {{ app_name }}{% endblock %}
+{% macro render_project_audio_library_files_node(node, children_by_parent, audio_library_folders, project, can_manage, main_library_id) -%}
+<details class="project-audio-lib-files" data-library-id="{{ node.id }}">
+  <summary>
+    <span>{{ node.name }}</span>
+  </summary>
+  {% set folder_groups = audio_library_folders.get(node.id, []) %}
+  {% if folder_groups %}
+  <div class="project-audio-folder-groups">
+    {% for g in folder_groups %}
+    <details class="project-audio-folder-group" data-link-id="{{ g.link_id }}" draggable="true">
+      <summary>
+        <span>📁 {{ g.folder_path or "Root" }}</span>
+      </summary>
+      {% if g.files %}
+      <ul class="project-audio-file-list" role="list">
+        {% for f in g.files %}
+        <li class="project-audio-file-row tm-audio-file-row" data-file-id="{{ f.id }}">
+          <button type="button" class="btn btn--small btn--ghost project-audio-play-btn" onclick="projectAudioPlay({{ f.id }}, this)" aria-label="Play {{ f.name }}">▶</button>
+          <span
+            class="project-audio-file-name project-audio-file-name--draggable"
+            draggable="true"
+            ondragstart="projectAudioDragFile(event, {{ f.id }}, {{ f.name|tojson }})"
+          >{{ f.name }}</span>
+          <span class="project-audio-file-mid">
+            <span class="project-audio-color-palette" aria-label="Color tags">
+              {% for c in ["red", "orange", "yellow", "green", "blue", "purple"] %}
+              <button
+                type="button"
+                class="project-audio-color-dot project-audio-color-dot--{{ c }}{% if c in (f.color_tags or []) %} is-active{% endif %}"
+                data-color="{{ c }}"
+                aria-label="Toggle {{ c }} color tag"
+                title="{{ c|capitalize }}"
+              ></button>
+              {% endfor %}
+            </span>
+            <button
+              type="button"
+              class="btn btn--small btn--ghost project-audio-fav-btn{% if f.is_favorite %} is-active{% endif %}"
+              data-favorite-btn="1"
+              aria-label="{% if f.is_favorite %}Unfavorite{% else %}Favorite{% endif %}"
+              title="{% if f.is_favorite %}Unfavorite{% else %}Favorite{% endif %}"
+            >{% if f.is_favorite %}❤️{% else %}🤍{% endif %}</button>
+          </span>
+          <span class="project-audio-file-actions">
+            <button type="button" class="btn btn--small btn--ghost" title="Copy source path" onclick="projectAudioCopyPath({{ f.file_path|tojson }}, {{ f.id }})" aria-label="Copy source path">⧉</button>
+            <button type="button" class="btn btn--small btn--ghost" title="Show in Finder" onclick="projectAudioShowInFinder({{ f.id }})" aria-label="Show in Finder">📂</button>
+          </span>
+          <div class="tm-audio-file-progress" aria-hidden="true"></div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty empty--tight">No indexed files in this linked folder.</p>
+      {% endif %}
+    </details>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% set child_libs = children_by_parent.get(node.id, []) %}
+  {% if child_libs %}
+  <div class="project-audio-lib-files-children">
+    {% for child in child_libs %}
+      {{ render_project_audio_library_files_node(child, children_by_parent, audio_library_folders, project, can_manage, main_library_id) }}
+    {% endfor %}
+  </div>
+  {% elif not folder_groups %}
+  <p class="empty empty--tight">No linked folders in this library.</p>
+  {% endif %}
+</details>
+{%- endmacro %}
+{% block content %}
+<div class="project-detail-page project-audio-library-page">
+  <div class="page-head project-detail-head">
+    <div class="project-detail-head-main">
+      <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> /</p>
+      <h1>{{ project.name }}</h1>
+      <p class="muted">{{ project.project_type }} · {{ project.production_house }} · Director: {{ project.director }}</p>
+      {% include 'partials/project_workflow_nav.html' %}
+    </div>
+    <div class="project-detail-head-actions">
+      <a class="btn btn--ghost" href="{{ url_for('project_detail', project_id=project.id) }}">Overview</a>
+    </div>
+  </div>
+
+  {% set children_by_parent = {} %}
+  {% for lib in audio_libraries %}
+    {% set pid = lib.parent_id or 0 %}
+    {% if not children_by_parent.get(pid) %}
+      {% set _ = children_by_parent.update({pid: []}) %}
+    {% endif %}
+    {% set _ = children_by_parent[pid].append(lib) %}
+  {% endfor %}
+
+  <section class="panel project-audio-library-panel">
+    <h2 class="panel-title">Audio Library</h2>
+    <p class="muted">Curated from indexed folders (linked by mount + folder only; no file duplication).</p>
+
+    {% if current_account_can_manage_project_team %}
+    <form method="post" action="{{ url_for('project_audio_library_create', project_id=project.id) }}" class="form-row project-audio-create-row">
+      <label class="field field--grow">
+        <span class="field-label">New sub-library</span>
+        <input type="text" name="name" maxlength="255" placeholder="Music / SFX / Dialogue" required>
+      </label>
+      <input type="hidden" name="parent_id" value="{{ main_audio_library.id if main_audio_library else '' }}">
+      <button type="submit" class="btn btn--secondary">Create</button>
+    </form>
+    {% endif %}
+
+    <div class="project-audio-tree" role="region" aria-label="Libraries and linked folders">
+      <p class="project-audio-tree-line">
+        <span class="project-audio-tree-group">
+          <span class="project-audio-tree-label muted">Libraries</span>
+          {% if audio_libraries %}
+            {% for lib in audio_libraries %}{% if not loop.first %}<span class="project-audio-tree-sep" aria-hidden="true">·</span>{% endif %}<span class="project-audio-tree-value">{{ lib.name }}</span>{% endfor %}
+          {% else %}
+            <span class="project-audio-tree-empty muted">—</span>
+          {% endif %}
+        </span>
+        <span class="project-audio-tree-bar muted" aria-hidden="true">|</span>
+        <span class="project-audio-tree-group">
+          <span class="project-audio-tree-label muted">Linked</span>
+          {% if linked_audio_folders %}
+            {% for lf in linked_audio_folders %}{% if not loop.first %}<span class="project-audio-tree-sep" aria-hidden="true">·</span>{% endif %}<span class="project-audio-tree-value" title="{{ (lf.library.name if lf.library else 'Library')|e }}">{{ (lf.mount.name if lf.mount else 'Mount')|e }} / {{ (lf.folder_path or 'Root')|e }}</span>{% endfor %}
+          {% else %}
+            <span class="project-audio-tree-empty muted">none — link from Music Library</span>
+          {% endif %}
+        </span>
+      </p>
+    </div>
+  </section>
+
+  <section class="panel project-audio-library-panel project-audio-files-panel">
+    <div class="project-audio-files">
+      <h3 class="project-audio-subtitle">Linked folders by library</h3>
+      <div class="project-audio-files-filters">
+        <label class="field field--grow">
+          <span class="field-label">Search by file name</span>
+          <input id="project-audio-filter-name" type="search" class="input" placeholder="Type to filter all files..." autocomplete="off">
+        </label>
+        <button
+          id="project-audio-filter-favorite"
+          type="button"
+          class="btn btn--small btn--ghost project-audio-filter-fav-btn"
+          aria-label="Filter only favorites"
+          aria-pressed="false"
+          title="Only favorites"
+        >🤍</button>
+        <div class="project-audio-filter-colors" role="group" aria-label="Filter by color tag">
+          {% for c in ["red", "orange", "yellow", "green", "blue", "purple"] %}
+          <button
+            type="button"
+            class="project-audio-color-dot project-audio-color-dot--{{ c }} project-audio-filter-color-dot"
+            data-filter-color="{{ c }}"
+            title="Filter by {{ c|capitalize }}"
+            aria-label="Filter by {{ c|capitalize }}"
+          ></button>
+          {% endfor %}
+        </div>
+      </div>
+      <p id="project-audio-filter-count" class="muted project-audio-filter-count">Showing 0 of 0 files</p>
+      {% if audio_libraries %}
+        {% for root in children_by_parent.get(0, []) %}
+          {{ render_project_audio_library_files_node(root, children_by_parent, audio_library_folders, project, current_account_can_manage_project_team, main_audio_library.id if main_audio_library else 0) }}
+        {% endfor %}
+      {% else %}
+        <p class="empty empty--tight">Main library will appear when this project is created.</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function projectAudioPlay(id, btn) {
+  if (window.TMGlobalAudio) {
+    window.TMGlobalAudio.play(id, btn, { projectId: {{ project.id }} });
+  }
+}
+
+function togglePlay() {
+  if (window.TMGlobalAudio) {
+    window.TMGlobalAudio.togglePlay();
+  }
+}
+
+function projectAudioTrackUsage(fileId, action, projectId) {
+  if (!fileId || !action) return;
+  var payload = {
+    file_id: Number(fileId),
+    action: String(action),
+  };
+  if (projectId !== undefined && projectId !== null && projectId !== "") {
+    payload.project_id = Number(projectId);
+  }
+  fetch("/audio/track", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  }).catch(function () {
+    // Best effort only.
+  });
+}
+
+function projectAudioDragFile(e, id, name) {
+  var url = window.location.origin + "/audio/" + id;
+  var safeName = (name || ("audio-" + id)) + "";
+  var ext = safeName.indexOf(".") >= 0 ? "" : ".wav";
+  if (e && e.dataTransfer) {
+    e.dataTransfer.setData("DownloadURL", "audio/wav:" + safeName + ext + ":" + url);
+    e.dataTransfer.setData("text/uri-list", url);
+    e.dataTransfer.effectAllowed = "copy";
+  }
+  projectAudioTrackUsage(id, "drag", {{ project.id }});
+}
+
+function projectAudioCopyPath(path, fileId) {
+  if (!path) return;
+  navigator.clipboard.writeText(path).then(function () {
+    if (fileId) projectAudioTrackUsage(fileId, "copy", {{ project.id }});
+  }).catch(function () {
+    alert("Could not copy path.");
+  });
+}
+
+function projectAudioShowInFinder(id) {
+  fetch("/music-library/show/" + id, {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (res) {
+      if (!res || !res.ok) {
+        alert("Could not open Finder for this file.");
+      }
+    })
+    .catch(function () {
+      alert("Could not open Finder for this file.");
+    });
+}
+
+function applyProjectAudioFilters() {
+  var root = document.querySelector(".project-audio-files");
+  if (!root) return;
+  var qInput = document.getElementById("project-audio-filter-name");
+  var favBtn = document.getElementById("project-audio-filter-favorite");
+  var activeColorDot = root.querySelector(".project-audio-filter-color-dot.is-active");
+  var query = ((qInput && qInput.value) || "").trim().toLowerCase();
+  var onlyFav = !!(favBtn && favBtn.classList.contains("is-active"));
+  var color = ((activeColorDot && activeColorDot.getAttribute("data-filter-color")) || "").trim().toLowerCase();
+  var hasFilters = !!(query || onlyFav || color);
+  var totalRows = root.querySelectorAll(".project-audio-file-row").length;
+
+  root.querySelectorAll(".project-audio-file-row").forEach(function (row) {
+    var nameEl = row.querySelector(".project-audio-file-name");
+    var name = ((nameEl && nameEl.textContent) || "").toLowerCase();
+    var favBtn = row.querySelector(".project-audio-fav-btn");
+    var isFav = !!(favBtn && favBtn.classList.contains("is-active"));
+    var hasColor = !color || !!row.querySelector('.project-audio-color-dot.is-active[data-color="' + color + '"]');
+    var nameOk = !query || name.indexOf(query) !== -1;
+    var favOk = !onlyFav || isFav;
+    var visible = nameOk && favOk && hasColor;
+    row.classList.toggle("project-audio-row-filtered-out", !visible);
+  });
+
+  root.querySelectorAll(".project-audio-folder-group").forEach(function (group) {
+    var fileRows = group.querySelectorAll(".project-audio-file-row");
+    if (!fileRows.length) return;
+    var visibleRows = group.querySelectorAll(".project-audio-file-row:not(.project-audio-row-filtered-out)");
+    group.classList.toggle("project-audio-group-filtered-out", hasFilters && !visibleRows.length);
+  });
+
+  var libs = Array.prototype.slice.call(root.querySelectorAll(".project-audio-lib-files"));
+  libs.reverse().forEach(function (lib) {
+    var hasVisibleRows = !!lib.querySelector(".project-audio-file-row:not(.project-audio-row-filtered-out)");
+    var hasVisibleChildLib = !!lib.querySelector(".project-audio-lib-files:not(.project-audio-lib-filtered-out)");
+    var hasNoFilesMessage = !!lib.querySelector(":scope > .empty");
+    var keepVisibleNoFilter = !hasFilters && hasNoFilesMessage;
+    var visible = hasVisibleRows || hasVisibleChildLib || keepVisibleNoFilter;
+    lib.classList.toggle("project-audio-lib-filtered-out", !visible);
+  });
+
+  var visibleRows = root.querySelectorAll(".project-audio-file-row:not(.project-audio-row-filtered-out)").length;
+  var counter = document.getElementById("project-audio-filter-count");
+  if (counter) {
+    counter.textContent = "Showing " + String(visibleRows) + " of " + String(totalRows) + " files";
+  }
+  if (window.TMGlobalAudio && typeof window.TMGlobalAudio.syncProjectAudioFileListFromDom === "function") {
+    window.TMGlobalAudio.syncProjectAudioFileListFromDom();
+  }
+}
+
+(function () {
+  var draggedFolderLinkId = null;
+  var filesRoot = document.querySelector(".project-audio-files");
+  if (!filesRoot) return;
+
+  function clearFolderDropState() {
+    filesRoot.querySelectorAll(".project-audio-lib-files--drop-target").forEach(function (el) {
+      el.classList.remove("project-audio-lib-files--drop-target");
+    });
+  }
+
+  function saveFolderMove(linkId, targetLibraryId) {
+    return fetch(
+      "/project/" + encodeURIComponent({{ project.id }}) + "/audio-library/move-folder/" + encodeURIComponent(linkId),
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          target_library_id: Number(targetLibraryId),
+        }),
+      }
+    ).then(function (r) { return r.json(); });
+  }
+
+  filesRoot.querySelectorAll(".project-audio-folder-group[draggable='true']").forEach(function (group) {
+    group.addEventListener("dragstart", function (ev) {
+      draggedFolderLinkId = Number(group.getAttribute("data-link-id") || 0);
+      if (ev && ev.dataTransfer) {
+        ev.dataTransfer.effectAllowed = "move";
+        ev.dataTransfer.setData("text/plain", String(draggedFolderLinkId || ""));
+      }
+      group.classList.add("is-dragging");
+    });
+    group.addEventListener("dragend", function () {
+      draggedFolderLinkId = null;
+      group.classList.remove("is-dragging");
+      clearFolderDropState();
+    });
+  });
+
+  filesRoot.querySelectorAll(".project-audio-lib-files").forEach(function (libBlock) {
+    var summary = libBlock.querySelector(":scope > summary");
+    if (!summary) return;
+    summary.addEventListener("dragenter", function (ev) {
+      if (!draggedFolderLinkId) return;
+      ev.preventDefault();
+      clearFolderDropState();
+      libBlock.classList.add("project-audio-lib-files--drop-target");
+    });
+    summary.addEventListener("dragover", function (ev) {
+      if (!draggedFolderLinkId) return;
+      ev.preventDefault();
+      libBlock.classList.add("project-audio-lib-files--drop-target");
+    });
+    summary.addEventListener("dragleave", function () {
+      libBlock.classList.remove("project-audio-lib-files--drop-target");
+    });
+    summary.addEventListener("drop", function (ev) {
+      ev.preventDefault();
+      var targetLibraryId = Number(libBlock.getAttribute("data-library-id") || 0);
+      clearFolderDropState();
+      if (!draggedFolderLinkId || !targetLibraryId) return;
+      saveFolderMove(draggedFolderLinkId, targetLibraryId)
+        .then(function (res) {
+          if (!res || !res.ok) {
+            alert((res && res.message) || "Could not move folder.");
+            return;
+          }
+          window.location.reload();
+        })
+        .catch(function () {
+          alert("Could not move folder.");
+        });
+    });
+  });
+})();
+
+(function () {
+  var qInput = document.getElementById("project-audio-filter-name");
+  var favBtn = document.getElementById("project-audio-filter-favorite");
+  var colorDots = document.querySelectorAll(".project-audio-filter-color-dot");
+  if (qInput) qInput.addEventListener("input", applyProjectAudioFilters);
+  if (favBtn) {
+    favBtn.addEventListener("click", function () {
+      var active = !favBtn.classList.contains("is-active");
+      favBtn.classList.toggle("is-active", active);
+      favBtn.textContent = active ? "❤️" : "🤍";
+      favBtn.setAttribute("aria-pressed", active ? "true" : "false");
+      favBtn.setAttribute("title", active ? "Favorites filter is ON" : "Only favorites");
+      applyProjectAudioFilters();
+    });
+  }
+  colorDots.forEach(function (dot) {
+    dot.addEventListener("click", function () {
+      var isActive = dot.classList.contains("is-active");
+      colorDots.forEach(function (d) { d.classList.remove("is-active"); });
+      if (!isActive) dot.classList.add("is-active");
+      applyProjectAudioFilters();
+    });
+  });
+  applyProjectAudioFilters();
+})();
+
+(function () {
+  function parseRowMeta(row) {
+    var activeDots = row.querySelectorAll(".project-audio-color-dot.is-active");
+    var colors = [];
+    activeDots.forEach(function (dot) {
+      var c = (dot.getAttribute("data-color") || "").trim();
+      if (c) colors.push(c);
+    });
+    var fav = row.querySelector(".project-audio-fav-btn");
+    return {
+      color_tags: colors,
+      is_favorite: !!(fav && fav.classList.contains("is-active")),
+    };
+  }
+
+  function updateFavButton(btn, active) {
+    if (!btn) return;
+    btn.classList.toggle("is-active", !!active);
+    btn.textContent = active ? "❤️" : "🤍";
+    btn.setAttribute("aria-label", active ? "Unfavorite" : "Favorite");
+    btn.setAttribute("title", active ? "Unfavorite" : "Favorite");
+  }
+
+  function saveRowMeta(row) {
+    var fileId = Number(row.getAttribute("data-file-id") || 0);
+    if (!fileId) return;
+    var payload = parseRowMeta(row);
+    fetch("/music-library/file/" + fileId + "/meta", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res || !res.ok) throw new Error("save_failed");
+        applyProjectAudioFilters();
+      })
+      .catch(function () {
+        alert("Could not save file tags.");
+      });
+  }
+
+  document.querySelectorAll(".project-audio-file-row").forEach(function (row) {
+    row.querySelectorAll(".project-audio-color-dot").forEach(function (dot) {
+      dot.addEventListener("click", function () {
+        dot.classList.toggle("is-active");
+        saveRowMeta(row);
+      });
+    });
+    var favBtn = row.querySelector(".project-audio-fav-btn");
+    if (favBtn) {
+      favBtn.addEventListener("click", function () {
+        var active = !favBtn.classList.contains("is-active");
+        updateFavButton(favBtn, active);
+        saveRowMeta(row);
+      });
+    }
+  });
+})();
+</script>
+{% endblock %}

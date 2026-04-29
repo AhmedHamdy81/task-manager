@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Machine Room · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Machine Room</h1>
+  <p class="muted">Projects you can access. Search by project name or team member.</p>
+</div>
+
+<input
+  type="search"
+  name="q"
+  placeholder="Search projects or team members..."
+  value="{{ query|e }}"
+  class="machine-search"
+  autocomplete="off"
+  aria-label="Search projects or team members"
+/>
+
+<div class="machine-meta">
+  <span class="muted"><span id="machine-count">{{ projects|length }}</span> project{% if projects|length != 1 %}s{% endif %}</span>
+</div>
+
+<div class="machine-project-list" id="machine-project-list">
+  {% for p in projects %}
+  {% set members = project_members.get(p.id, []) %}
+  <div
+    class="machine-project-row"
+    data-project-name="{{ (p.name or '')|lower }}"
+    data-team="{% for u in members %}{{ (u.name or '')|lower }} {% endfor %}"
+  >
+    <div class="machine-project-main">
+      <a href="{{ url_for('machine_project', project_id=p.id) }}">{{ p.name }}</a>
+      <span class="machine-project-meta">{{ p.project_type }}</span>
+    </div>
+    <div class="machine-project-team" aria-label="Team members">
+      {% for u in members[:3] %}
+        <span class="machine-user">{{ u.name }}</span>
+      {% endfor %}
+      {% if members|length > 3 %}
+        <span class="machine-user machine-user--more">+{{ members|length - 3 }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+  (function () {
+    var input = document.querySelector(".machine-search");
+    if (!input) return;
+    var list = document.getElementById("machine-project-list");
+    var countEl = document.getElementById("machine-count");
+    if (!list) return;
+    var rows = Array.prototype.slice.call(list.querySelectorAll(".machine-project-row"));
+
+    function applyFilter() {
+  var q = (input.value || "").trim().toLowerCase();
+  var visible = 0;
+
+  rows.forEach(function (row) {
+    var name = row.dataset.projectName || "";
+    var team = row.dataset.team || "";
+
+    var match = !q || name.includes(q) || team.includes(q);
+
+    if (match) {
+      row.style.display = "flex";   // IMPORTANT
+      visible++;
+    } else {
+      row.style.display = "none";   // hide properly
+    }
+  });
+
+  if (countEl) countEl.textContent = String(visible);
+}
+
+    function syncUrl() {
+      var base = "{{ url_for('machine_room') }}";
+      var q = (input.value || "").trim();
+      var next = q ? (base + "?q=" + encodeURIComponent(q)) : base;
+      try {
+        window.history.replaceState({}, "", next);
+      } catch (e) {}
+    }
+
+    var t = null;
+    input.addEventListener("input", function () {
+      window.clearTimeout(t);
+      t = window.setTimeout(function () {
+        applyFilter();
+        syncUrl();
+      }, 40);
+    });
+
+    // Apply filter for initial server-provided query.
+    applyFilter();
+  })();
+</script>
+{% endblock %}
+

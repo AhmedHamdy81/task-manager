@@ -3,13 +3,17 @@
 {% block content %}
 <div class="page-head">
   <h1>Project management</h1>
-  <p class="muted">{% if current_account_is_elevated %}Create and track productions: title, type, production company, and director.{% else %}Projects you are on appear here. Ask an administrator or super user to add you to a project or to create a new one.{% endif %}</p>
+  <p class="muted">{% if current_account_can_create_projects %}Create and track productions: title, type, production company, and director.{% else %}Projects you are on appear here. Ask an administrator, super user, or producer to add you to a project or to create a new one.{% endif %}</p>
 </div>
 
-{% if current_account_is_elevated %}
-<section class="panel">
-  <h2 class="panel-title">New project</h2>
-  <form class="form-stack project-form" method="post" action="{{ url_for('projects_create') }}">
+{% if current_account_can_create_projects %}
+<details class="panel project-create-details">
+  <summary class="project-create-details-summary">
+    <h2 class="panel-title project-create-details-title">New project</h2>
+    <span class="project-create-details-chevron" aria-hidden="true"></span>
+  </summary>
+  <div class="project-create-details-body">
+  <form id="project-create-form" class="form-stack project-form" method="post" action="{{ url_for('projects_create') }}">
     <div class="form-row project-form-row">
       <label class="field field--grow">
         <span class="field-label">Project name</span>
@@ -17,7 +21,10 @@
       </label>
       <label class="field field--grow">
         <span class="field-label">Project type</span>
-        <input type="text" name="project_type" required maxlength="120" placeholder="e.g. Feature, Commercial, Series" list="project-type-suggestions" autocomplete="off">
+        <span class="field-input-with-clear">
+          <input type="text" name="project_type" required maxlength="120" placeholder="e.g. Feature, Commercial, Series" list="project-type-suggestions" autocomplete="off" id="project-type-input">
+          <button type="button" class="field-input-clear" id="project-type-clear" aria-label="Clear project type" title="Clear" hidden>&times;</button>
+        </span>
       </label>
     </div>
     <datalist id="project-type-suggestions">
@@ -38,9 +45,55 @@
         <input type="text" name="director" required maxlength="200" placeholder="Director name" autocomplete="name">
       </label>
     </div>
+    <div class="project-stats-inputs">
+      <label class="field field--grow">
+        <span class="field-label">Number of episodes</span>
+        <input class="form-input" type="number" name="number_of_episodes" min="0" step="1" value="0" inputmode="numeric" aria-label="Number of episodes">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Estimated shooting days</span>
+        <input class="form-input" type="number" name="estimated_shooting_days" min="0" step="1" value="0" inputmode="numeric" aria-label="Estimated shooting days">
+      </label>
+    </div>
     <button type="submit" class="btn btn--primary">Create project</button>
   </form>
-</section>
+  <script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var form = document.getElementById("project-create-form");
+    if (!form) return;
+    var typeInput = form.querySelector('input[name="project_type"]');
+    var typeClear = document.getElementById("project-type-clear");
+    var epInput = form.querySelector('input[name="number_of_episodes"]');
+    if (!typeInput || !epInput) return;
+    var epLabel = epInput.closest("label.field");
+    function isTvSeries() {
+      return (typeInput.value || "").trim().toLowerCase() === "tv series";
+    }
+    function syncTypeClearVisibility() {
+      if (typeClear) typeClear.hidden = !(typeInput.value || "").trim();
+    }
+    function sync() {
+      var on = isTvSeries();
+      epInput.disabled = !on;
+      epInput.setAttribute("aria-disabled", on ? "false" : "true");
+      if (epLabel) epLabel.classList.toggle("field--muted", !on);
+      if (!on) epInput.value = "0";
+      syncTypeClearVisibility();
+    }
+    typeInput.addEventListener("input", sync);
+    typeInput.addEventListener("change", sync);
+    if (typeClear) {
+      typeClear.addEventListener("click", function () {
+        typeInput.value = "";
+        typeInput.focus();
+        sync();
+      });
+    }
+    sync();
+  });
+  </script>
+  </div>
+</details>
 {% endif %}
 
 <section class="panel panel--table panel--projects-directory">
@@ -52,12 +105,9 @@
         <p class="projects-toolbar-hint muted">Filter and sort the list below.</p>
       </div>
       <div class="projects-search-field">
-        <svg class="projects-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="7"/>
-          <path d="M21 21l-4.3-4.3"/>
-        </svg>
-        <label class="sr-only" for="projects-search">Search by project name</label>
-        <input type="search" id="projects-search" class="projects-search-input" name="projects_q" placeholder="Search by name…" autocomplete="off" aria-controls="projects-data-table">
+
+        <label class="sr-only" for="projects-search">Search by project name or team member</label>
+        <input type="search" id="projects-search" class="projects-search-input" name="projects_q" placeholder="Search by name or team…" autocomplete="off" aria-controls="projects-data-table">
       </div>
     </div>
   </div>
@@ -88,7 +138,7 @@
     </thead>
     <tbody>
       {% for p in projects %}
-      <tr{% if current_account_is_admin %} data-project-id="{{ p.id }}"{% endif %}>
+      <tr{% if current_account_is_admin %} data-project-id="{{ p.id }}"{% endif %} data-team-search="{{ (project_team_search.get(p.id, '') or '')|e }}">
         {% if current_account_is_admin %}
         <td class="col-drag">
           <span class="drag-handle" draggable="true" title="Drag to reorder" aria-label="Drag to reorder">⋮⋮</span>
@@ -98,7 +148,7 @@
         <td class="col-type">{{ p.project_type }}</td>
         <td class="col-production">{{ p.production_house }}</td>
         <td class="col-director">{{ p.director }}</td>
-        <td class="col-date" data-sort="{{ p.created_at.strftime('%Y-%m-%d') }}"><span class="table-date">{{ p.created_at.strftime('%Y-%m-%d') }}</span></td>
+        <td class="col-date" data-sort="{{ p.created_at|fmt_cairo_date }}"><span class="table-date">{{ p.created_at|fmt_cairo_date }}</span></td>
         <td class="actions">
           <div class="projects-row-actions">
             <a href="{{ url_for('project_completed_tasks', project_id=p.id) }}" class="btn btn--small btn--ghost">Completed tasks</a>
@@ -115,7 +165,7 @@
   </table>
   </div>
   {% else %}
-  <p class="empty">{% if current_account_is_elevated %}No projects yet. Add one above.{% else %}You are not on any project yet. Ask an administrator or super user to add you to a team.{% endif %}</p>
+  <p class="empty">{% if current_account_can_create_projects %}No projects yet. Add one above.{% else %}You are not on any project yet. Ask an administrator, super user, or producer to add you to a team.{% endif %}</p>
   {% endif %}
 </section>
 {% if projects %}
@@ -145,7 +195,9 @@
     tbody.querySelectorAll('tr').forEach(function (row) {
       var nameCell = row.querySelector('.col-name');
       var name = ((nameCell && nameCell.textContent) || '').trim().toLowerCase();
-      row.hidden = !!(q && name.indexOf(q) === -1);
+      var team = (row.getAttribute('data-team-search') || '').toLowerCase();
+      var match = !q || name.indexOf(q) !== -1 || team.indexOf(q) !== -1;
+      row.hidden = !match;
     });
   }
 

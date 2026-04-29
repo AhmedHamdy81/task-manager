@@ -1,17 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Booking · {{ app_name }}{% endblock %}
 {% block content %}
-<section class="booking-page booking-list-mode" id="booking-page-section">
-  <div class="shell-booking-head">
-    <div>
-      <h1 class="booking-page-title">Booking</h1>
-      <p class="muted booking-page-lead">Reserve a suite and view the schedule.</p>
-    </div>
-    <div class="shell-view-toggle" role="group" aria-label="View mode">
-      <button type="button" class="is-active" id="booking-view-list" aria-pressed="true">List</button>
-      <button type="button" id="booking-view-timeline" aria-pressed="false">Timeline</button>
-    </div>
-  </div>
+<section class="booking-page is-timeline" id="booking-page-section">
+  <header class="booking-page-slim-head">
+    <h1 class="booking-page-title">Booking</h1>
+    <p class="muted booking-page-lead">Timeline shows availability; click or drag to reserve.</p>
+  </header>
 
   <div
     class="booking-page-root"
@@ -20,56 +14,150 @@
     data-suites-url="{{ url_for('booking.edit_suites_list') }}"
     data-projects-url="{{ url_for('booking.booking_projects_json') }}"
     data-users-url="{{ url_for('booking.booking_users_json') }}"
+    data-project-members-url="{{ url_for('booking.booking_project_members_json', project_id=888888888) }}"
+    data-directory-user-id="{{ directory_chat_user_id if directory_chat_user_id is not none else '' }}"
     data-today-url="{{ url_for('booking.booking_today_json') }}"
     data-manage-url="{{ url_for('booking.booking_manage_page') }}"
   >
-    <form id="booking-form" class="booking-form shell-booking-form" autocomplete="off">
-      <div class="booking-form-row">
-        <label class="field booking-field booking-field--grow">
-          <span class="field-label">Room</span>
-          <select id="booking-suite" class="booking-input booking-select" required aria-label="Room"></select>
-        </label>
-        <label class="field booking-field booking-field--grow">
-          <span class="field-label">Project</span>
-          <select id="booking-project" class="booking-input booking-select" required aria-label="Project"></select>
-        </label>
-      </div>
-      <div class="booking-form-row">
-        <label class="field booking-field">
-          <span class="field-label">Date</span>
-          <input type="date" id="booking-date" class="booking-input booking-input--date" required>
-        </label>
-        <label class="field booking-field">
-          <span class="field-label">Start</span>
-          <input type="time" id="booking-start" class="booking-input booking-input--time" required>
-        </label>
-        <label class="field booking-field" id="booking-end-wrap">
-          <span class="field-label">End</span>
-          <input type="time" id="booking-end" class="booking-input booking-input--time" value="17:00">
-        </label>
-      </div>
-      <label class="booking-full-day">
-        <input type="checkbox" id="booking-full-day" class="booking-checkbox">
-        <span>To end of day</span>
-      </label>
-      <label class="field booking-field booking-field--grow">
-        <span class="field-label">Booked for</span>
-        <select id="booking-booked-for" class="booking-input booking-select" required aria-label="Booked for"></select>
-      </label>
-      <label class="field booking-field booking-field--grow">
-        <span class="field-label">Notes</span>
-        <textarea id="booking-notes" class="booking-input booking-textarea" rows="2" maxlength="10000" placeholder="Optional"></textarea>
-      </label>
-      <div class="booking-actions">
-        <button type="submit" class="btn btn--primary booking-submit" id="booking-submit">Book now</button>
-        <a class="btn btn--ghost" href="{{ url_for('booking.booking_manage_page') }}">Manage</a>
-      </div>
-      <p class="form-error booking-form-error" id="booking-form-error" hidden></p>
-      <p class="booking-form-success" id="booking-form-success" hidden></p>
-    </form>
+    <div class="booking-layout">
+      <aside class="booking-left" aria-label="Booking navigation">
+        <section class="booking-left-card booking-month-card">
+          <div class="booking-month-head">
+            <div class="booking-month-title" id="booking-month-title">Month</div>
+            <div class="booking-calendar-nav">
+              <button type="button" class="btn btn--small btn--ghost" id="booking-cal-prev" aria-label="Previous month">Prev</button>
+              <button type="button" class="btn btn--small btn--ghost" id="booking-cal-today">Today</button>
+              <button type="button" class="btn btn--small btn--ghost" id="booking-cal-next" aria-label="Next month">Next</button>
+            </div>
+          </div>
+          <div class="booking-month-grid" id="booking-month-grid" role="grid" aria-label="Month calendar"></div>
+        </section>
+        <section class="booking-left-card booking-room-card">
+          <div class="booking-room-card-head">
+            <h3>Rooms</h3>
+            <label class="booking-available-toggle">
+              <input type="checkbox" id="booking-only-available">
+              <span>Show only available</span>
+            </label>
+          </div>
+          <label class="field booking-field booking-field--grow">
+            <span class="field-label">Search rooms</span>
+            <input type="search" id="booking-room-search" class="booking-input" placeholder="Search room">
+          </label>
+          <ul id="booking-room-list" class="booking-room-list" role="listbox" aria-label="Room list"></ul>
+        </section>
+      </aside>
 
-    <div class="booking-timeline-wrap" id="booking-timeline-wrap" aria-label="Schedule timeline" hidden>
-      <div class="booking-timeline" id="booking-timeline-inner"></div>
+      <main class="booking-center">
+        <div class="booking-center-toolbar" aria-label="Timeline controls">
+          <div class="booking-center-toolbar-nav">
+            <div class="booking-calendar-nav booking-calendar-nav--center">
+              <button type="button" class="btn btn--small btn--ghost" id="booking-cal-today-center">Today</button>
+              <button type="button" class="btn btn--small btn--ghost" id="booking-cal-prev-center" aria-label="Previous range">&lt;</button>
+              <button type="button" class="btn btn--small btn--ghost" id="booking-cal-next-center" aria-label="Next range">&gt;</button>
+            </div>
+            <div class="booking-timeline-date booking-timeline-date--toolbar" id="booking-timeline-date" aria-live="polite"></div>
+          </div>
+          <div class="booking-center-toolbar-actions">
+            <div class="shell-view-toggle shell-view-toggle--toolbar" role="group" aria-label="View mode">
+              <button type="button" class="is-active" id="booking-view-timeline" aria-pressed="true">Timeline</button>
+              <button type="button" id="booking-view-list" aria-pressed="false">List</button>
+            </div>
+            <label class="booking-calendar-scope">
+              <span class="sr-only">Calendar scope</span>
+              <select id="booking-cal-scope" class="booking-input booking-select booking-calendar-scope-select" aria-label="Calendar scope">
+                <option value="day">Daily</option>
+                <option value="week">Weekly</option>
+                <option value="month">Monthly</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="booking-timeline-wrap" id="booking-timeline-wrap" aria-label="Schedule timeline">
+          <div class="booking-timeline" id="booking-timeline-inner"></div>
+        </div>
+      </main>
+
+      <aside class="booking-right">
+        <form id="booking-form" class="booking-form shell-booking-form booking-form-card booking-form-vertical" autocomplete="off">
+          <section class="booking-form-section" aria-labelledby="booking-section-details">
+            <h2 class="booking-form-section-title" id="booking-section-details">Booking details</h2>
+            <div class="booking-form-row">
+              <label class="field booking-field booking-field--grow">
+                <span class="field-label">Room</span>
+                <select id="booking-suite" class="booking-input booking-select" required aria-label="Room"></select>
+              </label>
+              <label class="field booking-field booking-field--grow">
+                <span class="field-label">Project</span>
+                <select id="booking-project" class="booking-input booking-select" required aria-label="Project"></select>
+              </label>
+            </div>
+            <div class="booking-form-row booking-form-row--date">
+              <label class="field booking-field booking-field--grow">
+                <span class="field-label">Date</span>
+                <input type="date" id="booking-date" class="booking-input booking-input--date" required>
+              </label>
+            </div>
+            <div class="booking-form-row booking-form-row--time">
+              <label class="field booking-field booking-field--grow">
+                <span class="field-label">Start</span>
+                <input type="time" id="booking-start" class="booking-input booking-input--time" required>
+              </label>
+              <label class="field booking-field booking-field--grow" id="booking-end-wrap">
+                <span class="field-label">End</span>
+                <input type="time" id="booking-end" class="booking-input booking-input--time" value="17:00">
+              </label>
+            </div>
+            <label class="booking-full-day">
+              <input type="checkbox" id="booking-full-day" class="booking-checkbox">
+              <span>To end of day</span>
+            </label>
+            <label class="field booking-field booking-field--grow">
+              <span class="field-label">Booked for</span>
+              <select id="booking-booked-for" class="booking-input booking-select" required aria-label="Booked for"></select>
+            </label>
+            <label class="field booking-field booking-field--grow">
+              <span class="field-label">Notes</span>
+              <textarea id="booking-notes" class="booking-input booking-textarea" rows="2" maxlength="10000" placeholder="Optional"></textarea>
+            </label>
+          </section>
+
+          <section class="booking-form-section" aria-labelledby="booking-section-repeat">
+            <h2 class="booking-form-section-title" id="booking-section-repeat">Repeat</h2>
+            <div class="booking-form-row">
+              <label class="field booking-field booking-field--grow">
+                <span class="field-label">Pattern</span>
+                <select id="booking-repeat" class="booking-input booking-select">
+                  <option value="none">None</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                </select>
+              </label>
+              <label class="field booking-field booking-field--grow" id="booking-repeat-until-wrap" hidden>
+                <span class="field-label">Repeat until</span>
+                <input type="date" id="booking-repeat-until" class="booking-input booking-input--date">
+              </label>
+            </div>
+          </section>
+
+          <section class="booking-form-section" aria-labelledby="booking-section-summary">
+            <h2 class="booking-form-section-title" id="booking-section-summary">Summary</h2>
+            <dl class="booking-selection-summary" id="booking-selection-summary">
+              <div><dt>Room</dt><dd id="booking-summary-room">-</dd></div>
+              <div><dt>Date</dt><dd id="booking-summary-date">-</dd></div>
+              <div><dt>Time</dt><dd id="booking-summary-time">-</dd></div>
+              <div><dt>Duration</dt><dd id="booking-summary-duration">-</dd></div>
+            </dl>
+          </section>
+
+          <div class="booking-actions">
+            <button type="submit" class="btn btn--primary booking-submit" id="booking-submit">Book now</button>
+            <a class="btn btn--ghost" href="{{ url_for('booking.booking_manage_page') }}">Manage</a>
+          </div>
+          <p class="form-error booking-form-error" id="booking-form-error" hidden></p>
+          <p class="booking-form-success" id="booking-form-success" hidden></p>
+        </form>
+      </aside>
     </div>
 
     {% include "_booking_lists.html" %}

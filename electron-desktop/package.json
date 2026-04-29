@@ -1,0 +1,33 @@
+{
+  "name": "task-manager-desktop",
+  "version": "1.0.0",
+  "description": "Desktop shell for the Task Manager Flask app (Electron + local server).",
+  "main": "main.js",
+  "author": "",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.taskmanager.desktop",
+    "productName": "Task Manager",
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg", "zip"]
+    },
+    "directories": {
+      "output": "dist"
+    }
+  }
+}

@@ -54,9 +54,6 @@
     if (sideBackdrop) {
       sideBackdrop.addEventListener("click", closeAdminSidebar);
     }
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") closeAdminSidebar();
-    });
     window.addEventListener("resize", function () {
       if (!mqSidebar()) closeAdminSidebar();
     });

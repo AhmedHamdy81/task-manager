@@ -7,6 +7,17 @@
     <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> /</p>
     <h1>{{ project.name }}</h1>
     <p class="muted">{{ project.project_type }} · {{ project.production_house }} · Director: {{ project.director }}</p>
+    {% include 'partials/project_workflow_nav.html' %}
+    {% set _ptype = (project.project_type or '') %}
+    {% set _is_tv = (_ptype|trim)|lower == 'tv series' %}
+    {% if _is_tv %}
+    <div class="project-stats project-stats--pipeline" aria-label="Production overview">
+      <div class="project-stat">
+        <span class="stat-value">{{ production_episode_count }}</span>
+        <span class="stat-label">Episodes</span>
+      </div>
+    </div>
+    {% endif %}
   </div>
   <div class="project-detail-head-actions">
     <a class="btn btn--ghost" href="{{ url_for('project_production', project_id=project.id) }}">Production</a>
@@ -15,10 +26,17 @@
     {% endif %}
   </div>
 </div>
-
-<section class="panel">
-  <h2 class="panel-title">Project team</h2>
-  <p class="muted">{% if current_account_is_elevated %}Assign people who may receive tasks for this project. Search the directory and add one member at a time.{% else %}People on this project can be assigned tasks. Only administrators and super users can add or remove team members.{% endif %}</p>
+<br>
+<details class="panel project-team-details">
+  <summary class="project-team-details-summary">
+    <span class="project-team-details-summary-main">
+      <h2 class="panel-title project-team-details-title">Project team</h2>
+      <span class="project-team-details-count muted" aria-hidden="true">{{ member_users|length }} member{% if member_users|length != 1 %}s{% endif %}</span>
+    </span>
+    <span class="project-team-details-chevron" aria-hidden="true"></span>
+  </summary>
+  <div class="project-team-details-body">
+  <p class="muted">{% if current_account_can_manage_project_team %}Assign people who may receive tasks for this project. Search the directory and add one member at a time.{% else %}People on this project can be assigned tasks. Only administrators, super users, and producers can add or remove team members.{% endif %}</p>
 
   {% if member_users %}
   <ul class="project-team-list">
@@ -29,7 +47,7 @@
         {% set role_label = (u.job_title.name.strip() if u.job_title and u.job_title.name else '') %}
         <span class="project-team-role{% if not role_label %} project-team-role--fallback{% endif %}">{{ role_label or u.name }}</span>
       </div>
-      {% if current_account_is_elevated %}
+      {% if current_account_can_manage_project_team %}
       <form method="post" action="{{ url_for('project_member_remove', project_id=project.id, user_id=u.id) }}" class="inline" data-confirm="{{ ('Remove ' ~ u.name ~ ' from this project team?')|e }}">
         <button type="submit" class="btn btn--small btn--danger">Remove</button>
       </form>
@@ -41,11 +59,12 @@
   <p class="empty">No team members yet. Add people below — tasks can only be assigned to team members.</p>
   {% endif %}
 
-  {% if current_account_is_elevated and available_to_add %}
+  {% if current_account_can_manage_project_team and available_to_add %}
   <form class="form-stack project-add-members" id="project-add-member-form" method="post" action="{{ url_for('project_members_add', project_id=project.id) }}">
     <div class="user-picker">
-      <span class="field-label" id="project-user-picker-label">Add team member</span>
-      <input type="hidden" name="user_id" id="project-add-user-id" value="">
+      <span class="field-label" id="project-user-picker-label">Add team members</span>
+      <div id="project-selected-users" class="user-picker-selected" hidden></div>
+      <div id="project-add-user-ids"></div>
       <div class="user-picker-box">
         <div class="user-picker-input-wrap">
           <input
@@ -87,40 +106,89 @@
   (function () {
     var form = document.getElementById('project-add-member-form');
     if (!form) return;
-    var hiddenId = document.getElementById('project-add-user-id');
+    var hiddenWrap = document.getElementById('project-add-user-ids');
+    var selectedWrap = document.getElementById('project-selected-users');
     var search = document.getElementById('project-user-search');
     var list = document.getElementById('project-user-picker-list');
     var emptyMsg = document.getElementById('project-user-picker-empty');
     var clearBtn = document.getElementById('project-user-clear');
     var items = list ? Array.prototype.slice.call(list.querySelectorAll('.user-picker-item')) : [];
-    var committedId = '';
-    var committedLabel = '';
+    var selectedUsers = new Map();
 
     function norm(s) {
       return (s || '').toLowerCase().trim();
     }
 
-    function isShowingCommittedPick() {
-      return !!committedId && norm(search.value) === norm(committedLabel);
+    function selectedCount() {
+      return selectedUsers.size;
+    }
+
+    function isSelected(id) {
+      return selectedUsers.has(String(id));
+    }
+
+    function renderHiddenInputs() {
+      if (!hiddenWrap) return;
+      hiddenWrap.innerHTML = '';
+      selectedUsers.forEach(function (_label, id) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'user_ids';
+        input.value = id;
+        hiddenWrap.appendChild(input);
+      });
     }
 
     function syncClearBtn() {
-      if (clearBtn) clearBtn.hidden = !hiddenId || !hiddenId.value;
+      if (clearBtn) clearBtn.hidden = selectedCount() === 0 && !norm(search && search.value);
+    }
+
+    function renderSelectedChips() {
+      if (!selectedWrap) return;
+      selectedWrap.innerHTML = '';
+      if (selectedCount() === 0) {
+        selectedWrap.hidden = true;
+        return;
+      }
+      selectedWrap.hidden = false;
+      selectedUsers.forEach(function (label, id) {
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'user-picker-chip';
+        chip.setAttribute('data-user-id', id);
+        chip.innerHTML = '<span>' + label + '</span><span aria-hidden="true">&times;</span>';
+        chip.addEventListener('click', function () {
+          selectedUsers.delete(id);
+          renderAll();
+          if (search) search.focus();
+        });
+        selectedWrap.appendChild(chip);
+      });
+    }
+
+    function syncOptionStates() {
+      items.forEach(function (li) {
+        var btn = li.querySelector('.user-picker-option');
+        if (!btn) return;
+        var id = btn.getAttribute('data-user-id');
+        var active = isSelected(id);
+        btn.classList.toggle('is-selected', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
     }
 
     function filterList() {
       var q = norm(search.value);
-      var filterQ = isShowingCommittedPick() ? '' : q;
       var any = false;
       items.forEach(function (li) {
         var btn = li.querySelector('.user-picker-option');
         if (!btn) return;
         var hay = norm(btn.getAttribute('data-user-name') + ' ' + btn.getAttribute('data-user-email'));
-        var show = !filterQ || hay.indexOf(filterQ) !== -1;
+        var show = !q || hay.indexOf(q) !== -1;
         li.hidden = !show;
         if (show) any = true;
       });
-      if (emptyMsg) emptyMsg.hidden = any || !filterQ;
+      if (emptyMsg) emptyMsg.hidden = any || !q;
     }
 
     function setListOpen(open) {
@@ -129,46 +197,20 @@
       search.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
 
-    function selectUser(id, label) {
-      if (hiddenId) hiddenId.value = String(id);
-      committedId = String(id);
-      committedLabel = label;
-      if (search) search.value = label;
-      syncClearBtn();
-      setListOpen(false);
+    function renderAll() {
+      renderHiddenInputs();
+      renderSelectedChips();
+      syncOptionStates();
       filterList();
-      if (search) search.focus();
-    }
-
-    function clearSelection() {
-      if (hiddenId) hiddenId.value = '';
-      committedId = '';
-      committedLabel = '';
-      if (search) search.value = '';
       syncClearBtn();
-      setListOpen(true);
-      filterList();
-      if (search) search.focus();
     }
 
     if (search) {
       search.addEventListener('focus', function () {
         setListOpen(true);
         filterList();
-        if (hiddenId && hiddenId.value) {
-          requestAnimationFrame(function () {
-            try {
-              search.select();
-            } catch (err) {}
-          });
-        }
       });
       search.addEventListener('input', function () {
-        if (committedId && norm(search.value) !== norm(committedLabel)) {
-          if (hiddenId) hiddenId.value = '';
-          committedId = '';
-          committedLabel = '';
-        }
         syncClearBtn();
         setListOpen(true);
         filterList();
@@ -183,7 +225,16 @@
         var name = btn.getAttribute('data-user-name') || '';
         var meta = btn.getAttribute('data-user-meta') || '';
         if (!id) return;
-        selectUser(id, name + (meta ? ' — ' + meta : ''));
+        var key = String(id);
+        if (selectedUsers.has(key)) selectedUsers.delete(key);
+        else selectedUsers.set(key, name + (meta ? ' — ' + meta : ''));
+        renderAll();
+        if (search) {
+          search.value = '';
+          setListOpen(true);
+          filterList();
+          search.focus();
+        }
       });
     }
 
@@ -191,7 +242,11 @@
       clearBtn.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        clearSelection();
+        selectedUsers.clear();
+        if (search) search.value = '';
+        renderAll();
+        setListOpen(true);
+        if (search) search.focus();
       });
     }
 
@@ -199,12 +254,8 @@
       if (!form.contains(e.target)) setListOpen(false);
     });
 
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && form.contains(document.activeElement)) setListOpen(false);
-    });
-
     form.addEventListener('submit', function (e) {
-      if (!hiddenId || !hiddenId.value) {
+      if (!selectedCount()) {
         e.preventDefault();
         if (search) search.focus();
         setListOpen(true);
@@ -212,58 +263,36 @@
       }
     });
 
-    syncClearBtn();
+    renderAll();
   })();
   </script>
   {% elif current_account_is_elevated %}
   <p class="empty empty--tight">Everyone in the directory is already on this project, or there are no other users.</p>
   {% endif %}
-</section>
+  </div>
+</details>
 
-<section class="panel project-tasks-panel project-tasks-panel--stream" id="project-tasks-panel">
+<section
+  class="panel project-tasks-panel project-tasks-panel--stream"
+  id="project-tasks-panel"
+  data-project-id="{{ project.id }}"
+  data-tm-project-tasks-fragment-url="{{ url_for('ui_fragment_project_tasks_panel_body', project_id=project.id) }}"
+>
   <h2 class="panel-title project-tasks-panel-title">Active tasks</h2>
+  <div id="project-tasks-panel-body">
   {% if not active_tasks %}
   <p class="empty empty--tight project-tasks-empty-state">{% if has_title_presets and member_users %}No active tasks. <button type="button" class="project-new-task-trigger" id="project-new-task-open" aria-haspopup="dialog" aria-controls="project-new-task-dialog">Create a new task</button>, or use the <a href="{{ url_for('tasks_list') }}">Tasks</a> page.{% else %}No active tasks. Add team members and task titles, or use the <a href="{{ url_for('tasks_list') }}">Tasks</a> page.{% endif %}</p>
   {% else %}
   <div class="project-tasks-panel-stream">
     <div class="task-stream" role="list">
       {% for t in active_tasks %}
-      <article class="task-item" role="listitem">
-        <div class="task-item-body">
-          <h3 class="task-item-title">{{ t.title }}</h3>
-          {% if t.description %}<p class="project-active-task-desc">{{ t.description }}</p>{% endif %}
-          <p class="task-item-meta">
-            <span class="task-item-assignee">
-              <span class="task-item-assignee-label">Assigned to</span>
-              {% if t.assignee %}
-              <span class="task-item-assignee-name">{{ t.assignee.name }}</span>
-              {% else %}
-              <span class="task-item-assignee-name task-item-assignee-name--unassigned">Unassigned</span>
-              {% endif %}
-            </span>
-            <span class="task-item-meta-sep" aria-hidden="true">·</span>
-            <span>Created {% if t.created_at %}{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</span>
-          </p>
-        </div>
-        <div class="task-item-actions">
-          {% if can_update_task_status(t) %}
-          <form method="post" action="{{ url_for('tasks_set_status', task_id=t.id) }}" class="status-form project-active-status-form">
-            <input type="hidden" name="next" value="{{ url_for('project_detail', project_id=project.id) }}">
-            <select name="status" class="status-select" aria-label="Task status">
-              <option value="open" {% if t.status == 'open' %}selected{% endif %}>Open</option>
-              <option value="in_progress" {% if t.status == 'in_progress' %}selected{% endif %}>In progress</option>
-              <option value="done" {% if t.status == 'done' %}selected{% endif %}>Done</option>
-            </select>
-          </form>
-          {% else %}
-          <span class="badge">{{ t.status|replace('_', ' ') }}</span>
-          {% endif %}
-        </div>
-      </article>
+      {% set status_next_url = url_for('project_detail', project_id=project.id) %}
+      {% include 'partials/active_task_item.html' %}
       {% endfor %}
     </div>
   </div>
   {% endif %}
+  </div>
   <p class="project-tasks-completed-link"><a href="{{ url_for('project_completed_tasks', project_id=project.id) }}" class="project-new-task-trigger">Completed tasks</a></p>
 </section>
 
@@ -283,40 +312,6 @@
   </div>
 </dialog>
 {% endif %}
-
-<section id="project-shooting-days" aria-labelledby="shooting-days-heading">
-  <h2 id="shooting-days-heading">Shooting Days</h2>
-  {% if project_shooting_days %}
-  {% set first_day = project_shooting_days[0] %}
-  {% set last_day = project_shooting_days[-1] %}
-  <div id="shooting-days-pagination-style" class="shooting-days-pagination" role="navigation" aria-label="Shooting days">
-    <a class="day-page" href="{{ url_for('project_production_day', project_id=project.id, day_id=first_day.id) }}" aria-label="First shooting day">&lt;</a>
-    {% for d in project_shooting_days %}
-    <a class="day-page" href="{{ url_for('project_production_day', project_id=project.id, day_id=d.id) }}" aria-label="Shooting day {{ loop.index }}">{{ loop.index }}</a>
-    {% endfor %}
-    <a class="day-page" href="{{ url_for('project_production_day', project_id=project.id, day_id=last_day.id) }}" aria-label="Last shooting day">&gt;</a>
-  </div>
-  {% endif %}
-  <p><button type="button" id="project-shooting-day-add-open">+ Add Day</button></p>
-</section>
-
-<dialog class="project-task-modal" id="shooting-day-add-dialog" aria-labelledby="shooting-day-add-title">
-  <div class="project-task-modal-inner">
-    <div class="project-task-modal-head">
-      <h2 id="shooting-day-add-title" class="project-task-modal-title">Add shooting day</h2>
-      <button type="button" class="btn btn--small btn--ghost" data-shooting-day-add-close aria-label="Close">Close</button>
-    </div>
-    <form class="form-stack" method="post" action="{{ url_for('shooting_day_create', project_id=project.id) }}">
-      <input type="hidden" name="next" value="{{ url_for('project_detail', project_id=project.id) }}#project-shooting-days">
-      <label class="field-label" for="shooting-day-modal-unit">Unit number</label>
-      <input id="shooting-day-modal-unit" type="text" name="unit_number" class="input" autocomplete="off" aria-label="Unit number">
-      <label class="field-label" for="shooting-day-modal-date">Shooting date</label>
-      <input id="shooting-day-modal-date" type="date" name="shooting_date" class="input" required aria-label="Shooting date">
-      <button type="submit" class="btn btn--primary">Save</button>
-      <button type="button" class="btn btn--ghost" data-shooting-day-add-close>Cancel</button>
-    </form>
-  </div>
-</dialog>
 
 <p class="panel-after-link"><a href="{{ url_for('projects_list') }}">← All projects</a></p>
 </div>
@@ -341,22 +336,6 @@
     });
   }
 
-  var addDlg = document.getElementById('shooting-day-add-dialog');
-  var addOpen = document.getElementById('project-shooting-day-add-open');
-  if (addDlg && addOpen && typeof addDlg.showModal === 'function') {
-    addOpen.addEventListener('click', function () {
-      addDlg.showModal();
-      var unitIn = document.getElementById('shooting-day-modal-unit');
-      var dateIn = document.getElementById('shooting-day-modal-date');
-      var first = unitIn || dateIn;
-      if (first) {
-        try { first.focus(); } catch (e) {}
-      }
-    });
-    addDlg.querySelectorAll('[data-shooting-day-add-close]').forEach(function (btn) {
-      btn.addEventListener('click', function () { addDlg.close(); });
-    });
-  }
 })();
 </script>
 {% endblock %}

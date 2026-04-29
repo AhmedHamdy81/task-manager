@@ -1,9 +1,11 @@
 /**
- * Tasks list: debounced search, client filters/sort, inspector panel (no list innerHTML wipes).
+ * Tasks list: debounced search, client filters/sort, inspector panel.
+ * Row clicks use delegation on #tasks-page-root so list HTML can be replaced (realtime).
  */
 (function () {
   "use strict";
 
+  var root = null;
   var stream;
   var searchEl;
   var projectEl;
@@ -26,8 +28,31 @@
     };
   }
 
+  function isMrTaskStreamRoot() {
+    return !!(root && root.getAttribute("data-tm-mr-task-stream") === "1");
+  }
+
+  function rowCssSelector() {
+    return isMrTaskStreamRoot() ? ".task-item" : ".tm-task-line";
+  }
+
+  function filteredOutClass() {
+    return isMrTaskStreamRoot() ? "task-item--filtered-out" : "tm-task-line--filtered-out";
+  }
+
+  function bindRefs() {
+    if (!root) return;
+    stream = root.querySelector("#tm-task-stream");
+    searchEl = root.querySelector("#tasks-filter-search");
+    projectEl = root.querySelector("#tasks-filter-project");
+    userEl = root.querySelector("#tasks-filter-user");
+    statusEl = root.querySelector("#tasks-filter-status");
+    sortEl = root.querySelector("#tasks-filter-sort");
+    parking = root.querySelector("#tasks-inspector-parking");
+  }
+
   function rows() {
-    return stream ? Array.prototype.slice.call(stream.querySelectorAll(".tm-task-line")) : [];
+    return stream ? Array.prototype.slice.call(stream.querySelectorAll(rowCssSelector())) : [];
   }
 
   function populateFilterOptions() {
@@ -86,10 +111,12 @@
 
   function applyFilters() {
     if (!stream) return;
+    var hideCls = filteredOutClass();
     rows().forEach(function (row) {
       var ok = rowMatches(row);
-      row.hidden = !ok;
+      row.classList.toggle(hideCls, !ok);
       row.setAttribute("aria-hidden", ok ? "false" : "true");
+      row.tabIndex = ok ? 0 : -1;
     });
   }
 
@@ -124,10 +151,12 @@
   }
 
   function openTaskInspector(row) {
+    if (isMrTaskStreamRoot()) return;
     if (!window.tmShell || !row) return;
     if (activeRow === row && inspectorWrap) return;
 
     restoreActionsToRow();
+    bindRefs();
 
     var titleEl = row.querySelector(".task-item-title");
     var title = titleEl ? titleEl.textContent.trim() : "Task";
@@ -157,13 +186,15 @@
     }
 
     var desc = row.querySelector(".tm-task-desc");
-    addRow(
-      "Task",
-      document.createTextNode(title)
-    );
+    var copyLive = row.getAttribute("data-is-copy") === "1" ? row.querySelector(".task-copy-live") : null;
+    addRow("Task", document.createTextNode(title));
     addRow(
       "Details",
-      desc ? document.createTextNode(desc.textContent.trim()) : "—"
+      copyLive
+        ? document.createTextNode(copyLive.innerText.replace(/\s+/g, " ").trim())
+        : desc
+          ? document.createTextNode(desc.textContent.trim())
+          : "—"
     );
 
     var projLink = row.querySelector(".tm-task-line-project a");
@@ -211,37 +242,41 @@
     restoreActionsToRow();
   };
 
-  function onRowClick(e) {
-    if (e.target.closest("a")) return;
-    var row = e.currentTarget;
-    openTaskInspector(row);
-  }
-
-  function init() {
-    var root = document.getElementById("tasks-page-root");
-    stream = document.getElementById("tm-task-stream");
-    if (!root || !stream) return;
-
-    searchEl = document.getElementById("tasks-filter-search");
-    projectEl = document.getElementById("tasks-filter-project");
-    userEl = document.getElementById("tasks-filter-user");
-    statusEl = document.getElementById("tasks-filter-status");
-    sortEl = document.getElementById("tasks-filter-sort");
-    parking = document.getElementById("tasks-inspector-parking");
-
-    populateFilterOptions();
-
+  function ensureRowTabIndexes() {
     rows().forEach(function (row) {
-      row.addEventListener("click", onRowClick);
-      row.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") {
-          if (e.target.closest("a")) return;
-          e.preventDefault();
-          openTaskInspector(row);
-        }
-      });
       row.setAttribute("tabindex", "0");
     });
+  }
+
+  function wireDelegationsOnce() {
+    if (!root || root.getAttribute("data-tm-tasks-delegate") === "1") return;
+    root.setAttribute("data-tm-tasks-delegate", "1");
+    root.addEventListener("click", function (e) {
+      if (isMrTaskStreamRoot()) return;
+      var row = e.target.closest && e.target.closest(".tm-task-line");
+      if (!row || !root.contains(row)) return;
+      bindRefs();
+      if (!stream || !stream.contains(row)) return;
+      if (e.target.closest("a")) return;
+      openTaskInspector(row);
+    });
+    root.addEventListener("keydown", function (e) {
+      if (isMrTaskStreamRoot()) return;
+      if (e.key !== "Enter" && e.key !== " ") return;
+      var row = e.target.closest && e.target.closest(".tm-task-line");
+      if (!row || !root.contains(row)) return;
+      bindRefs();
+      if (!stream || !stream.contains(row)) return;
+      if (e.target.closest("a")) return;
+      e.preventDefault();
+      openTaskInspector(row);
+    });
+  }
+
+  function wireFiltersOnce() {
+    if (!root || root.getAttribute("data-tm-tasks-filters") === "1") return;
+    root.setAttribute("data-tm-tasks-filters", "1");
+    bindRefs();
 
     var debouncedSearch = debounce(function () {
       applyFilters();
@@ -250,6 +285,7 @@
 
     if (searchEl) {
       searchEl.addEventListener("input", debouncedSearch);
+      searchEl.addEventListener("change", debouncedSearch);
     }
     function onDiscreteFilterChange() {
       applyFilters();
@@ -259,9 +295,32 @@
       if (el) el.addEventListener("change", onDiscreteFilterChange);
     });
     if (sortEl) sortEl.addEventListener("change", onDiscreteFilterChange);
-
-    onDiscreteFilterChange();
   }
+
+  function init() {
+    root = document.getElementById("tasks-page-root");
+    if (!root) return;
+    wireDelegationsOnce();
+    wireFiltersOnce();
+    bindRefs();
+    populateFilterOptions();
+    if (stream) ensureRowTabIndexes();
+    applyFilters();
+    sortRows();
+  }
+
+  window.__tmTasksPageRefreshStream = function () {
+    if (!root) root = document.getElementById("tasks-page-root");
+    if (!root) return;
+    /* Filter bar may have been replaced (e.g. realtime MR zone); re-attach listeners. */
+    root.removeAttribute("data-tm-tasks-filters");
+    wireFiltersOnce();
+    bindRefs();
+    populateFilterOptions();
+    if (stream) ensureRowTabIndexes();
+    applyFilters();
+    sortRows();
+  };
 
   document.addEventListener("DOMContentLoaded", init);
 })();

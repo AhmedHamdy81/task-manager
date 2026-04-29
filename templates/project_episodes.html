@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Episodes · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block content %}
+<div class="project-detail-page">
+  <div class="page-head project-detail-head">
+    <div class="project-detail-head-main">
+      <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
+      <h1>{{ project.name }}</h1>
+      <p class="muted">{{ project.project_type }} · {{ project.production_house }} · Director: {{ project.director }}</p>
+      {% include 'partials/project_workflow_nav.html' %}
+    </div>
+  </div>
+
+  <section class="panel panel--page-tone" aria-label="Episodes">
+    {% if episodes %}
+    <ul class="production-days-simple-list project-episode-list">
+      {% for ep in episodes %}
+      <li class="production-days-simple-item production-days-simple-stack">
+        <span class="production-days-simple-main">Episode {{ ep.episode_number }}</span>
+        <span class="production-days-simple-sub project-episode-meta">Total Duration: {{ ep.total_duration }} min · Scenes: {{ ep.scene_count }}</span>
+        <span class="production-days-simple-sub">
+          Sync:
+          {% if ep.scene_count == 0 %}
+          <span class="badge badge--muted">Empty</span>
+          {% elif ep.sync_done %}
+          <span class="badge badge--success">Done</span>
+          {% else %}
+          <span class="badge badge--danger">Pending</span>
+          {% endif %}
+          · 1st Edit:
+          {% if ep.scene_count == 0 %}
+          <span class="badge badge--info">Empty</span>
+          {% elif ep.first_edit_done %}
+          <span class="badge badge--success">Done</span>
+          {% else %}
+          <span class="badge badge--danger">Pending</span>
+          {% endif %}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty empty--in-panel">No episodes configured on this project.</p>
+    {% endif %}
+  </section>
+
+  <p class="panel-after-link"><a href="{{ url_for('project_detail', project_id=project.id) }}">← Back to project overview</a></p>
+</div>
+{% endblock %}

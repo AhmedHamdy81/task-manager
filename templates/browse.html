@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}{{ mount.name }} · Browse · {{ app_name }}{% endblock %}
+
+{% block content %}
+<header class="page-head shell-page-head music-browse-head">
+  <div class="music-library-head-row">
+    <div>
+      <h1>{{ mount.name }}</h1>
+      <p class="muted music-browse-crumb">
+        <code>{{ mount.base_path }}</code>
+        {% if path %}<span class="music-browse-sep">/</span><code>{{ path }}</code>{% endif %}
+      </p>
+    </div>
+    <div class="music-library-actions">
+      <a class="btn btn--secondary" href="{{ url_for('music_library') }}">Music Library</a>
+      {% if path %}
+      <a class="btn btn--ghost" href="{% if parent_path %}{{ url_for('browse_mount', mount_id=mount.id, path=parent_path) }}{% else %}{{ url_for('browse_mount', mount_id=mount.id) }}{% endif %}">Up</a>
+      {% endif %}
+    </div>
+  </div>
+</header>
+
+<section class="panel shell-panel-min music-browse-panel">
+  <audio id="browse-player" class="music-library-player" controls preload="none"></audio>
+
+  {% if not items %}
+  <p class="empty muted">This folder is empty.</p>
+  {% else %}
+  <ul class="music-browse-list" role="list">
+    {% for item in items %}
+    <li class="music-browse-row{% if item.playable %} music-browse-row--playable{% endif %}">
+      {% if item.is_dir %}
+      <a class="music-browse-link" href="{{ url_for('browse_mount', mount_id=mount.id, path=item.path) }}">📁 {{ item.name }}</a>
+      {% elif item.playable %}
+      <button
+        type="button"
+        class="btn btn--small btn--ghost music-browse-playbtn"
+        data-mount-id="{{ mount.id }}"
+        data-rel-path="{{ item.path }}"
+        aria-label="Play {{ item.name }}"
+      >▶</button>
+      <a
+        class="music-browse-file music-browse-file--playable"
+        href="{{ url_for('browse_play_file', mount_id=mount.id, path=item.path) }}"
+        data-mount-id="{{ mount.id }}"
+        data-rel-path="{{ item.path }}"
+      >📄 {{ item.name }}</a>
+      <div
+        class="music-browse-tag-editor"
+        data-mount-id="{{ mount.id }}"
+        data-rel-path="{{ item.path }}"
+      >
+        <div class="music-browse-color-palette" aria-label="Color tags for {{ item.name }}">
+          {% for c in ["red", "orange", "yellow", "green", "blue", "purple"] %}
+          <button
+            type="button"
+            class="music-browse-color-dot music-browse-color-dot--{{ c }}{% if c in item.color_tags %} is-active{% endif %}"
+            data-color="{{ c }}"
+            title="{{ c }}"
+            aria-label="{{ c }} tag"
+            aria-pressed="{% if c in item.color_tags %}true{% else %}false{% endif %}"
+          ></button>
+          {% endfor %}
+        </div>
+        <input
+          class="input music-browse-note"
+          type="text"
+          value="{{ item.comments }}"
+          maxlength="5000"
+          placeholder="Text tag / comment"
+          aria-label="Text tag for {{ item.name }}"
+        >
+        <button type="button" class="btn btn--small btn--ghost music-browse-save">Save</button>
+      </div>
+      {% else %}
+      <span class="music-browse-file">📄 {{ item.name }}</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<script>
+function browsePlay(mountId, relPath) {
+  var player = document.getElementById("browse-player");
+  if (!player) return;
+  player.src =
+    "/music-library/mount/" +
+    encodeURIComponent(mountId) +
+    "/play?path=" +
+    encodeURIComponent(relPath);
+  player.play();
+}
+
+(function () {
+  function playFromDataset(el) {
+    if (!el) return;
+    var mountId = el.getAttribute("data-mount-id");
+    var relPath = el.getAttribute("data-rel-path");
+    if (!mountId || !relPath) return;
+    browsePlay(mountId, relPath);
+  }
+
+  document.querySelectorAll(".music-browse-playbtn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      playFromDataset(btn);
+    });
+  });
+
+  document.querySelectorAll(".music-browse-file--playable").forEach(function (link) {
+    link.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      playFromDataset(link);
+    });
+  });
+
+  function saveTag(editor) {
+    if (!editor) return;
+    var mountId = editor.getAttribute("data-mount-id");
+    var relPath = editor.getAttribute("data-rel-path");
+    var activeColors = Array.from(
+      editor.querySelectorAll(".music-browse-color-dot.is-active")
+    ).map(function (el) {
+      return el.getAttribute("data-color");
+    });
+    var note = editor.querySelector(".music-browse-note");
+    var saveBtn = editor.querySelector(".music-browse-save");
+    if (!mountId || !relPath || !saveBtn) return;
+    var before = saveBtn.textContent;
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    fetch("/music-library/mount/" + encodeURIComponent(mountId) + "/tag", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        path: relPath,
+        color_tags: activeColors,
+        comments: note ? note.value : "",
+      }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (res) {
+        if (!res || !res.ok) throw new Error("save_failed");
+        saveBtn.textContent = "Saved";
+        setTimeout(function () {
+          saveBtn.textContent = before;
+        }, 900);
+      })
+      .catch(function () {
+        saveBtn.textContent = "Retry";
+      })
+      .finally(function () {
+        saveBtn.disabled = false;
+      });
+  }
+
+  document.querySelectorAll(".music-browse-save").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      saveTag(btn.closest(".music-browse-tag-editor"));
+    });
+  });
+
+  document.querySelectorAll(".music-browse-note").forEach(function (input) {
+    input.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        saveTag(input.closest(".music-browse-tag-editor"));
+      }
+    });
+  });
+
+  document.querySelectorAll(".music-browse-color-dot").forEach(function (dot) {
+    dot.addEventListener("click", function () {
+      dot.classList.toggle("is-active");
+      dot.setAttribute(
+        "aria-pressed",
+        dot.classList.contains("is-active") ? "true" : "false"
+      );
+    });
+  });
+})();
+</script>
+{% endblock %}
