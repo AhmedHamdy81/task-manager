@@ -1,7 +1,11 @@
 {% set wa = workflow_active|default('overview') %}
+{% set _ptype_nav = (project.project_type if project and project.project_type is defined else '') %}
+{% set _is_tv_nav = (_ptype_nav|trim)|lower == 'tv series' %}
 <nav class="project-workflow-nav" aria-label="Production workflow">
   <a class="project-workflow-nav-link{% if wa == 'overview' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_detail', project_id=project.id) }}">Overview</a>
+  {% if _is_tv_nav %}
   <a class="project-workflow-nav-link{% if wa == 'episodes' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_episodes', project_id=project.id) }}">Episodes</a>
+  {% endif %}
   <a class="project-workflow-nav-link{% if wa == 'shooting' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_production', project_id=project.id) }}">Shooting days</a>
   <a class="project-workflow-nav-link{% if wa == 'vfx' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_vfx', project_id=project.id) }}">VFX Management</a>
   <a class="project-workflow-nav-link{% if wa == 'audio' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_audio_library', project_id=project.id) }}">Audio Library</a>

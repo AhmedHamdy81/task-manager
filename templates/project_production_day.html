@@ -20,7 +20,10 @@
 
       <section class="panel production-pipeline-day-panel" aria-labelledby="pipeline-day-heading">
         <h2 id="pipeline-day-heading" class="panel-title">Scene rows</h2>
-        <p class="muted production-panel-lead shooting-day-lead">Duration: whole minutes, or M:SS (e.g. 4:30). Episode must be within the project episode count.</p>
+        <p class="muted production-panel-lead shooting-day-lead">
+          Duration: whole minutes, or M:SS (e.g. 4:30).
+          {% if is_tv_project %}Episode must be within the project episode count.{% endif %}
+        </p>
 
         <div class="shooting-dashboard" aria-label="Day progress">
           <div class="dash-card">
@@ -50,15 +53,17 @@
         <p class="shooting-day-total muted">Day total: <strong>{{ total_duration_seconds|fmt_duration_total }}</strong> <span class="muted">({{ (total_duration_seconds // 60) }} min)</span></p>
 
         <form id="shooting-add-form" class="shooting-add-form" method="post" action="{{ url_for('shooting_day_assign_scene', project_id=project.id, day_id=production_day.id) }}">
-          <div class="shooting-row-input">
+          <div class="shooting-row-input{% if not is_tv_project %} shooting-row-input--no-ep{% endif %}">
+            {% if is_tv_project %}
             <input type="number" name="episode_number" id="shooting-add-ep" min="1" max="{{ max_episode_number }}" required placeholder="Ep" class="input input--sm" aria-label="Episode number" {% if max_episode_number < 1 %}disabled{% endif %}>
+            {% endif %}
             <input type="text" name="scene_label" maxlength="120" required placeholder="Sc" class="input input--sm shooting-scene-input" aria-label="Scene">
             <input type="text" name="duration" inputmode="text" autocomplete="off" placeholder="Min or M:SS" class="input input--sm" aria-label="Duration in whole minutes or M:SS">
             <input type="text" name="notes" maxlength="20000" placeholder="Notes…" class="input input--grow" aria-label="Notes">
             <label class="check"><input type="checkbox" name="sync_done" value="1"> Sync</label>
             <label class="check"><input type="checkbox" name="first_edit_done" value="1"> 1st Edit</label>
             <label class="check"><input type="checkbox" name="needs_vfx" value="1"> Needs VFX</label>
-            <button type="submit" class="btn btn--primary btn--sm shooting-add-btn" {% if max_episode_number < 1 %}disabled{% endif %}>+ Add</button>
+            <button type="submit" class="btn btn--primary btn--sm shooting-add-btn" {% if is_tv_project and max_episode_number < 1 %}disabled{% endif %}>+ Add</button>
           </div>
         </form>
 
@@ -70,7 +75,7 @@
           <details class="shooting-row-card" id="shooting-row-{{ link.id }}">
             <summary class="shooting-row-card-summary">
               <div class="shooting-main">
-                Ep {{ link.episode_number }} · {% if (link.scene_label or '')|trim %}{{ (link.scene_label or '')|e }}{% else %}Sc {{ link.scene_number }}{% endif %}
+                {% if is_tv_project %}Ep {{ link.episode_number }} · {% endif %}{% if (link.scene_label or '')|trim %}{{ (link.scene_label or '')|e }}{% else %}Sc {{ link.scene_number }}{% endif %}
                 {% if link.notes %}<span class="muted shooting-row-sub">{{ (link.notes or '')|e }}</span>{% endif %}
               </div>
               <div class="shooting-meta">{{ mins }} min</div>
@@ -82,8 +87,10 @@
             </summary>
             <div class="shooting-row-card-edit">
               <div class="shooting-row-card-edit-row">
-                <form class="shooting-row-input shooting-row-input--edit" method="post" action="{{ url_for('shooting_day_scene_update', project_id=project.id, link_id=link.id) }}">
+                <form class="shooting-row-input shooting-row-input--edit{% if not is_tv_project %} shooting-row-input--no-ep{% endif %}" method="post" action="{{ url_for('shooting_day_scene_update', project_id=project.id, link_id=link.id) }}">
+                  {% if is_tv_project %}
                   <input type="number" name="episode_number" min="1" max="{{ max_episode_number }}" required value="{{ link.episode_number }}" class="input input--sm" aria-label="Episode number" {% if max_episode_number < 1 %}disabled{% endif %}>
+                  {% endif %}
                   <input type="text" name="scene_label" maxlength="120" required value="{{ (link.scene_label or '')|e }}" class="input input--sm shooting-scene-input" aria-label="Scene">
                   <input type="text" name="duration" value="{{ link|shooting_row_duration_sec|fmt_duration_mmss }}" placeholder="M:SS" class="input input--sm" inputmode="text" autocomplete="off" aria-label="Duration M:SS or minutes">
                   <input type="text" name="notes" maxlength="20000" value="{{ link.notes or '' }}" placeholder="Notes…" class="input input--grow" aria-label="Notes">
@@ -129,9 +136,9 @@
     window.history.replaceState({}, "", path);
   }
   var addForm = document.getElementById("shooting-add-form");
-  var addEp = document.getElementById("shooting-add-ep");
-  if (nid && addEp) {
-    addEp.focus({ preventScroll: true });
+  var addTarget = document.getElementById("shooting-add-ep") || document.querySelector("#shooting-add-form input[name='scene_label']");
+  if (nid && addTarget) {
+    addTarget.focus({ preventScroll: true });
   }
   if (addForm) {
     addForm.addEventListener("keydown", function (e) {

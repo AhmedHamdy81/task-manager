@@ -4145,13 +4145,17 @@ button[disabled] {
 }
 
 .shooting-row-input .check {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 0.8125rem;
   color: var(--muted);
   user-select: none;
   min-height: 2.75rem;
+  width: auto;
+  max-width: max-content;
+  justify-self: start;
+  box-sizing: border-box;
 }
 
 .shooting-row-input .check input {
@@ -4218,6 +4222,48 @@ button[disabled] {
   .shooting-add-btn {
     width: auto;
   }
+
+  /* Non–TV: Scene | Duration on row 1; Notes full width; checks row */
+  .shooting-row-input.shooting-row-input--no-ep {
+    grid-template-columns: minmax(0, 1fr) minmax(4.25rem, 7rem);
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > input:nth-of-type(1) {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > input:nth-of-type(2) {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > input:nth-of-type(3) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > label.check:nth-of-type(1) {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > label.check:nth-of-type(2) {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > label.check:nth-of-type(3) {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > button {
+    grid-column: 1 / -1;
+    grid-row: 5;
+    width: auto;
+    justify-self: end;
+  }
 }
 
 /* Desktop: single row, fluid notes */
@@ -4229,30 +4275,51 @@ button[disabled] {
       minmax(6rem, 18rem)
       minmax(4.5rem, 6rem)
       minmax(10rem, 1fr)
-      auto
-      auto
-      auto
+      max-content
+      max-content
+      max-content
       minmax(5.5rem, max-content);
     gap: 0.5rem 0.65rem;
     align-items: center;
   }
 
+  /* Non–TV: no Ep column — keep Notes in the flexible column */
+  .shooting-row-input.shooting-row-input--no-ep {
+    grid-template-columns:
+      minmax(6rem, 16rem)
+      minmax(4.5rem, 7rem)
+      minmax(12rem, 1fr)
+      max-content
+      max-content
+      max-content
+      minmax(5.5rem, max-content);
+  }
+
   .shooting-row-input > input:nth-of-type(1),
   .shooting-row-input > input:nth-of-type(2),
   .shooting-row-input > input:nth-of-type(3),
-  .shooting-row-input > input:nth-of-type(4),
-  .shooting-row-input > label.check:nth-of-type(1),
-  .shooting-row-input > label.check:nth-of-type(2),
-  .shooting-row-input > label.check:nth-of-type(3),
-  .shooting-row-input > button {
+  .shooting-row-input > input:nth-of-type(4) {
     grid-column: auto;
     grid-row: auto;
     width: 100%;
+    min-width: 0;
+  }
+
+  .shooting-row-input > label.check:nth-of-type(1),
+  .shooting-row-input > label.check:nth-of-type(2),
+  .shooting-row-input > label.check:nth-of-type(3) {
+    grid-column: auto;
+    grid-row: auto;
+    width: auto;
+    max-width: max-content;
+    justify-self: start;
   }
 
   .shooting-row-input > button {
+    grid-column: auto;
+    grid-row: auto;
     width: auto;
-    justify-self: stretch;
+    justify-self: end;
     justify-content: center;
   }
 
@@ -4264,6 +4331,42 @@ button[disabled] {
 @media (max-width: 640px) {
   .shooting-row-input > .input {
     min-height: 2.75rem;
+  }
+
+  /* Non–TV: stack scene, duration, notes; keep checks compact */
+  .shooting-row-input.shooting-row-input--no-ep > input:nth-of-type(1) {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > input:nth-of-type(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > input:nth-of-type(3) {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > label.check:nth-of-type(1) {
+    grid-column: 1;
+    grid-row: 4;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > label.check:nth-of-type(2) {
+    grid-column: 2;
+    grid-row: 4;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > label.check:nth-of-type(3) {
+    grid-column: 1 / -1;
+    grid-row: 5;
+  }
+
+  .shooting-row-input.shooting-row-input--no-ep > button {
+    grid-column: 1 / -1;
+    grid-row: 6;
   }
 }
 
@@ -7245,13 +7348,16 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 .vfx-layout {
   display: grid;
   grid-template-columns: 320px 1fr 360px;
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  max-height: 100%;
   gap: 12px;
   flex: 1;
-  min-height: 520px;
+  min-height: 0;
   align-items: stretch;
 }
 
+/* Each column is its own scroll viewport (independent of the others). */
 .vfx-left,
 .vfx-mid,
 .vfx-right {
@@ -7260,7 +7366,9 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
   border-radius: var(--radius);
   padding: 12px;
   min-height: 0;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .vfx-left-filters {
@@ -7268,6 +7376,7 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .vfx-filter-btn--active {
@@ -7278,6 +7387,48 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 /* Left hierarchy: folder tree */
 .vfx-left-tree {
   font-size: 0.84rem;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  margin-right: -2px;
+}
+
+.vfx-left-tree::-webkit-scrollbar {
+  width: 6px;
+}
+
+.vfx-left-tree::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+}
+
+.vfx-mid-empty,
+.vfx-mid-body,
+.vfx-right-empty,
+.vfx-right-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.vfx-mid-body::-webkit-scrollbar,
+.vfx-mid-empty::-webkit-scrollbar,
+.vfx-right-body::-webkit-scrollbar,
+.vfx-right-empty::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.vfx-mid-body::-webkit-scrollbar-thumb,
+.vfx-mid-empty::-webkit-scrollbar-thumb,
+.vfx-right-body::-webkit-scrollbar-thumb,
+.vfx-right-empty::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
 }
 
 .vfx-tree {
@@ -7345,8 +7496,10 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 
 .vfx-tree-action {
   flex-shrink: 0;
-  width: 26px;
-  min-height: 32px;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -7358,6 +7511,7 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
   display: flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
 }
 
 .vfx-tree-action:hover:not(:disabled) {
@@ -7371,7 +7525,9 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 
 .vfx-tree-action--add {
   width: 28px;
+  height: 28px;
   min-height: 28px;
+  max-height: 28px;
   font-weight: 700;
   font-size: 1rem;
   color: var(--accent);
@@ -7379,11 +7535,21 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 
 .vfx-tree-action--remove {
   width: 28px;
-  min-height: auto;
-  align-self: stretch;
-  font-size: 1.15rem;
-  font-weight: 500;
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
+  align-self: center;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1;
   color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.vfx-tree-action--remove:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.45);
 }
 
 .vfx-tree-empty-hint {
@@ -7446,8 +7612,8 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 
 .vfx-tree-scene-block {
   display: flex;
-  align-items: stretch;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
   margin: 2px 0 3px;
 }
 
@@ -7582,17 +7748,24 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 
 .scene-top-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
   gap: 10px;
-  align-items: stretch;
+  align-items: start;
+}
+
+.scene-preview-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .scene-preview {
-  height: 180px;
+  min-height: 0;
+  height: auto;
   border: 1px dashed rgba(255, 255, 255, 0.1);
   border-radius: 10px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   margin-bottom: 10px;
   background: rgba(255, 255, 255, 0.02);
@@ -7602,10 +7775,20 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 .scene-preview-media-wrap {
   position: relative;
   width: 100%;
-  height: 100%;
+  min-height: 0;
+  aspect-ratio: 16 / 9;
+  height: auto;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
+}
+
+.scene-preview .vfx-main-preview {
+  width: 100%;
+  height: auto;
+  max-height: none;
+  object-fit: contain;
+  background: #0a0d10;
 }
 
 .scene-preview-remove {
@@ -7627,8 +7810,239 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
   width: 100%;
   min-height: 90px;
   margin-top: 0;
-  height: 180px;
+  height: 120px;
   resize: vertical;
+}
+
+.scene-insights-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scene-insights-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px;
+}
+
+.scene-insights-title {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+.scene-insights-pies {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scene-insights-pie-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.015);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scene-insights-pie {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background:
+    radial-gradient(circle at center, rgba(14, 21, 34, 0.98) 53%, transparent 55%),
+    conic-gradient(#3d9a7a 0deg, #3d9a7a 0deg, rgba(255, 255, 255, 0.14) 0deg, rgba(255, 255, 255, 0.14) 360deg);
+}
+
+.scene-insights-pie--vendor {
+  background:
+    radial-gradient(circle at center, rgba(14, 21, 34, 0.98) 53%, transparent 55%),
+    conic-gradient(#4a8fd9 0deg, #4a8fd9 0deg, rgba(255, 255, 255, 0.14) 0deg, rgba(255, 255, 255, 0.14) 360deg);
+}
+
+.scene-insights-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.82rem;
+  margin-top: 6px;
+}
+
+.scene-insights-status {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.scene-status-bars {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scene-status-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
+}
+
+.scene-status-label,
+.scene-status-count {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.scene-status-count {
+  text-align: right;
+}
+
+.scene-status-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.scene-status-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+}
+
+.scene-status-fill--pending {
+  background: linear-gradient(90deg, #6c7689, #8f9ab1);
+}
+
+.scene-status-fill--review {
+  background: linear-gradient(90deg, #4a8fd9, #6ab4ff);
+}
+
+.scene-status-fill--approved {
+  background: linear-gradient(90deg, #3d9a7a, #57d19e);
+}
+
+.scene-comments-label {
+  margin-top: 2px;
+}
+
+.scene-capture-panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px;
+}
+
+.scene-capture-actions {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.scene-capture-preview-wrap {
+  margin-top: 8px;
+}
+
+.scene-capture-preview {
+  width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0a0d10;
+}
+
+.scene-capture-msg {
+  margin: 6px 0 0;
+  font-size: 0.75rem;
+}
+
+.vfx-right-ref-frame {
+  margin-top: 10px;
+}
+
+.vfx-ref-frame-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.vfx-ref-frame-btn:hover {
+  border-color: var(--accent);
+  background: rgba(61, 154, 122, 0.14);
+}
+
+.vfx-annotation-tools {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.vfx-ann-msg {
+  min-height: 1.1em;
+  margin: 0 0 8px;
+  font-size: 0.74rem;
+}
+
+.annotation-wrapper {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0a0d10;
+}
+
+.annotation-wrapper[role="button"] {
+  cursor: zoom-in;
+}
+
+.annotation-wrapper--modal {
+  max-width: min(97vw, 1480px);
+  margin: 0 auto;
+}
+
+.annotation-wrapper--modal #shotImageModal {
+  width: 100%;
+  max-height: calc(94vh - 150px);
+  object-fit: contain;
+  display: block;
+}
+
+.annotation-wrapper--modal #drawCanvasModal {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+#shotImage {
+  width: 100%;
+  display: block;
+}
+
+#drawCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  cursor: crosshair;
 }
 
 .vfx-episode-previews {
@@ -7846,6 +8260,79 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
   font-size: 0.8rem;
 }
 
+.vfx-new-version-block {
+  padding: 12px 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vfx-new-version-block .vfx-block-title {
+  margin-bottom: 6px;
+}
+
+.vfx-new-version-lead {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.vfx-new-version-block .vfx-field-label {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin: 10px 0 4px;
+}
+
+.vfx-version-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.vfx-version-file-row:hover {
+  border-color: rgba(61, 154, 122, 0.55);
+  background: rgba(61, 154, 122, 0.06);
+}
+
+.vfx-version-file-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vfx-version-comment {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-top: 0;
+  font-size: 0.85rem;
+  resize: vertical;
+  min-height: 52px;
+  box-sizing: border-box;
+}
+
+.vfx-version-msg {
+  margin: 8px 0 0;
+  min-height: 1.2em;
+  font-size: 0.74rem;
+}
+
+.vfx-version-submit-btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
 .vfx-scene-refs {
   display: flex;
   flex-wrap: wrap;
@@ -7966,7 +8453,12 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 4px;
   margin-bottom: 10px;
+}
+
+.vfx-right-ref-section .vfx-right-ref-frame {
+  margin-top: 8px;
 }
 
 .vfx-version-tab {
@@ -8083,8 +8575,9 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 }
 
 .vfx-preview-modal {
-  max-width: min(96vw, 1100px);
-  width: 100%;
+  max-width: min(98vw, 1560px);
+  width: 98vw;
+  height: 94vh;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -8097,11 +8590,27 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 }
 
 .vfx-preview-modal-inner {
-  padding: 12px;
+  padding: 14px;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 8px;
+}
+
+#vfx-preview-modal-body {
+  min-height: 0;
+  overflow: auto;
 }
 
 .vfx-preview-modal-close {
   margin-bottom: 8px;
+  align-self: start;
+  justify-self: start;
+  min-height: 28px !important;
+  min-width: auto !important;
+  padding: 0.22rem 0.5rem !important;
+  font-size: 0.72rem !important;
+  line-height: 1;
 }
 
 .vfx-modal-media {
@@ -8109,6 +8618,81 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
   max-height: 80vh;
   display: block;
   margin: 0 auto;
+}
+
+.vfx-scene-create-modal {
+  max-width: min(460px, calc(100vw - 2rem));
+}
+
+.vfx-report-modal {
+  max-width: min(760px, calc(100vw - 2rem));
+}
+
+.vfx-report-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vfx-report-step {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vfx-report-step-title {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+}
+
+.vfx-report-list {
+  max-height: 180px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.vfx-report-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.vfx-report-msg {
+  min-height: 1.1em;
+  margin: 10px 0 0;
+  font-size: 0.78rem;
+}
+
+.vfx-report-note {
+  margin: 10px 0 0;
+  font-size: 0.76rem;
+}
+
+.vfx-scene-create-field {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+
+.vfx-scene-create-msg {
+  min-height: 1.1em;
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+}
+
+.vfx-scene-create-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .vfx-mid-empty,
@@ -8119,14 +8703,48 @@ body.vfx-editor-pro-body .vfx-editor-pro-page {
 @media (max-width: 1100px) {
   .vfx-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto;
     height: auto;
+    max-height: none;
   }
 
   .scene-top-grid {
     grid-template-columns: 1fr;
   }
 
+  .scene-insights-pies {
+    grid-template-columns: 1fr;
+  }
+
+  .vfx-report-steps {
+    grid-template-columns: 1fr;
+  }
+
   .vfx-left,
+  .vfx-mid,
+  .vfx-right {
+    display: block;
+    overflow: visible;
+  }
+
+  .vfx-left-tree {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
+    padding-right: 0;
+    margin-right: 0;
+  }
+
+  .vfx-mid-empty,
+  .vfx-mid-body,
+  .vfx-right-empty,
+  .vfx-right-body {
+    flex: none;
+    min-height: 0;
+    overflow: visible;
+    overscroll-behavior: auto;
+  }
+
   .vfx-mid,
   .vfx-right {
     max-height: none;

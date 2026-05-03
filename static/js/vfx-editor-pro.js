@@ -12,7 +12,7 @@
   var filter = "all";
   var sceneId = null;
   var selectedGroupKey = null;
-  var selectedRoot = false;
+  var selectedRoot = true;
   var boardViewMode = "board";
   var boardFilter = "all";
   var boardSort = "scene";
@@ -20,6 +20,8 @@
   var shotId = null;
   var selectedVersionId = null;
   var replyParentId = null;
+  var capturedFrameDataUrl = "";
+  var pendingSceneCreateGroupKey = null;
 
   function $(sel, root) {
     return (root || document).querySelector(sel);
@@ -114,6 +116,76 @@
     );
   }
 
+  function submitSceneCreate(groupKey, sceneLabel) {
+    return fetch("/projects/" + projectId + "/vfx/api/scenes/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ group_key: groupKey, scene_label: sceneLabel || "" }),
+    }).then(function (r) {
+      return r.json();
+    });
+  }
+
+  function reelCreate(label) {
+    return fetch("/projects/" + projectId + "/vfx/api/reels/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ label: label || "" }),
+    }).then(function (r) {
+      return r.json();
+    });
+  }
+
+  function reelRename(groupKey, label) {
+    return fetch("/projects/" + projectId + "/vfx/api/reels/" + groupKey + "/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ label: label || "" }),
+    }).then(function (r) {
+      return r.json();
+    });
+  }
+
+  function reelDelete(groupKey) {
+    return fetch("/projects/" + projectId + "/vfx/api/reels/" + groupKey + "/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: "{}",
+    }).then(function (r) {
+      return r.json();
+    });
+  }
+
+  function sceneMoveToReel(sceneIdToMove, groupKey) {
+    return fetch("/projects/" + projectId + "/vfx/api/scenes/" + sceneIdToMove + "/move-reel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ group_key: groupKey }),
+    }).then(function (r) {
+      return r.json();
+    });
+  }
+
+  function openSceneCreateModal(groupKey) {
+    var dlg = document.getElementById("vfx-scene-create-modal");
+    var input = $("#vfx-scene-create-input");
+    var msg = $("#vfx-scene-create-msg");
+    if (!dlg || !input) return;
+    pendingSceneCreateGroupKey = groupKey;
+    input.value = "";
+    if (msg) msg.textContent = "";
+    if (typeof dlg.showModal === "function") dlg.showModal();
+    window.requestAnimationFrame(function () {
+      input.focus();
+      input.select();
+    });
+  }
+
   function renderLeft() {
     var root = $("#vfx-left-tree");
     if (!root) return;
@@ -126,13 +198,19 @@
     html += '<span class="vfx-tree-chevron" aria-hidden="true"></span>';
     html += '<span class="vfx-tree-icon vfx-tree-icon--folder">' + folderSvg() + "</span>";
     html += '<span class="vfx-tree-name vfx-group-select' + rootActive + '" data-vfx-root-select="1">Root</span>';
+    if (!payload.isTv) {
+      html +=
+        '<button type="button" class="vfx-tree-action vfx-tree-action--add" data-vfx-add-reel="1" title="Add reel">+</button>';
+    }
     html += "</span></summary>";
     html += '<div class="vfx-tree-children">';
 
     (payload.groups || []).forEach(function (grp) {
       var allScenes = grp.scenes || [];
       var scenes = allScenes.filter(scenePassesFilter);
-      var showGroup = allScenes.length > 0 || (payload.isTv && allScenes.length === 0);
+      // TV: show episode folders even when empty. Non-TV: show every reel (including new empty reels).
+      var showGroup =
+        !payload.isTv || allScenes.length > 0 || (payload.isTv && allScenes.length === 0);
       if (!showGroup) return;
       var groupActive = selectedGroupKey === grp.key && !sceneId ? " vfx-group-name--active" : "";
       var addDisabled = !canAddScene ? " disabled" : "";
@@ -158,6 +236,18 @@
         ' title="' +
         escapeHtml(addTitle) +
         '">+</button>';
+      if (!payload.isTv) {
+        html +=
+          '<button type="button" class="vfx-tree-action vfx-tree-action--rename" data-vfx-rename-reel="' +
+          grp.key +
+          '" data-vfx-reel-label="' +
+          escapeHtml(String(grp.label || "")).replace(/"/g, "&quot;") +
+          '" title="Rename reel">✎</button>';
+        html +=
+          '<button type="button" class="vfx-tree-action vfx-tree-action--remove" data-vfx-remove-reel="' +
+          grp.key +
+          '" title="Remove reel">×</button>';
+      }
       html += "</span></summary>";
       html += '<div class="vfx-tree-children vfx-tree-children--nested">';
       if (allScenes.length === 0) {
@@ -193,6 +283,14 @@
           '<button type="button" class="vfx-tree-action vfx-tree-action--remove" data-vfx-remove-scene="' +
           sc.id +
           '" title="Remove scene" aria-label="Remove scene">×</button>';
+        if (!payload.isTv) {
+          html +=
+            '<button type="button" class="vfx-tree-action vfx-tree-action--move" data-vfx-move-scene="' +
+            sc.id +
+            '" data-vfx-current-group="' +
+            sc.groupKey +
+            '" title="Move to another reel" aria-label="Move scene">⇄</button>';
+        }
         html += "</div>";
       });
       html += "</div></details>";
@@ -200,6 +298,13 @@
 
     html += "</div></details></div>";
     root.innerHTML = html;
+    // Prevent <details> toggling when clicking controls inside <summary>.
+    root.querySelectorAll("summary .vfx-tree-action").forEach(function (btn) {
+      btn.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    });
     root.querySelectorAll("[data-scene-id]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         sceneId = parseInt(btn.getAttribute("data-scene-id"), 10);
@@ -244,28 +349,107 @@
         if (btn.disabled) return;
         var gk = parseInt(btn.getAttribute("data-vfx-add-scene"), 10);
         if (isNaN(gk)) return;
-        fetch("/projects/" + projectId + "/vfx/api/scenes/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({ group_key: gk }),
-        })
-          .then(function (r) {
-            return r.json();
-          })
+        openSceneCreateModal(gk);
+      });
+    });
+    root.querySelectorAll("[data-vfx-add-reel]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var name = window.prompt("New reel name:", "");
+        if (name == null) return;
+        reelCreate((name || "").trim())
           .then(function (data) {
             if (!data.ok) {
-              var msg =
-                data.error === "no_shooting_day"
-                  ? "Create a shooting day on Production first."
-                  : data.error === "no_episodes_configured"
-                    ? "Set number of episodes on the project first."
-                    : data.error || "Could not add scene";
-              window.alert(msg);
+              window.alert(data.error || "Could not add reel.");
               return;
             }
             if (data.payload) mergePayload(data.payload);
             renderAll();
+          })
+          .catch(function () {
+            window.alert("Could not add reel.");
+          });
+      });
+    });
+    root.querySelectorAll("[data-vfx-rename-reel]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var gk = parseInt(btn.getAttribute("data-vfx-rename-reel"), 10);
+        if (isNaN(gk)) return;
+        var oldLabel = btn.getAttribute("data-vfx-reel-label") || "";
+        var name = window.prompt("Rename reel:", oldLabel);
+        if (name == null) return;
+        name = (name || "").trim();
+        if (!name) return;
+        reelRename(gk, name)
+          .then(function (data) {
+            if (!data.ok) {
+              window.alert(data.error || "Could not rename reel.");
+              return;
+            }
+            if (data.payload) mergePayload(data.payload);
+            renderAll();
+          })
+          .catch(function () {
+            window.alert("Could not rename reel.");
+          });
+      });
+    });
+    root.querySelectorAll("[data-vfx-remove-reel]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var gk = parseInt(btn.getAttribute("data-vfx-remove-reel"), 10);
+        if (isNaN(gk)) return;
+        if (!window.confirm("Remove this reel? Reel must be empty.")) return;
+        reelDelete(gk)
+          .then(function (data) {
+            if (!data.ok) {
+              var msg = data.error === "reel_not_empty" ? "Reel is not empty. Move scenes first." : data.error;
+              window.alert(msg || "Could not remove reel.");
+              return;
+            }
+            if (data.payload) mergePayload(data.payload);
+            if (selectedGroupKey === gk) {
+              selectedGroupKey = null;
+              selectedRoot = true;
+            }
+            renderAll();
+          })
+          .catch(function () {
+            window.alert("Could not remove reel.");
+          });
+      });
+    });
+    root.querySelectorAll("[data-vfx-move-scene]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var sid = parseInt(btn.getAttribute("data-vfx-move-scene"), 10);
+        var cur = parseInt(btn.getAttribute("data-vfx-current-group"), 10);
+        if (isNaN(sid) || isNaN(cur)) return;
+        var options = (payload.groups || [])
+          .map(function (g) {
+            return g.key + ": " + g.label;
+          })
+          .join("\n");
+        var raw = window.prompt("Move scene to reel number:\n" + options, String(cur));
+        if (raw == null) return;
+        var target = parseInt(String(raw).trim(), 10);
+        if (isNaN(target) || target < 1 || target === cur) return;
+        sceneMoveToReel(sid, target)
+          .then(function (data) {
+            if (!data.ok) {
+              window.alert(data.error || "Could not move scene.");
+              return;
+            }
+            if (data.payload) mergePayload(data.payload);
+            renderAll();
+          })
+          .catch(function () {
+            window.alert("Could not move scene.");
           });
       });
     });
@@ -345,6 +529,66 @@
     return "progress";
   }
 
+  function renderSceneInsights(sc) {
+    if (!sc) return;
+    var st = sceneStats(sc);
+    var approvedPct = st.total ? Math.round((st.approved / st.total) * 100) : 0;
+    var approvedDeg = Math.round((approvedPct / 100) * 360);
+
+    var approvedText = $("#scene-insights-approved");
+    if (approvedText) approvedText.textContent = st.approved + " / " + st.total + " (" + approvedPct + "%)";
+    var approvedPie = $("#scene-insights-approved-pie");
+    if (approvedPie) {
+      approvedPie.style.background =
+        "radial-gradient(circle at center, rgba(14, 21, 34, 0.98) 53%, transparent 55%), " +
+        "conic-gradient(#3d9a7a 0deg " +
+        approvedDeg +
+        "deg, rgba(255, 255, 255, 0.14) " +
+        approvedDeg +
+        "deg 360deg)";
+    }
+
+    var inHouse = 0;
+    var external = 0;
+    (sc.shots || []).forEach(function (sh) {
+      if ((sh.vendor || "in_house") === "external") external += 1;
+      else inHouse += 1;
+    });
+    var vendorText = $("#scene-insights-vendor");
+    if (vendorText) vendorText.textContent = inHouse + " / " + external;
+    var vendorPct = st.total ? Math.round((inHouse / st.total) * 100) : 0;
+    var vendorDeg = Math.round((vendorPct / 100) * 360);
+    var vendorPie = $("#scene-insights-vendor-pie");
+    if (vendorPie) {
+      vendorPie.style.background =
+        "radial-gradient(circle at center, rgba(14, 21, 34, 0.98) 53%, transparent 55%), " +
+        "conic-gradient(#4a8fd9 0deg " +
+        vendorDeg +
+        "deg, rgba(255, 255, 255, 0.14) " +
+        vendorDeg +
+        "deg 360deg)";
+    }
+
+    var totalEl = $("#scene-insights-status-total");
+    if (totalEl) totalEl.textContent = st.total + " total";
+    var pendingPct = st.total ? Math.round((st.pending / st.total) * 100) : 0;
+    var reviewPct = st.total ? Math.round((st.review / st.total) * 100) : 0;
+
+    var pendingBar = $("#scene-status-pending-bar");
+    if (pendingBar) pendingBar.style.width = pendingPct + "%";
+    var reviewBar = $("#scene-status-review-bar");
+    if (reviewBar) reviewBar.style.width = reviewPct + "%";
+    var approvedStatusBar = $("#scene-status-approved-bar");
+    if (approvedStatusBar) approvedStatusBar.style.width = approvedPct + "%";
+
+    var pendingCount = $("#scene-status-pending-count");
+    if (pendingCount) pendingCount.textContent = String(st.pending);
+    var reviewCount = $("#scene-status-review-count");
+    if (reviewCount) reviewCount.textContent = String(st.review);
+    var approvedCount = $("#scene-status-approved-count");
+    if (approvedCount) approvedCount.textContent = String(st.approved);
+  }
+
   function laneLabel(key) {
     var m = {
       waiting: "Waiting/Hold",
@@ -380,6 +624,9 @@
     arr.sort(function (a, b) {
       if (boardSort === "shots") return (sceneStats(b).total || 0) - (sceneStats(a).total || 0);
       if (boardSort === "review") return (sceneStats(b).review || 0) - (sceneStats(a).review || 0);
+      var ga = parseInt(a.groupKey, 10) || 0;
+      var gb = parseInt(b.groupKey, 10) || 0;
+      if (ga !== gb) return ga - gb;
       return (a.sceneDisplayNumber || 0) - (b.sceneDisplayNumber || 0);
     });
     return arr;
@@ -407,6 +654,157 @@
         if (typeof done === "function") done(data);
         renderAll();
       });
+  }
+
+  function renderSceneCapturePanel(sc) {
+    var panel = $("#scene-capture-panel");
+    if (!panel) return;
+    panel.hidden = true;
+    panel.innerHTML = "";
+    capturedFrameDataUrl = "";
+    if (!sc || !sc.scenePreviewIsVideo || !sc.scenePreviewUrl) return;
+    panel.hidden = false;
+    var options = ['<option value="">Use for Shot…</option>'];
+    (sc.shots || []).forEach(function (sh) {
+      options.push(
+        '<option value="' +
+          sh.id +
+          '">' +
+          escapeHtml(sh.shotCode || "Shot") +
+          "</option>"
+      );
+    });
+    options.push('<option value="__create_new_shot__">Create new shot</option>');
+    panel.innerHTML =
+      '<div class="scene-capture-actions">' +
+      '<button type="button" class="btn btn--small btn--ghost" id="scene-capture-btn">Capture Frame</button>' +
+      '<select id="scene-capture-shot-select" class="input input--sm">' +
+      options.join("") +
+      "</select>" +
+      '<button type="button" class="btn btn--small btn--primary" id="scene-capture-assign-btn" disabled>Assign</button>' +
+      "</div>" +
+      '<div class="scene-capture-preview-wrap">' +
+      '<img id="scene-capture-preview" class="scene-capture-preview" alt="Captured frame preview" hidden>' +
+      '<p id="scene-capture-msg" class="muted scene-capture-msg"></p>' +
+      "</div>";
+
+    var captureBtn = $("#scene-capture-btn");
+    var assignBtn = $("#scene-capture-assign-btn");
+    var shotSel = $("#scene-capture-shot-select");
+    var preview = $("#scene-capture-preview");
+    var msg = $("#scene-capture-msg");
+
+    if (captureBtn) {
+      captureBtn.addEventListener("click", function () {
+        var video = document.getElementById("sceneVideo");
+        if (!video || !video.videoWidth || !video.videoHeight) {
+          if (msg) msg.textContent = "Play the scene video first, then capture.";
+          return;
+        }
+        var canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        var ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        capturedFrameDataUrl = canvas.toDataURL("image/png");
+        if (preview) {
+          preview.src = capturedFrameDataUrl;
+          preview.hidden = false;
+        }
+        if (msg) msg.textContent = "Frame captured. Choose a shot (or Create new shot) then Assign.";
+        if (assignBtn) assignBtn.disabled = !(shotSel && shotSel.value);
+      });
+    }
+
+    if (shotSel) {
+      shotSel.addEventListener("change", function () {
+        if (assignBtn) assignBtn.disabled = !(capturedFrameDataUrl && shotSel.value);
+      });
+    }
+
+    if (assignBtn) {
+      assignBtn.addEventListener("click", function () {
+        if (!capturedFrameDataUrl) return;
+        var raw = shotSel ? shotSel.value : "";
+        if (!raw) return;
+        assignBtn.disabled = true;
+
+        function assignToShot(shotId) {
+          return fetch("/projects/" + projectId + "/vfx/api/shots/" + shotId + "/ref-frame", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ image_data: capturedFrameDataUrl }),
+          }).then(function (r) {
+            return r.json();
+          });
+        }
+
+        function finishAssign(data) {
+          if (!data.ok) {
+            if (msg) msg.textContent = "Could not assign frame.";
+            assignBtn.disabled = false;
+            return;
+          }
+          if (data.payload) mergePayload(data.payload);
+          if (msg) msg.textContent = "Frame assigned to shot.";
+          renderAll();
+        }
+
+        if (raw === "__create_new_shot__") {
+          fetch("/projects/" + projectId + "/vfx/api/scenes/" + sc.id + "/shots", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ department: "animation" }),
+          })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (data) {
+              if (!data.ok) {
+                if (msg) msg.textContent = data.error || "Could not create shot.";
+                assignBtn.disabled = false;
+                return;
+              }
+              if (data.payload) mergePayload(data.payload);
+              var newId = data.shotId;
+              if (!newId) {
+                var scn = sceneById(sc.id);
+                if (scn && scn.shots && scn.shots.length) {
+                  newId = scn.shots.reduce(function (m, x) {
+                    return x.id > m ? x.id : m;
+                  }, 0);
+                }
+              }
+              if (!newId) {
+                if (msg) msg.textContent = "Shot created but could not assign frame.";
+                assignBtn.disabled = false;
+                renderAll();
+                return;
+              }
+              return assignToShot(newId).then(finishAssign);
+            })
+            .catch(function () {
+              if (msg) msg.textContent = "Network error.";
+              assignBtn.disabled = false;
+            });
+        } else {
+          var sid = parseInt(raw, 10);
+          if (!sid) {
+            assignBtn.disabled = false;
+            return;
+          }
+          assignToShot(sid)
+            .then(finishAssign)
+            .catch(function () {
+              if (msg) msg.textContent = "Network error.";
+              assignBtn.disabled = false;
+            });
+        }
+      });
+    }
   }
 
   function deleteSceneReference(referenceId) {
@@ -561,6 +959,7 @@
     if (hdr) hdr.textContent = sc.groupLabel + " / " + (sc.sceneTitle || ("Scene " + sc.sceneDisplayNumber));
     var comments = $("#scene-comments");
     if (comments) comments.value = sc.sceneNotes || "";
+    renderSceneInsights(sc);
     var sp = $("#scene-preview");
     if (sp) {
       if (sc.scenePreviewUrl) {
@@ -573,7 +972,7 @@
         }
         if (sc.scenePreviewIsVideo) {
           sp.innerHTML =
-            '<div class="scene-preview-media-wrap"><video class="vfx-main-preview" controls playsinline src="' +
+            '<div class="scene-preview-media-wrap"><video id="sceneVideo" class="vfx-main-preview" controls playsinline src="' +
             escapeHtml(sc.scenePreviewUrl) +
             '"></video>' +
             removePreview +
@@ -596,6 +995,7 @@
       }
     }
     setupScenePreviewUpload();
+    renderSceneCapturePanel(sc);
     var delPreview = $("[data-scene-preview-delete]");
     if (delPreview) {
       delPreview.addEventListener("click", function () {
@@ -605,12 +1005,11 @@
         deleteSceneReference(rid);
       });
     }
-    var need = sc.needsVfx;
     document.querySelectorAll("[data-vfx-add-shot]").forEach(function (b) {
-      b.disabled = !need;
+      b.disabled = false;
     });
     document.querySelectorAll("[data-vfx-bulk]").forEach(function (b) {
-      b.disabled = !need;
+      b.disabled = false;
     });
 
     var refs = $("#vfx-scene-refs");
@@ -668,7 +1067,11 @@
 
       var tdCode = document.createElement("td");
       tdCode.className = "vfx-cell-shot-code";
-      tdCode.innerHTML = escapeHtml(sh.shotCode) + (sh.shotRefFrame ? ' <button type="button" class="vfx-inline-btn" title="Ref frame">🖼</button>' : "");
+      tdCode.innerHTML =
+        escapeHtml(sh.shotCode) +
+        (sh.shotRefFrame || sh.shotAnnotation
+          ? ' <button type="button" class="vfx-inline-btn" title="Ref frame / annotation">🖼</button>'
+          : "");
       tdCode.addEventListener("dblclick", function () {
         var prev = sh.shotCode;
         tdCode.innerHTML = '<input class="input input--sm vfx-inline-input" value="' + escapeHtml(prev) + '">';
@@ -694,14 +1097,19 @@
       if (refBtn) {
         refBtn.addEventListener("click", function (e) {
           e.stopPropagation();
-          if (sh.shotRefFrameUrl) openModal(sh.shotRefFrameUrl, !!sh.shotRefFrameIsVideo);
+          pickShot(sh);
+          renderAll();
+          if (sh.shotRefFrameUrl && !sh.shotRefFrameIsVideo) {
+            openAnnotationModal(sh);
+          } else {
+            var rightBody = $("#vfx-right-body");
+            if (rightBody && typeof rightBody.scrollIntoView === "function") {
+              rightBody.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+          }
         });
       }
       tr.appendChild(tdCode);
-
-      var tdDep = document.createElement("td");
-      tdDep.textContent = deptLabel(sh.department);
-      tr.appendChild(tdDep);
 
       var tdVendor = document.createElement("td");
       tdVendor.innerHTML =
@@ -869,16 +1277,56 @@
         st.appendChild(o);
       });
     }
-    var dep = $("#vfx-right-department");
-    if (dep) {
-      dep.innerHTML = "";
-      (payload.departments || ["animation", "fx", "comp"]).forEach(function (opt) {
-        var o = document.createElement("option");
-        o.value = opt;
-        o.textContent = deptLabel(opt);
-        if (opt === (shot.department || "animation")) o.selected = true;
-        dep.appendChild(o);
-      });
+    var refSlot = $("#vfx-right-ref-frame");
+    if (refSlot) {
+      if (shot.shotRefFrameUrl) {
+        refSlot.hidden = false;
+        if (shot.shotRefFrameIsVideo) {
+          refSlot.innerHTML =
+            '<button type="button" class="vfx-ref-frame-btn" id="vfx-right-ref-open" title="Open reference frame">' +
+            '<span aria-hidden="true">🖼</span><span>Reference frame</span></button>';
+          var openBtn = $("#vfx-right-ref-open");
+          if (openBtn) {
+            openBtn.addEventListener("click", function () {
+              openModal(shot.shotRefFrameUrl, true);
+            });
+          }
+        } else {
+          refSlot.innerHTML =
+            '<div class="annotation-wrapper" id="vfx-ann-inline-trigger" role="button" tabindex="0" aria-label="Open full frame editor">' +
+            '<img id="shotImage" src="' +
+            escapeHtml(shot.shotAnnotationUrl || shot.shotRefFrameUrl) +
+            '" alt="Shot reference frame">' +
+            "</div>";
+
+          var img = $("#shotImage");
+          var trigger = $("#vfx-ann-inline-trigger");
+          if (img) {
+            var inlineFallbackTried = false;
+            img.onerror = function () {
+              if (inlineFallbackTried) return;
+              inlineFallbackTried = true;
+              if (shot.shotRefFrameUrl && img.src !== shot.shotRefFrameUrl) {
+                img.src = shot.shotRefFrameUrl;
+              }
+            };
+          }
+          if (trigger) {
+            trigger.addEventListener("click", function () {
+              openAnnotationModal(shot);
+            });
+            trigger.addEventListener("keydown", function (e) {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openAnnotationModal(shot);
+              }
+            });
+          }
+        }
+      } else {
+        refSlot.hidden = true;
+        refSlot.innerHTML = "";
+      }
     }
 
     renderComments(shot);
@@ -977,6 +1425,194 @@
     if (typeof dlg.showModal === "function") dlg.showModal();
   }
 
+  function openAnnotationModal(shot) {
+    if (!shot || !shot.shotRefFrameUrl || shot.shotRefFrameIsVideo) return;
+    var dlg = document.getElementById("vfx-preview-modal");
+    if (!dlg) return;
+    var host = $("#vfx-preview-modal-body");
+    if (!host) return;
+    host.innerHTML =
+      '<div class="vfx-annotation-tools">' +
+      '<button type="button" class="btn btn--small btn--ghost" id="vfx-ann-modal-draw">Draw</button>' +
+      '<button type="button" class="btn btn--small btn--ghost" id="vfx-ann-modal-erase">Erase</button>' +
+      '<button type="button" class="btn btn--small btn--ghost" id="vfx-ann-modal-clear">Clear</button>' +
+      '<button type="button" class="btn btn--small btn--primary" id="vfx-ann-modal-save">Save</button>' +
+      "</div>" +
+      '<p id="vfx-ann-modal-msg" class="muted vfx-ann-msg"></p>' +
+      '<div class="annotation-wrapper annotation-wrapper--modal">' +
+      '<img id="shotImageModal" src="' +
+      escapeHtml(shot.shotAnnotationUrl || shot.shotRefFrameUrl) +
+      '" alt="Shot reference frame">' +
+      '<canvas id="drawCanvasModal"></canvas>' +
+      "</div>";
+    if (typeof dlg.showModal === "function") dlg.showModal();
+
+    var img = $("#shotImageModal");
+    var canvas = $("#drawCanvasModal");
+    var drawBtn = $("#vfx-ann-modal-draw");
+    var eraseBtn = $("#vfx-ann-modal-erase");
+    var clearBtn = $("#vfx-ann-modal-clear");
+    var saveBtn = $("#vfx-ann-modal-save");
+    var annMsg = $("#vfx-ann-modal-msg");
+    if (!img || !canvas) return;
+    var ctx = canvas.getContext("2d");
+    var drawing = false;
+    var mode = "draw";
+    var isShowingSavedAnnotation = !!shot.shotAnnotationUrl;
+    var modalFallbackTried = false;
+
+    img.onerror = function () {
+      if (modalFallbackTried) return;
+      modalFallbackTried = true;
+      if (shot.shotRefFrameUrl && img.src !== shot.shotRefFrameUrl) {
+        isShowingSavedAnnotation = false;
+        img.src = shot.shotRefFrameUrl;
+        return;
+      }
+      if (annMsg) annMsg.textContent = "Could not load image preview.";
+    };
+
+    function syncCanvas() {
+      var rect = img.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      canvas.width = Math.round(rect.width);
+      canvas.height = Math.round(rect.height);
+      canvas.style.width = rect.width + "px";
+      canvas.style.height = rect.height + "px";
+      if (!isShowingSavedAnnotation && shot.shotAnnotationUrl) {
+        var ann = new Image();
+        ann.onload = function () {
+          if (!ctx) return;
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(ann, 0, 0, canvas.width, canvas.height);
+        };
+        ann.src = shot.shotAnnotationUrl;
+      } else if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    function pxy(e) {
+      var r = canvas.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    }
+    function begin(e) {
+      if (!ctx) return;
+      drawing = true;
+      var p = pxy(e);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineWidth = mode === "erase" ? 10 : 2;
+      ctx.lineCap = "round";
+      if (mode === "erase") {
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.strokeStyle = "rgba(0,0,0,1)";
+      } else {
+        ctx.globalCompositeOperation = "source-over";
+        ctx.strokeStyle = "red";
+      }
+      e.preventDefault();
+    }
+    function move(e) {
+      if (!drawing || !ctx) return;
+      var p = pxy(e);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      e.preventDefault();
+    }
+    function end() {
+      drawing = false;
+      if (ctx) ctx.closePath();
+    }
+
+    img.addEventListener("load", syncCanvas);
+    window.requestAnimationFrame(syncCanvas);
+    canvas.addEventListener("mousedown", begin);
+    canvas.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", end);
+    canvas.addEventListener("mouseleave", end);
+    if (drawBtn) drawBtn.addEventListener("click", function () { mode = "draw"; });
+    if (eraseBtn) eraseBtn.addEventListener("click", function () { mode = "erase"; });
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        if (!ctx) return;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      });
+    }
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function () {
+        if (annMsg) annMsg.textContent = "Saving...";
+        saveBtn.disabled = true;
+        var originalFrame = new Image();
+        originalFrame.onload = function () {
+          var dataUrl = "";
+          try {
+            var outW = Math.max(1, originalFrame.naturalWidth || originalFrame.width || canvas.width || 1);
+            var outH = Math.max(1, originalFrame.naturalHeight || originalFrame.height || canvas.height || 1);
+            var merged = document.createElement("canvas");
+            merged.width = outW;
+            merged.height = outH;
+            var mctx = merged.getContext("2d");
+            if (mctx) {
+              // Always save at original frame resolution.
+              mctx.drawImage(originalFrame, 0, 0, outW, outH);
+              mctx.drawImage(canvas, 0, 0, outW, outH);
+              dataUrl = merged.toDataURL("image/png");
+            }
+          } catch (eMerge) {
+            dataUrl = "";
+          }
+          if (!dataUrl) dataUrl = canvas.toDataURL("image/png");
+          fetch("/projects/" + projectId + "/vfx/api/shots/" + shot.id + "/annotation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ image_data: dataUrl }),
+          })
+            .then(function (r) {
+              return r.json().then(function (j) {
+                return { ok: r.ok, j: j || {} };
+              });
+            })
+            .then(function (res) {
+              if (!res.ok || !res.j.ok) throw new Error((res.j && (res.j.error || res.j.message)) || "save_failed");
+              if (res.j.payload) mergePayload(res.j.payload);
+              var refreshed = currentShot();
+              var savedUrl = refreshed && refreshed.shotAnnotationUrl ? refreshed.shotAnnotationUrl : "";
+              if (savedUrl) {
+                var busted = savedUrl + (savedUrl.indexOf("?") >= 0 ? "&" : "?") + "v=" + Date.now();
+                var probe = new Image();
+                probe.onload = function () {
+                  isShowingSavedAnnotation = true;
+                  img.src = busted;
+                  if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+                };
+                probe.onerror = function () {
+                  isShowingSavedAnnotation = false;
+                  img.src = shot.shotRefFrameUrl;
+                  if (annMsg) annMsg.textContent = "Saved, but preview fallback loaded.";
+                };
+                probe.src = busted;
+              }
+              if (annMsg) annMsg.textContent = "Annotation saved.";
+              renderAll();
+            })
+            .catch(function (err) {
+              if (annMsg) annMsg.textContent = "Save failed: " + (err && err.message ? err.message : "network");
+            })
+            .finally(function () {
+              saveBtn.disabled = false;
+            });
+        };
+        originalFrame.onerror = function () {
+          if (annMsg) annMsg.textContent = "Save failed: could not load original frame";
+          saveBtn.disabled = false;
+        };
+        originalFrame.src = shot.shotRefFrameUrl;
+      });
+    }
+  }
+
   function renderAll() {
     renderLeft();
     renderMid();
@@ -1042,11 +1678,224 @@
     repaint();
   }
 
+  function wireReportExport() {
+    var openBtn = $("#vfx-report-open");
+    var dlg = document.getElementById("vfx-report-modal");
+    var cancelBtn = $("#vfx-report-cancel");
+    var genBtn = $("#vfx-report-generate");
+    var groupSel = $("#vfx-report-group");
+    var scenesBox = $("#vfx-report-scenes");
+    var shotsBox = $("#vfx-report-shots");
+    var msg = $("#vfx-report-msg");
+    var optFrames = $("#vfx-report-include-frames");
+    var optComments = $("#vfx-report-include-comments");
+    var optVersions = $("#vfx-report-include-versions");
+    if (!openBtn || !dlg || !groupSel || !scenesBox || !shotsBox || !genBtn) return;
+
+    function setMsg(text) {
+      if (msg) msg.textContent = text || "";
+    }
+
+    function selectedSceneIds() {
+      return Array.from(scenesBox.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(function (el) {
+          return parseInt(el.value, 10);
+        })
+        .filter(function (x) {
+          return !!x;
+        });
+    }
+
+    function selectedShotIds() {
+      return Array.from(shotsBox.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(function (el) {
+          return parseInt(el.value, 10);
+        })
+        .filter(function (x) {
+          return !!x;
+        });
+    }
+
+    function sceneListForGroup(groupRaw) {
+      var all = (payload.scenes || []).filter(function (sc) {
+        return String(sc.sceneStatus || "").toLowerCase() !== "done";
+      });
+      if (!groupRaw || groupRaw === "all") return all.slice();
+      var gk = parseInt(groupRaw, 10);
+      if (!gk) return all.slice();
+      return all.filter(function (sc) {
+        return parseInt(sc.groupKey, 10) === gk;
+      });
+    }
+
+    function renderShots() {
+      var sids = new Set(selectedSceneIds());
+      var scenes = payload.scenes || [];
+      var shotRows = [];
+      scenes.forEach(function (sc) {
+        if (!sids.has(sc.id)) return;
+        (sc.shots || []).forEach(function (sh) {
+          var sst = String(sh.status || "").toLowerCase();
+          if (sst === "approved" || sst === "delivered") return;
+          shotRows.push({
+            id: sh.id,
+            code: sh.shotCode || ("Shot " + sh.id),
+            sceneId: sc.id,
+            sceneLabel: (sc.groupLabel || "") + " / Scene " + String(sc.sceneDisplayNumber || ""),
+          });
+        });
+      });
+      shotRows.sort(function (a, b) {
+        return String(a.code).localeCompare(String(b.code));
+      });
+      if (!shotRows.length) {
+        shotsBox.innerHTML = '<p class="muted">No shots in selected scenes.</p>';
+        return;
+      }
+      var html = "";
+      shotRows.forEach(function (row) {
+        html +=
+          '<label class="vfx-report-item">' +
+          '<input type="checkbox" value="' +
+          row.id +
+          '" checked> ' +
+          '<span>' +
+          escapeHtml(row.code) +
+          " <span class=\"muted\">(" +
+          escapeHtml(row.sceneLabel) +
+          ")</span></span></label>";
+      });
+      shotsBox.innerHTML = html;
+    }
+
+    function renderScenes() {
+      var list = sceneListForGroup(groupSel.value);
+      list.sort(function (a, b) {
+        var ga = parseInt(a.groupKey, 10) || 0;
+        var gb = parseInt(b.groupKey, 10) || 0;
+        if (ga !== gb) return ga - gb;
+        return (a.sceneDisplayNumber || 0) - (b.sceneDisplayNumber || 0);
+      });
+      if (!list.length) {
+        scenesBox.innerHTML = '<p class="muted">No scenes available.</p>';
+        shotsBox.innerHTML = '<p class="muted">No shots available.</p>';
+        return;
+      }
+      var html = "";
+      list.forEach(function (sc) {
+        var activeShotCount = (sc.shots || []).filter(function (sh) {
+          var sst = String(sh.status || "").toLowerCase();
+          return sst !== "approved" && sst !== "delivered";
+        }).length;
+        html +=
+          '<label class="vfx-report-item">' +
+          '<input type="checkbox" value="' +
+          sc.id +
+          '" checked> ' +
+          '<span>' +
+          escapeHtml((sc.groupLabel || "") + " / Scene " + String(sc.sceneDisplayNumber || "")) +
+          " <span class=\"muted\">(" +
+          String(activeShotCount) +
+          " active shots)</span></span></label>";
+      });
+      scenesBox.innerHTML = html;
+      scenesBox.querySelectorAll('input[type="checkbox"]').forEach(function (cb) {
+        cb.addEventListener("change", renderShots);
+      });
+      renderShots();
+    }
+
+    function renderGroups() {
+      var html = '<option value="all">All Episodes / Reels</option>';
+      (payload.groups || []).forEach(function (g) {
+        html += '<option value="' + g.key + '">' + escapeHtml(g.label || ("Group " + g.key)) + "</option>";
+      });
+      groupSel.innerHTML = html;
+      if (selectedGroupKey) groupSel.value = String(selectedGroupKey);
+    }
+
+    function openDialog() {
+      renderGroups();
+      renderScenes();
+      setMsg("");
+      if (typeof dlg.showModal === "function") dlg.showModal();
+    }
+
+    openBtn.addEventListener("click", openDialog);
+    groupSel.addEventListener("change", renderScenes);
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", function () {
+        if (typeof dlg.close === "function") dlg.close();
+      });
+    }
+    genBtn.addEventListener("click", function () {
+      var sceneIds = selectedSceneIds();
+      var shotIds = selectedShotIds();
+      if (!sceneIds.length) {
+        setMsg("Select at least one scene.");
+        return;
+      }
+      if (!shotIds.length) {
+        setMsg("Select at least one shot.");
+        return;
+      }
+      setMsg("Generating PDF...");
+      genBtn.disabled = true;
+      fetch("/projects/" + projectId + "/vfx/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          group_key: groupSel.value === "all" ? null : parseInt(groupSel.value, 10),
+          scene_ids: sceneIds,
+          shot_ids: shotIds,
+          include_frames: !!(optFrames && optFrames.checked),
+          include_comments: !!(optComments && optComments.checked),
+          include_versions: !!(optVersions && optVersions.checked),
+        }),
+      })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.json().then(function (j) {
+              throw new Error((j && (j.error || j.message)) || "Could not generate report.");
+            }).catch(function () {
+              throw new Error("Could not generate report.");
+            });
+          }
+          var disposition = r.headers.get("Content-Disposition") || "";
+          return r.blob().then(function (blob) {
+            return { blob: blob, disposition: disposition };
+          });
+        })
+        .then(function (out) {
+          var filename = "VFX_Report.pdf";
+          var m = /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i.exec(out.disposition || "");
+          if (m) filename = decodeURIComponent(m[1] || m[2] || filename);
+          var url = URL.createObjectURL(out.blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setMsg("");
+          if (typeof dlg.close === "function") dlg.close();
+        })
+        .catch(function (err) {
+          setMsg(err && err.message ? err.message : "Could not generate report.");
+        })
+        .finally(function () {
+          genBtn.disabled = false;
+        });
+    });
+  }
+
   function wireMidActions() {
     function addShot() {
       if (!sceneId) return;
       var sc = sceneById(sceneId);
-      if (!sc || !sc.needsVfx) return;
+      if (!sc) return;
       fetch("/projects/" + projectId + "/vfx/api/scenes/" + sceneId + "/shots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1064,7 +1913,7 @@
     function bulkShots() {
       if (!sceneId) return;
       var sc = sceneById(sceneId);
-      if (!sc || !sc.needsVfx) return;
+      if (!sc) return;
       fetch("/projects/" + projectId + "/vfx/api/scenes/" + sceneId + "/shots/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1117,7 +1966,6 @@
 
   function wireRightActions() {
     var st = $("#vfx-right-status");
-    var dep = $("#vfx-right-department");
     function patch(body) {
       if (!shotId) return;
       fetch("/projects/" + projectId + "/vfx/api/shots/" + shotId, {
@@ -1137,64 +1985,67 @@
     if (st) st.addEventListener("change", function () {
       patch({ status: st.value });
     });
-    if (dep) dep.addEventListener("change", function () {
-      patch({ department: dep.value });
-    });
     var appr = $("#vfx-btn-approve");
     if (appr) appr.addEventListener("click", function () {
       patch({ status: "approved" });
     });
 
     var vf = $("#vfx-version-file");
-    var vimg = $("#vfx-version-url");
     var vcom = $("#vfx-version-comment");
     var vsub = $("#vfx-version-submit");
+    var vname = $("#vfx-version-file-name");
+    var vmsg = $("#vfx-version-msg");
+    function setVersionMsg(text) {
+      if (vmsg) vmsg.textContent = text || "";
+    }
+    function syncVersionFileLabel() {
+      if (!vname || !vf) return;
+      vname.textContent = vf.files && vf.files.length ? vf.files[0].name : "No file selected";
+    }
+    if (vf) vf.addEventListener("change", function () {
+      setVersionMsg("");
+      syncVersionFileLabel();
+    });
     if (vsub)
       vsub.addEventListener("click", function () {
         if (!shotId) return;
-        if (vf && vf.files && vf.files.length) {
-          var fd = new FormData();
-          fd.append("image_file", vf.files[0]);
-          fd.append("comment", (vcom && vcom.value) || "");
-          fetch("/projects/" + projectId + "/vfx/api/shots/" + shotId + "/versions", {
-            method: "POST",
-            credentials: "same-origin",
-            body: fd,
-          })
-            .then(function (r) {
-              return r.json();
-            })
-            .then(function (data) {
-              if (vf) vf.value = "";
-              if (data.ok && data.payload) mergePayload(data.payload);
-              var sh = currentShot();
-              if (sh && sh.versions && sh.versions.length) {
-                selectedVersionId = sh.versions[sh.versions.length - 1].id;
-              }
-              renderAll();
-            });
-        } else {
-          var img = (vimg && vimg.value.trim()) || "";
-          if (!img) return;
-          fetch("/projects/" + projectId + "/vfx/api/shots/" + shotId + "/versions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ image: img, comment: (vcom && vcom.value) || "" }),
-          })
-            .then(function (r) {
-              return r.json();
-            })
-            .then(function (data) {
-              if (vimg) vimg.value = "";
-              if (data.ok && data.payload) mergePayload(data.payload);
-              var sh = currentShot();
-              if (sh && sh.versions && sh.versions.length) {
-                selectedVersionId = sh.versions[sh.versions.length - 1].id;
-              }
-              renderAll();
-            });
+        if (!vf || !vf.files || !vf.files.length) {
+          setVersionMsg("Choose an image or video file first.");
+          return;
         }
+        setVersionMsg("Uploading…");
+        vsub.disabled = true;
+        var fd = new FormData();
+        fd.append("image_file", vf.files[0]);
+        fd.append("comment", (vcom && vcom.value) || "");
+        fetch("/projects/" + projectId + "/vfx/api/shots/" + shotId + "/versions", {
+          method: "POST",
+          credentials: "same-origin",
+          body: fd,
+        })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            vsub.disabled = false;
+            if (vf) vf.value = "";
+            syncVersionFileLabel();
+            if (!data.ok) {
+              setVersionMsg(data.error || "Could not add version.");
+              return;
+            }
+            setVersionMsg("");
+            if (data.payload) mergePayload(data.payload);
+            var sh = currentShot();
+            if (sh && sh.versions && sh.versions.length) {
+              selectedVersionId = sh.versions[sh.versions.length - 1].id;
+            }
+            renderAll();
+          })
+          .catch(function () {
+            vsub.disabled = false;
+            setVersionMsg("Network error.");
+          });
       });
 
     var csub = $("#vfx-comment-submit");
@@ -1234,6 +2085,73 @@
       mclose.addEventListener("click", function () {
         if (typeof dlg.close === "function") dlg.close();
       });
+
+    var sceneCreateDlg = document.getElementById("vfx-scene-create-modal");
+    var sceneCreateInput = $("#vfx-scene-create-input");
+    var sceneCreateMsg = $("#vfx-scene-create-msg");
+    var sceneCreateCancel = $("#vfx-scene-create-cancel");
+    var sceneCreateSubmit = $("#vfx-scene-create-submit");
+    if (sceneCreateDlg && sceneCreateSubmit) {
+      function closeSceneCreateDialog() {
+        if (typeof sceneCreateDlg.close === "function") sceneCreateDlg.close();
+      }
+      function runSceneCreateSubmit() {
+        var gk = pendingSceneCreateGroupKey;
+        if (!gk) return;
+        var rawName = sceneCreateInput ? (sceneCreateInput.value || "").trim() : "";
+        if (!/^\d+$/.test(rawName)) {
+          if (sceneCreateMsg) sceneCreateMsg.textContent = "Scene number must contain digits only.";
+          if (sceneCreateInput) sceneCreateInput.focus();
+          return;
+        }
+        sceneCreateSubmit.disabled = true;
+        if (sceneCreateMsg) sceneCreateMsg.textContent = "Creating...";
+        submitSceneCreate(gk, rawName)
+          .then(function (data) {
+            if (!data.ok) {
+              var msg =
+                data.error === "no_shooting_day"
+                  ? "Create a shooting day on Production first."
+                  : data.error === "no_episodes_configured"
+                    ? "Set number of episodes on the project first."
+                    : data.error === "scene_label_too_long"
+                      ? "Scene number is too long."
+                      : data.error || "Could not add scene";
+              if (sceneCreateMsg) sceneCreateMsg.textContent = msg;
+              return;
+            }
+            if (data.payload) mergePayload(data.payload);
+            pendingSceneCreateGroupKey = null;
+            closeSceneCreateDialog();
+            renderAll();
+          })
+          .catch(function () {
+            if (sceneCreateMsg) sceneCreateMsg.textContent = "Could not add scene.";
+          })
+          .finally(function () {
+            sceneCreateSubmit.disabled = false;
+          });
+      }
+      sceneCreateSubmit.addEventListener("click", runSceneCreateSubmit);
+      if (sceneCreateInput) {
+        sceneCreateInput.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            runSceneCreateSubmit();
+          }
+        });
+      }
+      if (sceneCreateCancel) {
+        sceneCreateCancel.addEventListener("click", function () {
+          pendingSceneCreateGroupKey = null;
+          closeSceneCreateDialog();
+        });
+      }
+      sceneCreateDlg.addEventListener("close", function () {
+        if (sceneCreateMsg) sceneCreateMsg.textContent = "";
+        if (sceneCreateInput) sceneCreateInput.value = "";
+      });
+    }
   }
 
   function wireKeyboard() {
@@ -1301,6 +2219,11 @@
           renderMid();
           return;
         }
+        if (!/^\d+$/.test(raw)) {
+          window.alert("Scene number must contain digits only.");
+          renderMid();
+          return;
+        }
         fetch("/projects/" + projectId + "/vfx/api/scenes/" + sceneId, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1347,6 +2270,7 @@
   wireFilters();
   wireBoardControls();
   wireMidActions();
+  wireReportExport();
   wireRightActions();
   wireSceneEditing();
   wireKeyboard();

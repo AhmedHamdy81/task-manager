@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import mimetypes
+import base64
+import json
 import os
 import re
 import subprocess
 import uuid
+from io import BytesIO
 from urllib.parse import urlparse
 from collections import defaultdict
 from typing import Sequence
@@ -32,6 +35,10 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from flask_socketio import SocketIO, join_room, leave_room
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 
 from booking import booking_bp
 from time_utils import CAIRO_TZ, now_local, today_cairo
@@ -373,6 +380,7 @@ def create_app() -> Flask:
         sort_order = db.Column(db.Integer, nullable=False, default=0)
         number_of_episodes = db.Column(db.Integer, nullable=False, default=0)
         estimated_shooting_days = db.Column(db.Integer, nullable=False, default=0)
+        vfx_reel_meta = db.Column(db.Text, nullable=False, default="")
 
         tasks = db.relationship("Task", back_populates="project", lazy=True)
         memberships = db.relationship(
@@ -532,6 +540,7 @@ def create_app() -> Flask:
         vendor = db.Column(db.String(24), nullable=False, default="in_house")
         vendor_name = db.Column(db.String(120), nullable=False, default="")
         shot_ref_frame = db.Column(db.Text, nullable=False, default="")
+        shot_annotation = db.Column(db.Text, nullable=False, default="")
         sent_at = db.Column(db.DateTime, nullable=True)
         status = db.Column(db.String(16), nullable=False, default="pending", index=True)
         created_at = db.Column(db.DateTime, default=now_local, nullable=False)
@@ -1435,6 +1444,10 @@ def create_app() -> Flask:
                         "ALTER TABLE projects ADD COLUMN estimated_shooting_days INTEGER NOT NULL DEFAULT 0"
                     )
                 )
+            if "vfx_reel_meta" not in col_names:
+                conn.execute(
+                    text("ALTER TABLE projects ADD COLUMN vfx_reel_meta TEXT NOT NULL DEFAULT ''")
+                )
 
     def ensure_pipeline_pool_user() -> User:
         u = User.query.filter_by(email=POOL_USER_EMAIL).first()
@@ -1767,6 +1780,10 @@ def create_app() -> Flask:
                 if "shot_ref_frame" not in cols:
                     conn.execute(
                         text("ALTER TABLE vfx_shot ADD COLUMN shot_ref_frame TEXT NOT NULL DEFAULT ''")
+                    )
+                if "shot_annotation" not in cols:
+                    conn.execute(
+                        text("ALTER TABLE vfx_shot ADD COLUMN shot_annotation TEXT NOT NULL DEFAULT ''")
                     )
                 if "sent_at" not in cols:
                     conn.execute(
@@ -5300,7 +5317,8 @@ def create_app() -> Flask:
             .all()
         )
         total_duration_seconds = sum(shooting_day_scene_duration_seconds(link) for link in pipeline_links)
-        max_episode_number = max(0, int(p.number_of_episodes or 0))
+        is_tv_project = _project_type_is_tv_series(p.project_type)
+        max_episode_number = max(0, int(p.number_of_episodes or 0)) if is_tv_project else 1
         total_scenes = len(pipeline_links)
         if total_scenes:
             sync_done_n = sum(1 for ln in pipeline_links if ln.sync_done)
@@ -5322,6 +5340,7 @@ def create_app() -> Flask:
             total_scenes=total_scenes,
             sync_percentage=sync_percentage,
             edit_percentage=edit_percentage,
+            is_tv_project=is_tv_project,
             workflow_active="shooting",
         )
 
@@ -5352,6 +5371,66 @@ def create_app() -> Flask:
             mx = max(mx, n)
         return max(1, mx + 1)
 
+    def _vfx_project_reel_meta(p: Project) -> dict:
+        raw = (p.vfx_reel_meta or "").strip()
+        labels: dict[int, str] = {}
+        next_key = 1
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                parsed = {}
+            if isinstance(parsed, dict):
+                next_raw = parsed.get("nextKey")
+                if isinstance(next_raw, int) and next_raw >= 1:
+                    next_key = next_raw
+                src_labels = parsed.get("labels")
+                if isinstance(src_labels, dict):
+                    for k, v in src_labels.items():
+                        try:
+                            ik = int(k)
+                        except (TypeError, ValueError):
+                            continue
+                        if ik < 1:
+                            continue
+                        val = str(v or "").strip()
+                        if not val:
+                            continue
+                        labels[ik] = val[:80]
+        if labels:
+            next_key = max(next_key, max(labels.keys()) + 1)
+        return {"nextKey": next_key, "labels": labels}
+
+    def _vfx_set_project_reel_meta(p: Project, meta: dict) -> None:
+        labels = meta.get("labels") if isinstance(meta, dict) else {}
+        clean: dict[str, str] = {}
+        if isinstance(labels, dict):
+            for k, v in labels.items():
+                try:
+                    ik = int(k)
+                except (TypeError, ValueError):
+                    continue
+                if ik < 1:
+                    continue
+                name = str(v or "").strip()
+                if not name:
+                    continue
+                clean[str(ik)] = name[:80]
+        next_key_raw = meta.get("nextKey") if isinstance(meta, dict) else None
+        try:
+            next_key = int(next_key_raw)
+        except (TypeError, ValueError):
+            next_key = 1
+        if next_key < 1:
+            next_key = 1
+        if clean:
+            next_key = max(next_key, max(int(k) for k in clean.keys()) + 1)
+        p.vfx_reel_meta = json.dumps(
+            {"nextKey": next_key, "labels": clean},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
     def _vfx_scene_aggregate_dot(shots: list[VfxShot]) -> str:
         if not shots:
             return "pending"
@@ -5380,8 +5459,266 @@ def create_app() -> Flask:
             return raw
         return url_for("project_vfx_scene_reference_file", project_id=project_id, filename=raw)
 
+    def _vfx_local_media_path(raw_path: str | None, media_kind: str) -> str | None:
+        raw = (raw_path or "").strip()
+        if not raw or _vfx_media_is_remote(raw):
+            return None
+        root = vfx_version_upload_root if media_kind == "version" else scene_ref_upload_root
+        full = os.path.realpath(os.path.join(root, raw))
+        root_real = os.path.realpath(root)
+        if not full.startswith(root_real + os.sep):
+            return None
+        if not os.path.isfile(full):
+            return None
+        return full
+
+    class _NumberedCanvas(canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._saved_page_states: list[dict] = []
+
+        def showPage(self):
+            self._saved_page_states.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total_pages = len(self._saved_page_states) + 1
+            for state in self._saved_page_states:
+                self.__dict__.update(state)
+                self._draw_page_footer(total_pages)
+                super().showPage()
+            self._draw_page_footer(total_pages)
+            super().save()
+
+        def _draw_page_footer(self, total_pages: int):
+            self.setFont("Helvetica", 8)
+            self.setFillColor(colors.HexColor("#555555"))
+            self.drawRightString(553, 24, f"Page {self._pageNumber} of {total_pages}")
+
+    def _vfx_pdf_header(c: canvas.Canvas, title: str, created_by: str, created_on: datetime) -> None:
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(42, 804, title)
+        c.setFont("Helvetica", 10)
+        c.setFillColor(colors.HexColor("#222222"))
+        c.drawString(42, 786, f"Created By: {created_by}")
+        c.drawString(42, 772, f"Date: {created_on.strftime('%Y-%m-%d %H:%M')}")
+        c.setStrokeColor(colors.HexColor("#D2D7DE"))
+        c.line(42, 758, 553, 758)
+
+    @app.route("/projects/<int:project_id>/vfx/report", methods=["POST"])
+    def project_vfx_report_pdf(project_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+
+        data = request.get_json(silent=True) or {}
+        include_versions = bool(data.get("include_versions"))
+        include_comments = bool(data.get("include_comments"))
+        include_frames = bool(data.get("include_frames"))
+
+        scene_ids_raw = data.get("scene_ids") or []
+        shot_ids_raw = data.get("shot_ids") or []
+        try:
+            scene_ids = [int(x) for x in scene_ids_raw if str(x).strip() != ""]
+            shot_ids = [int(x) for x in shot_ids_raw if str(x).strip() != ""]
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_selection"}), 400
+        if not scene_ids:
+            return jsonify({"ok": False, "error": "scene_ids_required"}), 400
+        if not shot_ids:
+            return jsonify({"ok": False, "error": "shot_ids_required"}), 400
+
+        rows = (
+            ShootingDayScene.query.join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+            .options(
+                joinedload(ShootingDayScene.vfx_shots).joinedload(VfxShot.versions),
+                joinedload(ShootingDayScene.vfx_shots).joinedload(VfxShot.comments).joinedload(
+                    VfxShotComment.user
+                ),
+            )
+            .filter(
+                ShootingDay.project_id == p.id,
+                ShootingDayScene.id.in_(scene_ids),
+            )
+            .all()
+        )
+        scene_map = {int(sc.id): sc for sc in rows}
+        ordered_scenes = [scene_map[sid] for sid in scene_ids if sid in scene_map]
+        if not ordered_scenes:
+            return jsonify({"ok": False, "error": "no_scenes_found"}), 404
+
+        buf = BytesIO()
+        c = _NumberedCanvas(buf, pagesize=A4)
+        page_w, _ = A4
+        left = 42
+        right = page_w - 42
+        content_w = right - left
+        y = 746.0
+        shot_id_set = set(shot_ids)
+
+        creator_name = (acc.display_name if acc else "") or "Unknown"
+        _vfx_pdf_header(c, f"{p.name} — VFX Report", creator_name, now_local())
+
+        def draw_wrapped(text: str, font: str, size: int, line_h: float, x: float, top_y: float) -> float:
+            c.setFont(font, size)
+            raw = (text or "").strip() or "—"
+            words = raw.split()
+            lines: list[str] = []
+            current = ""
+            max_w = right - x
+            for w in words:
+                nxt = (current + " " + w).strip()
+                if c.stringWidth(nxt, font, size) <= max_w or not current:
+                    current = nxt
+                else:
+                    lines.append(current)
+                    current = w
+            if current:
+                lines.append(current)
+            yy = top_y
+            for ln in lines:
+                c.drawString(x, yy, ln)
+                yy -= line_h
+            return yy
+
+        def ensure_space(need: float) -> float:
+            nonlocal y
+            if y - need < 56:
+                c.showPage()
+                y = 790.0
+            return y
+
+        active_scene_rows = [sc for sc in ordered_scenes if str(sc.status or "").strip().lower() != "done"]
+        scene_to_shots: list[tuple[ShootingDayScene, list[VfxShot]]] = []
+        for sc in active_scene_rows:
+            scene_shots = [
+                sh
+                for sh in (sc.vfx_shots or [])
+                if int(sh.id) in shot_id_set
+                and str(sh.status or "").strip().lower() not in {"approved", "delivered"}
+            ]
+            scene_shots.sort(key=lambda s: int(s.shot_number or 0))
+            if scene_shots:
+                scene_to_shots.append((sc, scene_shots))
+        if not scene_to_shots:
+            return jsonify({"ok": False, "error": "no_active_scenes"}), 400
+
+        for scene_idx, pair in enumerate(scene_to_shots):
+            sc, scene_shots = pair
+            scene_num = _parse_scene_number_from_label(sc.scene_label, fallback=sc.scene_number or 1)
+            if scene_idx > 0:
+                c.showPage()
+                y = 790.0
+            ensure_space(34)
+            c.setFillColor(colors.HexColor("#101828"))
+            c.setFont("Helvetica-Bold", 16)
+            c.drawString(left, y, f"Scene {scene_num}")
+            y -= 18
+            c.setStrokeColor(colors.HexColor("#E5E7EB"))
+            c.line(left, y, right, y)
+            y -= 12
+
+            for sh in scene_shots:
+                ensure_space(160)
+                c.setFillColor(colors.black)
+                c.setFont("Helvetica-Bold", 13)
+                c.drawString(left, y, f"SHOT: {sh.shot_code or f'Shot {sh.id}'}")
+                y -= 14
+                c.setFont("Helvetica", 10)
+                vendor_text = "External" if (sh.vendor or "").lower() == "external" else "In-house"
+                if vendor_text == "External" and (sh.vendor_name or "").strip():
+                    vendor_text += f" ({sh.vendor_name.strip()})"
+                status_text = str(sh.status or "pending").strip().title()
+                c.drawString(left, y, f"Status: {status_text}")
+                c.drawString(left + 170, y, f"Vendor: {vendor_text}")
+                y -= 14
+
+                if include_frames:
+                    frame_path = _vfx_local_media_path(sh.shot_annotation, "version") or _vfx_local_media_path(
+                        sh.shot_ref_frame, "version"
+                    )
+                    if frame_path and not _vfx_is_video_media(frame_path):
+                        try:
+                            img = ImageReader(frame_path)
+                            iw, ih = img.getSize()
+                            if iw > 0 and ih > 0:
+                                max_w = content_w
+                                max_h = 240.0
+                                ratio = min(max_w / float(iw), max_h / float(ih))
+                                dw = float(iw) * ratio
+                                dh = float(ih) * ratio
+                                ensure_space(dh + 18)
+                                x = left + (content_w - dw) / 2.0
+                                c.drawImage(img, x, y - dh, width=dw, height=dh, preserveAspectRatio=True, anchor="c")
+                                y -= dh + 8
+                        except Exception:
+                            c.setFont("Helvetica-Oblique", 9)
+                            c.drawString(left, y, "Reference frame could not be rendered.")
+                            y -= 12
+
+                c.setFont("Helvetica-Bold", 10)
+                c.drawString(left, y, "Brief:")
+                y -= 12
+                c.setFont("Helvetica", 10)
+                y = draw_wrapped(sh.shot_briefing or "No briefing.", "Helvetica", 10, 12, left + 4, y)
+                y -= 6
+
+                c.setFont("Helvetica-Bold", 10)
+                c.drawString(left, y, "Versions:")
+                y -= 12
+                versions = sorted(sh.versions or [], key=lambda v: int(v.version_number or 0))
+                if not include_versions and versions:
+                    versions = [versions[-1]]
+                if not versions:
+                    c.setFont("Helvetica-Oblique", 9)
+                    c.drawString(left + 4, y, "No versions.")
+                    y -= 11
+                else:
+                    for v in versions:
+                        ensure_space(28)
+                        c.setFont("Helvetica-Bold", 9)
+                        c.drawString(left + 4, y, f"v{int(v.version_number or 0):03d}")
+                        y -= 11
+                        c.setFont("Helvetica", 9)
+                        y = draw_wrapped(v.comment or "No comment.", "Helvetica", 9, 11, left + 12, y)
+                        y -= 4
+
+                if include_comments:
+                    c.setFont("Helvetica-Bold", 10)
+                    c.drawString(left, y, "Comments:")
+                    y -= 12
+                    comments = sorted(sh.comments or [], key=lambda x: (x.created_at or now_local(), x.id))
+                    if not comments:
+                        c.setFont("Helvetica-Oblique", 9)
+                        c.drawString(left + 4, y, "No comments.")
+                        y -= 11
+                    else:
+                        for cm in comments:
+                            ensure_space(20)
+                            uname = (cm.user.name if cm.user else "Unknown").strip() or "Unknown"
+                            c.setFont("Helvetica-Bold", 9)
+                            c.drawString(left + 4, y, f"{uname}:")
+                            y -= 11
+                            c.setFont("Helvetica", 9)
+                            y = draw_wrapped(cm.body or "", "Helvetica", 9, 11, left + 12, y)
+                            y -= 4
+
+                y -= 6
+                c.setStrokeColor(colors.HexColor("#E5E7EB"))
+                c.line(left, y, right, y)
+                y -= 12
+
+        c.save()
+        buf.seek(0)
+        safe_project = re.sub(r"[^A-Za-z0-9._-]+", "_", (p.name or "Project")).strip("_") or "Project"
+        filename = f"{safe_project}_VFX_Report_{now_local().strftime('%Y%m%d')}.pdf"
+        return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=filename)
+
     def build_vfx_editor_payload(p: Project) -> dict:
         is_tv = _project_type_is_tv_series(p.project_type)
+        reel_meta = _vfx_project_reel_meta(p)
+        reel_labels = reel_meta.get("labels", {}) if isinstance(reel_meta, dict) else {}
         rows = (
             ShootingDayScene.query.join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
             .options(
@@ -5425,6 +5762,8 @@ def create_app() -> Flask:
                         "shotRefFrame": sh.shot_ref_frame or "",
                         "shotRefFrameUrl": _vfx_version_preview_url(p.id, sh.shot_ref_frame or ""),
                         "shotRefFrameIsVideo": _vfx_is_video_media(sh.shot_ref_frame),
+                        "shotAnnotation": sh.shot_annotation or "",
+                        "shotAnnotationUrl": _vfx_version_preview_url(p.id, sh.shot_annotation or ""),
                         "status": (sh.status or "pending").strip().lower(),
                         "sentAt": isoformat_stored_instant(
                             sh.sent_at if isinstance(sh.sent_at, datetime) else None
@@ -5469,6 +5808,7 @@ def create_app() -> Flask:
                     "groupKey": group_key,
                     "groupLabel": group_label,
                     "sceneDisplayNumber": sc_num,
+                    "sceneStatus": str(sc.status or "pending").strip().lower(),
                     "sceneTitle": f"Scene {sc_num}",
                     "sceneLabel": sc.scene_label or "",
                     "sceneNotes": sc.notes or "",
@@ -5504,10 +5844,19 @@ def create_app() -> Flask:
             max_ep = max(0, int(p.number_of_episodes or 0))
             for epn in range(1, max_ep + 1):
                 groups_map.setdefault(epn, [])
+        else:
+            for rk in reel_labels.keys():
+                groups_map.setdefault(int(rk), [])
+            if not groups_map:
+                groups_map.setdefault(1, [])
         groups = [
             {
                 "key": k,
-                "label": (f"Eps{k:02d}" if is_tv else f"Reel{k:02d}"),
+                "label": (
+                    f"Eps{k:02d}"
+                    if is_tv
+                    else (reel_labels.get(int(k)) or f"Reel{k:02d}")
+                ),
                 "scenes": groups_map[k],
             }
             for k in sorted(groups_map.keys())
@@ -5575,7 +5924,12 @@ def create_app() -> Flask:
             if ver is None
             else None
         )
-        if ver is None and shot_ref is None:
+        shot_ann = (
+            VfxShot.query.filter_by(project_id=project_id, shot_annotation=filename).first()
+            if ver is None and shot_ref is None
+            else None
+        )
+        if ver is None and shot_ref is None and shot_ann is None:
             abort(404)
         return send_from_directory(vfx_version_upload_root, filename)
 
@@ -5670,6 +6024,142 @@ def create_app() -> Flask:
         db.session.commit()
         return jsonify({"ok": True, "payload": build_vfx_editor_payload(p)})
 
+    @app.route("/projects/<int:project_id>/vfx/api/reels/create", methods=["POST"])
+    def project_vfx_api_reel_create(project_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        if _project_type_is_tv_series(p.project_type):
+            return jsonify({"ok": False, "error": "tv_project_fixed_reels"}), 400
+        data = request.get_json(silent=True) or {}
+        label = str(data.get("label") or "").strip()
+        meta = _vfx_project_reel_meta(p)
+        labels = meta.get("labels", {})
+        if not isinstance(labels, dict):
+            labels = {}
+        occupied: set[int] = set()
+        for k in labels.keys():
+            try:
+                occupied.add(int(k))
+            except (TypeError, ValueError):
+                continue
+        mx_ep = (
+            db.session.query(db.func.max(ShootingDayScene.episode_number))
+            .join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+            .filter(ShootingDay.project_id == p.id)
+            .scalar()
+        )
+        if mx_ep is not None:
+            occupied.add(int(mx_ep))
+        next_key = (max(occupied) + 1) if occupied else 1
+        while next_key in labels:
+            next_key += 1
+        labels[next_key] = (label[:80] if label else f"Reel{next_key:02d}")
+        meta["labels"] = labels
+        meta["nextKey"] = next_key + 1
+        _vfx_set_project_reel_meta(p, meta)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(p)})
+
+    @app.route("/projects/<int:project_id>/vfx/api/reels/<int:group_key>/rename", methods=["POST"])
+    def project_vfx_api_reel_rename(project_id: int, group_key: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        if _project_type_is_tv_series(p.project_type):
+            return jsonify({"ok": False, "error": "tv_project_fixed_reels"}), 400
+        if group_key < 1:
+            return jsonify({"ok": False, "error": "invalid_group"}), 400
+        data = request.get_json(silent=True) or {}
+        label = str(data.get("label") or "").strip()
+        if not label:
+            return jsonify({"ok": False, "error": "label_required"}), 400
+        if len(label) > 80:
+            return jsonify({"ok": False, "error": "label_too_long"}), 400
+        has_group_scene = (
+            ShootingDayScene.query.join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+            .filter(
+                ShootingDay.project_id == p.id,
+                ShootingDayScene.episode_number == int(group_key),
+            )
+            .first()
+            is not None
+        )
+        meta = _vfx_project_reel_meta(p)
+        labels = meta.get("labels", {})
+        if not isinstance(labels, dict):
+            labels = {}
+        if not has_group_scene and int(group_key) not in labels:
+            return jsonify({"ok": False, "error": "group_not_found"}), 404
+        labels[int(group_key)] = label
+        meta["labels"] = labels
+        _vfx_set_project_reel_meta(p, meta)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(p)})
+
+    @app.route("/projects/<int:project_id>/vfx/api/reels/<int:group_key>/delete", methods=["POST"])
+    def project_vfx_api_reel_delete(project_id: int, group_key: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        if _project_type_is_tv_series(p.project_type):
+            return jsonify({"ok": False, "error": "tv_project_fixed_reels"}), 400
+        if group_key < 1:
+            return jsonify({"ok": False, "error": "invalid_group"}), 400
+        has_group_scene = (
+            ShootingDayScene.query.join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+            .filter(
+                ShootingDay.project_id == p.id,
+                ShootingDayScene.episode_number == int(group_key),
+            )
+            .first()
+            is not None
+        )
+        if has_group_scene:
+            return jsonify({"ok": False, "error": "reel_not_empty"}), 400
+        meta = _vfx_project_reel_meta(p)
+        labels = meta.get("labels", {})
+        if not isinstance(labels, dict) or int(group_key) not in labels:
+            return jsonify({"ok": False, "error": "group_not_found"}), 404
+        labels.pop(int(group_key), None)
+        meta["labels"] = labels
+        _vfx_set_project_reel_meta(p, meta)
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(p)})
+
+    @app.route("/projects/<int:project_id>/vfx/api/scenes/<int:scene_id>/move-reel", methods=["POST"])
+    def project_vfx_api_scene_move_reel(project_id: int, scene_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        p = Project.query.get_or_404(project_id)
+        if not account_can_access_project(acc, p.id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        if _project_type_is_tv_series(p.project_type):
+            return jsonify({"ok": False, "error": "tv_project_fixed_reels"}), 400
+        scene = shooting_day_scene_for_project(scene_id, project_id)
+        if scene is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        data = request.get_json(silent=True) or {}
+        try:
+            target_group = int(data.get("group_key"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_group"}), 400
+        if target_group < 1:
+            return jsonify({"ok": False, "error": "invalid_group"}), 400
+        scene.episode_number = target_group
+        scene_num = _parse_scene_number_from_label(scene.scene_label, fallback=scene.scene_number or 1)
+        for sh in (scene.vfx_shots or []):
+            sh.episode_number = target_group
+            sh.shot_code = _build_vfx_shot_code(
+                target_group,
+                scene_num,
+                int(sh.shot_number or 1),
+            )
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(p)})
+
     @app.route("/projects/<int:project_id>/vfx/api/shots/<int:shot_id>", methods=["POST"])
     def project_vfx_api_shot_update(project_id: int, shot_id: int):
         acc = db.session.get(Account, session.get("account_id"))
@@ -5742,14 +6232,37 @@ def create_app() -> Flask:
         shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
         if shot is None:
             return jsonify({"ok": False, "error": "not_found"}), 404
+        raw = b""
+        ext = ".png"
         file_part = request.files.get("image_file") or request.files.get("file")
-        if file_part is None or not (file_part.filename or "").strip():
-            return jsonify({"ok": False, "error": "file_required"}), 400
-        orig = secure_filename(file_part.filename) or "ref"
-        ext = os.path.splitext(orig)[1].lower()
-        if ext not in VFX_VERSION_ALLOWED_EXT:
-            return jsonify({"ok": False, "error": "unsupported_format"}), 400
-        raw = file_part.read()
+        if file_part is not None and (file_part.filename or "").strip():
+            orig = secure_filename(file_part.filename) or "ref"
+            ext = os.path.splitext(orig)[1].lower()
+            if ext not in VFX_VERSION_ALLOWED_EXT:
+                return jsonify({"ok": False, "error": "unsupported_format"}), 400
+            raw = file_part.read()
+        else:
+            data = request.get_json(silent=True) or {}
+            image_data = str(data.get("image_data") or "").strip()
+            if not image_data:
+                return jsonify({"ok": False, "error": "file_required"}), 400
+            m = re.match(r"^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$", image_data, re.DOTALL)
+            if not m:
+                return jsonify({"ok": False, "error": "invalid_image_data"}), 400
+            mime = (m.group(1) or "").lower()
+            ext_map = {
+                "image/png": ".png",
+                "image/jpeg": ".jpg",
+                "image/jpg": ".jpg",
+                "image/webp": ".webp",
+            }
+            ext = ext_map.get(mime, "")
+            if not ext or ext not in VFX_VERSION_ALLOWED_EXT:
+                return jsonify({"ok": False, "error": "unsupported_format"}), 400
+            try:
+                raw = base64.b64decode(m.group(2), validate=True)
+            except Exception:
+                return jsonify({"ok": False, "error": "invalid_image_data"}), 400
         if len(raw) > VFX_VERSION_MAX_BYTES:
             return jsonify({"ok": False, "error": "file_too_large"}), 400
         fname = f"ref{shot.id}-{uuid.uuid4().hex}{ext}"
@@ -5763,6 +6276,46 @@ def create_app() -> Flask:
         if old and not _vfx_media_is_remote(old):
             remove_vfx_version_file(old)
         shot.shot_ref_frame = fname
+        db.session.commit()
+        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+
+    @app.route("/projects/<int:project_id>/vfx/api/shots/<int:shot_id>/annotation", methods=["POST"])
+    def project_vfx_api_shot_annotation(project_id: int, shot_id: int):
+        acc = db.session.get(Account, session.get("account_id"))
+        if not account_can_access_project(acc, project_id):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        shot = VfxShot.query.filter_by(id=shot_id, project_id=project_id).first()
+        if shot is None:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        data = request.get_json(silent=True) or {}
+        image_data = str(data.get("image_data") or "").strip()
+        if not image_data:
+            return jsonify({"ok": False, "error": "image_data_required"}), 400
+        m = re.match(r"^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$", image_data, re.DOTALL)
+        if not m:
+            return jsonify({"ok": False, "error": "invalid_image_data"}), 400
+        mime = (m.group(1) or "").lower()
+        ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/webp": ".webp"}
+        ext = ext_map.get(mime, "")
+        if not ext or ext not in VFX_VERSION_ALLOWED_EXT:
+            return jsonify({"ok": False, "error": "unsupported_format"}), 400
+        try:
+            raw = base64.b64decode(m.group(2), validate=True)
+        except Exception:
+            return jsonify({"ok": False, "error": "invalid_image_data"}), 400
+        if len(raw) > VFX_VERSION_MAX_BYTES:
+            return jsonify({"ok": False, "error": "file_too_large"}), 400
+        fname = f"ann{shot.id}-{uuid.uuid4().hex}{ext}"
+        dest = os.path.join(vfx_version_upload_root, fname)
+        try:
+            with open(dest, "wb") as f:
+                f.write(raw)
+        except OSError:
+            return jsonify({"ok": False, "error": "save_failed"}), 500
+        old = (shot.shot_annotation or "").strip()
+        if old and not _vfx_media_is_remote(old):
+            remove_vfx_version_file(old)
+        shot.shot_annotation = fname
         db.session.commit()
         return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
 
@@ -5781,6 +6334,9 @@ def create_app() -> Flask:
         rf = (shot.shot_ref_frame or "").strip()
         if rf and not _vfx_media_is_remote(rf):
             remove_vfx_version_file(rf)
+        ann = (shot.shot_annotation or "").strip()
+        if ann and not _vfx_media_is_remote(ann):
+            remove_vfx_version_file(ann)
         db.session.delete(shot)
         db.session.commit()
         return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
@@ -5793,8 +6349,6 @@ def create_app() -> Flask:
         scene = shooting_day_scene_for_project(scene_id, project_id)
         if scene is None:
             return jsonify({"ok": False, "error": "not_found"}), 404
-        if not bool(scene.needs_vfx):
-            return jsonify({"ok": False, "error": "needs_vfx_required"}), 400
         data = request.get_json(silent=True) or {}
         dep = str(data.get("department") or "animation").strip().lower()
         if dep not in VFX_DEPARTMENTS:
@@ -5816,7 +6370,8 @@ def create_app() -> Flask:
         )
         db.session.add(shot)
         db.session.commit()
-        return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
+        payload = build_vfx_editor_payload(Project.query.get(project_id))
+        return jsonify({"ok": True, "shotId": shot.id, "payload": payload})
 
     @app.route("/projects/<int:project_id>/vfx/api/scenes/<int:scene_id>/shots/bulk", methods=["POST"])
     def project_vfx_api_scene_bulk_shots(project_id: int, scene_id: int):
@@ -5826,8 +6381,6 @@ def create_app() -> Flask:
         scene = shooting_day_scene_for_project(scene_id, project_id)
         if scene is None:
             return jsonify({"ok": False, "error": "not_found"}), 404
-        if not bool(scene.needs_vfx):
-            return jsonify({"ok": False, "error": "needs_vfx_required"}), 400
         data = request.get_json(silent=True) or {}
         start_n = max(1, int(data.get("start") or 1))
         end_n = max(start_n, int(data.get("end") or 10))
@@ -5989,9 +6542,6 @@ def create_app() -> Flask:
         scene = shooting_day_scene_for_project(scene_id, project_id)
         if scene is None:
             abort(404)
-        if not bool(scene.needs_vfx):
-            flash("This scene is not marked as Needs VFX.", "error")
-            return redirect(url_for("project_vfx", project_id=project_id))
         ep_num = max(1, int(scene.episode_number or 1))
         scene_num = _parse_scene_number_from_label(scene.scene_label, fallback=scene.scene_number or 1)
         shot_num = _next_vfx_shot_number(scene.id)
@@ -6236,8 +6786,9 @@ def create_app() -> Flask:
         d = shooting_day_in_project(day_id, project_id)
         if d is None:
             abort(404)
-        max_episode = max(0, int(d.project.number_of_episodes or 0))
-        if max_episode < 1:
+        is_tv_project = _project_type_is_tv_series(d.project.project_type)
+        max_episode = max(0, int(d.project.number_of_episodes or 0)) if is_tv_project else 1
+        if is_tv_project and max_episode < 1:
             flash("Set Number of episodes on the project before adding rows.", "error")
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
         raw_ep = (request.form.get("episode_number") or "").strip()
@@ -6247,14 +6798,17 @@ def create_app() -> Flask:
         sync_done = request.form.get("sync_done") == "1"
         first_edit_done = request.form.get("first_edit_done") == "1"
         needs_vfx = request.form.get("needs_vfx") == "1"
-        try:
-            ep_num = int(raw_ep)
-        except ValueError:
-            flash("Episode must be a whole number.", "error")
-            return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
-        if ep_num < 1 or ep_num > max_episode:
-            flash(f"Episode must be between 1 and {max_episode}.", "error")
-            return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        if is_tv_project:
+            try:
+                ep_num = int(raw_ep)
+            except ValueError:
+                flash("Episode must be a whole number.", "error")
+                return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+            if ep_num < 1 or ep_num > max_episode:
+                flash(f"Episode must be between 1 and {max_episode}.", "error")
+                return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        else:
+            ep_num = 1
         if not raw_scene:
             flash("Scene is required.", "error")
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
@@ -6305,21 +6859,25 @@ def create_app() -> Flask:
         if link is None:
             abort(404)
         day_id = link.shooting_day_id
-        max_episode = max(0, int(link.shooting_day.project.number_of_episodes or 0))
-        if max_episode < 1:
+        is_tv_project = _project_type_is_tv_series(link.shooting_day.project.project_type)
+        max_episode = max(0, int(link.shooting_day.project.number_of_episodes or 0)) if is_tv_project else 1
+        if is_tv_project and max_episode < 1:
             flash("Set Number of episodes on the project before editing rows.", "error")
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
         raw_ep = (request.form.get("episode_number") or "").strip()
         raw_scene = (request.form.get("scene_label") or request.form.get("scene_number") or "").strip()
         raw_dur = (request.form.get("duration") or "").strip()
-        try:
-            ep_num = int(raw_ep)
-        except ValueError:
-            flash("Episode must be a whole number.", "error")
-            return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
-        if ep_num < 1 or ep_num > max_episode:
-            flash(f"Episode must be between 1 and {max_episode}.", "error")
-            return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        if is_tv_project:
+            try:
+                ep_num = int(raw_ep)
+            except ValueError:
+                flash("Episode must be a whole number.", "error")
+                return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+            if ep_num < 1 or ep_num > max_episode:
+                flash(f"Episode must be between 1 and {max_episode}.", "error")
+                return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        else:
+            ep_num = 1
         if not raw_scene:
             flash("Scene is required.", "error")
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
@@ -6374,6 +6932,9 @@ def create_app() -> Flask:
                 rf = (sh.shot_ref_frame or "").strip()
                 if rf and not _vfx_media_is_remote(rf):
                     remove_vfx_version_file(rf)
+                ann = (sh.shot_annotation or "").strip()
+                if ann and not _vfx_media_is_remote(ann):
+                    remove_vfx_version_file(ann)
             for ver in VfxVersion.query.filter(VfxVersion.shot_id.in_(shot_ids)).all():
                 img = (ver.image or "").strip()
                 if img and not (

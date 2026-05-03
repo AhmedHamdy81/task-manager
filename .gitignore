@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 instance/*.db
+.DS_Store
+instance/
+electron-desktop/node_modules/
+electron-desktop/dist/

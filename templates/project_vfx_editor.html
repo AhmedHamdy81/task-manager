@@ -7,7 +7,6 @@
     <div class="project-detail-head-main">
       <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
       <h1>{{ project.name }}</h1>
-      <p class="muted">VFX editor — hierarchy, shots, and review.</p>
       {% include 'partials/project_workflow_nav.html' %}
     </div>
   </div>
@@ -29,10 +28,6 @@
         <div id="vfx-mid-body" class="vfx-mid-body" hidden>
           <header class="vfx-mid-header-row">
             <h3 id="vfx-mid-header" class="vfx-mid-title scene-title" contenteditable="true" spellcheck="false">—</h3>
-            <div class="vfx-mid-actions">
-              <button type="button" class="btn btn--small btn--primary" data-vfx-add-shot>+ Add Shot</button>
-              <button type="button" class="btn btn--small btn--ghost" data-vfx-bulk>Bulk Create 01–10</button>
-            </div>
           </header>
           <section id="vfx-episode-previews-block" class="vfx-block" hidden>
             <div class="vfx-board-toolbar">
@@ -54,30 +49,65 @@
                   <button type="button" id="vfx-view-board" class="btn btn--small btn--ghost">Board</button>
                   <button type="button" id="vfx-view-list" class="btn btn--small btn--ghost">List</button>
                 </div>
+                <button type="button" id="vfx-report-open" class="btn btn--small btn--primary">Export Report</button>
               </div>
             </div>
             <div id="vfx-episode-previews" class="vfx-episode-previews"></div>
           </section>
           <section id="vfx-scene-top-block" class="vfx-block">
             <div class="scene-top-grid">
-              <div class="scene-preview" id="scene-preview">
-                <div class="preview-placeholder" id="scene-preview-placeholder">
-                  <span>No preview</span>
-                  <button type="button" class="btn btn--small btn--ghost" id="scene-preview-upload-btn">Upload Preview</button>
-                  <input type="file" id="scene-preview-upload" accept="image/*,video/*" hidden>
+              <div class="scene-preview-stack">
+                <div class="scene-preview" id="scene-preview">
+                  <div class="preview-placeholder" id="scene-preview-placeholder">
+                    <span>No preview</span>
+                    <button type="button" class="btn btn--small btn--ghost" id="scene-preview-upload-btn">Upload Preview</button>
+                    <input type="file" id="scene-preview-upload" accept="image/*,video/*" hidden>
+                  </div>
                 </div>
+                <div id="scene-capture-panel" class="scene-capture-panel" hidden></div>
               </div>
-              <textarea id="scene-comments" class="input scene-comments" placeholder="Scene notes / briefing..."></textarea>
-            </div>
-          </section>
-          <section id="vfx-scene-refs-block" class="vfx-block">
-            <h3 class="vfx-block-title">Scene References</h3>
-            <p class="muted vfx-block-lead">Video preview(s) and upload.</p>
-            <div id="vfx-scene-refs" class="vfx-scene-refs"></div>
-            <div class="vfx-ref-upload-row">
-              <input type="file" id="vfx-ref-file" accept="video/*" hidden>
-              <input type="text" id="vfx-ref-notes" class="input input--grow" placeholder="Reference notes (optional)">
-              <button type="button" id="vfx-ref-upload-btn" class="btn btn--small btn--ghost">Upload</button>
+              <aside class="scene-insights-panel" aria-label="Scene insights">
+                <div class="scene-insights-card">
+                  <h4 class="scene-insights-title">Scene Insights</h4>
+                  <div class="scene-insights-pies">
+                    <div class="scene-insights-pie-card">
+                      <span class="muted">Approved / Total</span>
+                      <div id="scene-insights-approved-pie" class="scene-insights-pie" aria-hidden="true"></div>
+                      <strong id="scene-insights-approved">0 / 0 (0%)</strong>
+                    </div>
+                    <div class="scene-insights-pie-card">
+                      <span class="muted">In-house / External</span>
+                      <div id="scene-insights-vendor-pie" class="scene-insights-pie scene-insights-pie--vendor" aria-hidden="true"></div>
+                      <strong id="scene-insights-vendor">0 / 0</strong>
+                    </div>
+                  </div>
+                  <div class="scene-insights-status">
+                    <div class="scene-insights-row">
+                      <span class="muted">Scene shots status</span>
+                      <strong id="scene-insights-status-total">0 total</strong>
+                    </div>
+                    <div class="scene-status-bars">
+                      <div class="scene-status-row">
+                        <span class="scene-status-label">Pending</span>
+                        <div class="scene-status-track"><span id="scene-status-pending-bar" class="scene-status-fill scene-status-fill--pending" style="width:0%"></span></div>
+                        <span id="scene-status-pending-count" class="scene-status-count">0</span>
+                      </div>
+                      <div class="scene-status-row">
+                        <span class="scene-status-label">Review</span>
+                        <div class="scene-status-track"><span id="scene-status-review-bar" class="scene-status-fill scene-status-fill--review" style="width:0%"></span></div>
+                        <span id="scene-status-review-count" class="scene-status-count">0</span>
+                      </div>
+                      <div class="scene-status-row">
+                        <span class="scene-status-label">Approved</span>
+                        <div class="scene-status-track"><span id="scene-status-approved-bar" class="scene-status-fill scene-status-fill--approved" style="width:0%"></span></div>
+                        <span id="scene-status-approved-count" class="scene-status-count">0</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <label class="vfx-field-label scene-comments-label" for="scene-comments">Scene notes</label>
+                <textarea id="scene-comments" class="input scene-comments" placeholder="Scene notes / briefing..."></textarea>
+              </aside>
             </div>
           </section>
           <section id="vfx-shots-block" class="vfx-block">
@@ -87,7 +117,6 @@
                 <thead>
                   <tr>
                     <th>Shot Code</th>
-                    <th>Department</th>
                     <th>Vendor</th>
                     <th>Version</th>
                     <th>Status</th>
@@ -110,22 +139,9 @@
           <p class="muted">Select a shot to preview and review.</p>
         </div>
         <div id="vfx-right-body" class="vfx-right-body" hidden>
-          <div id="vfx-version-tabs" class="vfx-version-tabs" role="tablist" aria-label="Versions"></div>
-          <div id="vfx-preview-slot" class="vfx-preview-slot"></div>
-          <section class="vfx-block vfx-shot-meta-block">
+          <section class="vfx-block vfx-shot-meta-block vfx-right-ref-section">
             <div class="vfx-shot-meta-row"><span class="muted">Shot</span> <strong id="vfx-right-shot-code">—</strong></div>
-            <label class="vfx-field-label">Status</label>
-            <select id="vfx-right-status" class="input vfx-right-select" aria-label="Status"></select>
-            <label class="vfx-field-label">Department</label>
-            <select id="vfx-right-department" class="input vfx-right-select" aria-label="Department"></select>
-            <button type="button" id="vfx-btn-approve" class="btn btn--small btn--primary vfx-approve-btn">Approve ✔</button>
-          </section>
-          <section class="vfx-block">
-            <h3 class="vfx-block-title">New version</h3>
-            <input type="text" id="vfx-version-url" class="input input--block" placeholder="Image or video URL">
-            <input type="file" id="vfx-version-file" accept="image/*,video/*" class="input input--block">
-            <input type="text" id="vfx-version-comment" class="input input--block" placeholder="Version comment">
-            <button type="button" id="vfx-version-submit" class="btn btn--small btn--ghost">Add version</button>
+            <div id="vfx-right-ref-frame" class="vfx-right-ref-frame" hidden></div>
           </section>
           <section class="vfx-block">
             <h3 class="vfx-block-title">Comments</h3>
@@ -133,6 +149,26 @@
             <p id="vfx-comment-reply-hint" class="muted vfx-reply-hint"></p>
             <textarea id="vfx-comment-text" class="input vfx-comment-textarea" rows="3" placeholder="Add a comment…" {% if vfx_directory_user_id is none %}disabled title="Directory user required"{% endif %}></textarea>
             <button type="button" id="vfx-comment-submit" class="btn btn--small btn--primary" {% if vfx_directory_user_id is none %}disabled{% endif %}>Post</button>
+          </section>
+          <div id="vfx-version-tabs" class="vfx-version-tabs" role="tablist" aria-label="Versions"></div>
+          <div id="vfx-preview-slot" class="vfx-preview-slot"></div>
+          <section class="vfx-block vfx-new-version-block">
+            <h3 class="vfx-block-title">New version</h3>
+            <p class="muted vfx-new-version-lead">Upload a frame or clip. Add an optional note for reviewers.</p>
+            <label class="vfx-version-file-row" for="vfx-version-file">
+              <span class="btn btn--small btn--ghost vfx-version-file-pick">Choose file</span>
+              <span id="vfx-version-file-name" class="vfx-version-file-name muted">No file selected</span>
+            </label>
+            <input type="file" id="vfx-version-file" accept="image/*,video/*" class="vfx-version-file-input" hidden>
+            <label class="vfx-field-label vfx-field-label--inline" for="vfx-version-comment">Note (optional)</label>
+            <textarea id="vfx-version-comment" class="input input--block vfx-version-comment" rows="2" placeholder="e.g. client feedback addressed, roto update…"></textarea>
+            <p id="vfx-version-msg" class="vfx-version-msg muted" role="status" aria-live="polite"></p>
+            <button type="button" id="vfx-version-submit" class="btn btn--small btn--primary vfx-version-submit-btn">Add version</button>
+          </section>
+          <section class="vfx-block vfx-shot-meta-block vfx-right-status-section">
+            <label class="vfx-field-label">Status</label>
+            <select id="vfx-right-status" class="input vfx-right-select" aria-label="Status"></select>
+            <button type="button" id="vfx-btn-approve" class="btn btn--small btn--primary vfx-approve-btn">Approve ✔</button>
           </section>
         </div>
       </aside>
@@ -143,6 +179,63 @@
     <div class="vfx-preview-modal-inner">
       <button type="button" id="vfx-preview-modal-close" class="btn btn--small btn--ghost vfx-preview-modal-close">Close</button>
       <div id="vfx-preview-modal-body"></div>
+    </div>
+  </dialog>
+
+  <dialog id="vfx-scene-create-modal" class="project-task-modal vfx-scene-create-modal">
+    <div class="project-task-modal-inner">
+      <div class="project-task-modal-head">
+        <h3 class="project-task-modal-title">Add Scene</h3>
+      </div>
+      <label class="vfx-scene-create-field">
+        <span class="muted">Scene number</span>
+        <input id="vfx-scene-create-input" class="input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="e.g. 27" />
+      </label>
+      <p id="vfx-scene-create-msg" class="muted vfx-scene-create-msg"></p>
+      <div class="vfx-scene-create-actions">
+        <button type="button" id="vfx-scene-create-cancel" class="btn btn--small btn--ghost">Cancel</button>
+        <button type="button" id="vfx-scene-create-submit" class="btn btn--small btn--primary">Create</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="vfx-report-modal" class="project-task-modal vfx-report-modal">
+    <div class="project-task-modal-inner">
+      <div class="project-task-modal-head">
+        <h3 class="project-task-modal-title">Generate VFX PDF Report</h3>
+      </div>
+
+      <div class="vfx-report-steps">
+        <section class="vfx-report-step">
+          <h4 class="vfx-report-step-title">1) Episode / Reel</h4>
+          <select id="vfx-report-group" class="input"></select>
+        </section>
+
+        <section class="vfx-report-step">
+          <h4 class="vfx-report-step-title">2) Scenes</h4>
+          <div id="vfx-report-scenes" class="vfx-report-list"></div>
+        </section>
+
+        <section class="vfx-report-step">
+          <h4 class="vfx-report-step-title">3) Shots</h4>
+          <div id="vfx-report-shots" class="vfx-report-list"></div>
+        </section>
+
+        <section class="vfx-report-step">
+          <h4 class="vfx-report-step-title">4) Options</h4>
+          <label class="check"><input type="checkbox" id="vfx-report-include-frames" checked> Include Ref Frames</label>
+          <label class="check"><input type="checkbox" id="vfx-report-include-comments" checked> Include Comments</label>
+          <label class="check"><input type="checkbox" id="vfx-report-include-versions"> Include All Versions</label>
+        </section>
+      </div>
+      <p class="muted vfx-report-note">Completed items are hidden.</p>
+
+      <p id="vfx-report-msg" class="muted vfx-report-msg"></p>
+
+      <div class="project-task-modal-actions">
+        <button type="button" id="vfx-report-cancel" class="btn btn--small btn--ghost">Cancel</button>
+        <button type="button" id="vfx-report-generate" class="btn btn--small btn--primary">Generate PDF</button>
+      </div>
     </div>
   </dialog>
 
