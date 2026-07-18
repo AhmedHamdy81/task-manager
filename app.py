@@ -24923,6 +24923,101 @@ def create_app() -> Flask:
             f"{pending_color} {done_deg}deg 360deg)"
         )
 
+    def calculate_editorial_episode_scene_set(
+        project: Project, episode_number: int, *, production_rows: list | None = None
+    ) -> dict:
+        """Single source of truth for the EDITORIAL membership of an episode.
+
+        Returns the scenes that make up episode ``episode_number`` in the final
+        edit: retained originals (production episode == N and NOT assigned
+        elsewhere) plus scenes assigned INTO this episode from other production
+        episodes. Production data is never modified.
+
+        Both the Episode List cards and the Episode Detail page consume this so
+        their runtime / scene count / VFX / progress figures always match. Pass
+        ``production_rows`` (the scenes whose production episode == N) to avoid a
+        re-query when the caller already has them.
+        """
+        ep = int(episode_number)
+        if production_rows is None:
+            production_rows = (
+                ShootingDayScene.query.options(
+                    joinedload(ShootingDayScene.shooting_day),
+                    selectinload(ShootingDayScene.vfx_shots).selectinload(VfxShot.versions),
+                    selectinload(ShootingDayScene.vfx_shots).selectinload(
+                        VfxShot.assigned_artist
+                    ),
+                )
+                .join(ShootingDay, ShootingDayScene.shooting_day_id == ShootingDay.id)
+                .filter(
+                    ShootingDay.project_id == int(project.id),
+                    ShootingDayScene.episode_number == ep,
+                    ShootingDayScene.is_episode_unassigned.is_(False),
+                    ShootingDayScene.is_establishing_shots_pool.is_(False),
+                )
+                .all()
+            )
+        used_in_map: dict[int, list[int]] = defaultdict(list)
+        reassigned_ids: set[int] = set()
+        prod_ids = [int(s.id) for s in production_rows]
+        if prod_ids:
+            for a in SceneEditorialAssignment.query.filter(
+                SceneEditorialAssignment.scene_id.in_(prod_ids),
+                SceneEditorialAssignment.is_active.is_(True),
+            ).all():
+                used_in_map[int(a.scene_id)].append(int(a.editorial_episode_number))
+            reassigned_ids = {sid for sid, eps in used_in_map.items() if eps}
+        assigned_in_ids: list[int] = []
+        assigned_in_reason: dict[int, str] = {}
+        for a in (
+            SceneEditorialAssignment.query.filter_by(
+                project_id=int(project.id),
+                editorial_episode_number=ep,
+                is_active=True,
+            )
+            .order_by(
+                SceneEditorialAssignment.display_order.asc(),
+                SceneEditorialAssignment.id.asc(),
+            )
+            .all()
+        ):
+            if int(a.scene_id) not in assigned_in_reason:
+                assigned_in_ids.append(int(a.scene_id))
+                assigned_in_reason[int(a.scene_id)] = a.reason or ""
+        retained = [s for s in production_rows if int(s.id) not in reassigned_ids]
+        assigned_in = []
+        if assigned_in_ids:
+            fetched = {
+                int(s.id): s
+                for s in ShootingDayScene.query.options(
+                    joinedload(ShootingDayScene.shooting_day),
+                    selectinload(ShootingDayScene.vfx_shots).selectinload(VfxShot.versions),
+                    selectinload(ShootingDayScene.vfx_shots).selectinload(
+                        VfxShot.assigned_artist
+                    ),
+                )
+                .filter(ShootingDayScene.id.in_(assigned_in_ids))
+                .all()
+            }
+            for sid in assigned_in_ids:
+                s = fetched.get(sid)
+                if s is None:
+                    continue
+                # Never double-count: skip anything whose origin is this episode.
+                if _scene_production_episode_key(s) == ep:
+                    continue
+                assigned_in.append(s)
+        rows = ed.sort_shooting_day_scenes_for_display(retained + assigned_in)
+        return {
+            "rows": rows,
+            "retained": retained,
+            "assigned_in": assigned_in,
+            "assigned_in_ids": {int(s.id) for s in assigned_in},
+            "assigned_in_reason": assigned_in_reason,
+            "reassigned_ids": reassigned_ids,
+            "used_in_map": used_in_map,
+        }
+
     def _episode_dock_card_from_rows(
         rows: list,
         *,
@@ -25157,10 +25252,14 @@ def create_app() -> Flask:
         pipeline_by_num = ensure_production_episode_rows(p)
         episodes = []
         for ep_num in range(1, episode_count + 1):
-            rows = by_episode.get(ep_num, [])
+            # Editorial cut membership (shared with the Episode Detail page) so
+            # the card's runtime / scene / VFX / progress match the detail page.
+            editorial_rows = calculate_editorial_episode_scene_set(
+                p, ep_num, production_rows=by_episode.get(ep_num, [])
+            )["rows"]
             episodes.append(
                 _episode_dock_card_from_rows(
-                    rows,
+                    editorial_rows,
                     episode_number=ep_num,
                     project=p,
                     pe=pipeline_by_num.get(ep_num),
@@ -25729,47 +25828,76 @@ def create_app() -> Flask:
                 }
             )
         shooting_units = _group_shooting_day_cards_by_unit(shooting_day_cards)
+        # ---- Editorial scene set (this episode's CURRENT editorial cut) ------
+        # The Episode page represents the EDITORIAL version of the project. Every
+        # statistic below is computed from the scenes editorially assigned to this
+        # episode, using the SAME shared membership function the Episode List cards
+        # use (calculate_editorial_episode_scene_set) — so runtime / scene count /
+        # VFX / progress always match between the list and the detail page.
+        # Production data (shooting days above, shooting-day records, and
+        # production reports) is never modified. If nothing is assigned to this
+        # editorial episode, every statistic is zero (no stale production values).
+        if not special_collection and episode_number:
+            _ed_set = calculate_editorial_episode_scene_set(
+                p, int(episode_number), production_rows=scenes
+            )
+            editorial_scenes = _ed_set["rows"]
+            assigned_in_scenes = _ed_set["assigned_in"]
+            assigned_in_id_set = _ed_set["assigned_in_ids"]
+            assigned_in_reason = _ed_set["assigned_in_reason"]
+            reassigned_ids = _ed_set["reassigned_ids"]
+            used_in_map = _ed_set["used_in_map"]
+        else:
+            editorial_scenes = scenes
+            assigned_in_scenes = []
+            assigned_in_id_set = set()
+            assigned_in_reason = {}
+            reassigned_ids = set()
+            used_in_map = {}
+        ed_scene_ids = [int(sc.id) for sc in editorial_scenes]
+
+        # VFX aggregation (editorial).
         vfx_by_scene: list[dict] = []
         all_shots: list[VfxShot] = []
-        for sc in scenes:
+        for sc in editorial_scenes:
             shots = sorted(sc.vfx_shots or [], key=lambda s: (s.shot_number, s.id))
             if shots:
                 all_shots.extend(shots)
                 vfx_by_scene.append({"scene": sc, "shots": shots})
         vfx_linked_scene_ids: set[int] = set()
-        _all_scene_ids = [int(sc.id) for sc in scenes]
-        if _all_scene_ids:
-            vfx_linked_scene_ids = {
-                int(r[0])
-                for r in db.session.query(VfxSceneItemSource.shooting_day_scene_id)
+        vfx_item_ids_for_episode: set[int] = set()
+        if ed_scene_ids:
+            for r in (
+                db.session.query(
+                    VfxSceneItemSource.shooting_day_scene_id,
+                    VfxSceneItemSource.vfx_scene_item_id,
+                )
                 .filter(
-                    VfxSceneItemSource.shooting_day_scene_id.in_(_all_scene_ids),
+                    VfxSceneItemSource.shooting_day_scene_id.in_(ed_scene_ids),
                     VfxSceneItemSource.is_active.is_(True),
                 )
                 .all()
-            }
-        scene_cards = []
-        if special_collection:
-            scene_ids = [int(sc.id) for sc in scenes]
-            scene_versions = (
-                SceneVersion.query.filter(
-                    SceneVersion.project_id == p.id,
-                    SceneVersion.scene_id.in_(scene_ids),
-                )
-                .order_by(SceneVersion.scene_id, SceneVersion.version_number.desc())
-                .all()
-                if scene_ids
-                else []
+            ):
+                vfx_linked_scene_ids.add(int(r[0]))
+                if r[1] is not None:
+                    vfx_item_ids_for_episode.add(int(r[1]))
+
+        # Scene versions for the editorial scenes (by scene id so scenes assigned
+        # in from other production episodes are covered too).
+        scene_versions = (
+            SceneVersion.query.filter(
+                SceneVersion.project_id == p.id,
+                SceneVersion.scene_id.in_(ed_scene_ids),
             )
-        else:
-            scene_versions = (
-                SceneVersion.query.filter_by(project_id=p.id, episode_number=episode_number)
-                .order_by(SceneVersion.scene_id, SceneVersion.version_number.desc())
-                .all()
-            )
+            .order_by(SceneVersion.scene_id, SceneVersion.version_number.desc())
+            .all()
+            if ed_scene_ids
+            else []
+        )
         sv_by_scene: dict[int, list[SceneVersion]] = defaultdict(list)
         for sv in scene_versions:
             sv_by_scene[int(sv.scene_id)].append(sv)
+
         def _make_scene_card(sc, *, sv_list=None, linked_ids=None):
             day = sc.shooting_day
             sv_list = sv_list if sv_list is not None else []
@@ -25794,88 +25922,29 @@ def create_app() -> Flask:
                 "editorial_assignment_reason": "",
             }
 
-        for sc in scenes:
-            scene_cards.append(
-                _make_scene_card(
-                    sc, sv_list=sv_by_scene.get(sc.id, []), linked_ids=vfx_linked_scene_ids
-                )
+        scene_cards = []
+        for sc in editorial_scenes:
+            card = _make_scene_card(
+                sc, sv_list=sv_by_scene.get(sc.id, []), linked_ids=vfx_linked_scene_ids
             )
-        # ---- Editorial Episode layer ----------------------------------------
-        # Production history is immutable. scene_cards above are the ORIGINAL
-        # (production) scenes for this episode. Here we (a) annotate each original
-        # card with the editorial episodes it is ALSO used in ("Used in E5") and
-        # (b) build cards for scenes assigned INTO this episode from other origins.
+            if int(sc.id) in assigned_in_id_set:
+                card["editorial_origin"] = _scene_production_episode_key(sc)
+                card["editorial_assignment_reason"] = assigned_in_reason.get(int(sc.id), "")
+            scene_cards.append(card)
+        # All editorial cards now live in scene_cards; this stays for template
+        # compatibility (the grid renders scene_cards + editorial_scene_cards).
         editorial_scene_cards: list[dict] = []
-        editorial_assigned_count = 0
-        editorial_runtime_seconds = 0
-        # Origin scenes that have been editorially assigned to (used in) another
-        # episode. These are excluded from this episode's displayed Total Scene
-        # Count and Episode Runtime (they are counted in the episode they moved to).
-        reassigned_ids: set[int] = set()
-        if not special_collection and episode_number:
-            orig_ids = [int(sc.id) for sc in scenes]
-            used_in_map: dict[int, list[int]] = defaultdict(list)
-            if orig_ids:
-                for a in SceneEditorialAssignment.query.filter(
-                    SceneEditorialAssignment.scene_id.in_(orig_ids),
-                    SceneEditorialAssignment.is_active.is_(True),
-                ).all():
-                    used_in_map[int(a.scene_id)].append(int(a.editorial_episode_number))
-            for card in scene_cards:
-                card["used_in_episodes"] = sorted(used_in_map.get(int(card["scene"].id), []))
-            reassigned_ids = {sid for sid, eps in used_in_map.items() if eps}
-            assigns_in = (
-                SceneEditorialAssignment.query.filter_by(
-                    project_id=int(p.id),
-                    editorial_episode_number=int(episode_number),
-                    is_active=True,
-                )
-                .order_by(
-                    SceneEditorialAssignment.display_order.asc(),
-                    SceneEditorialAssignment.id.asc(),
-                )
-                .all()
-            )
-            foreign_scene_ids = [int(a.scene_id) for a in assigns_in]
-            foreign_linked_ids: set[int] = set()
-            foreign_sv_map: dict[int, list] = defaultdict(list)
-            if foreign_scene_ids:
-                foreign_linked_ids = {
-                    int(r[0])
-                    for r in db.session.query(VfxSceneItemSource.shooting_day_scene_id)
-                    .filter(
-                        VfxSceneItemSource.shooting_day_scene_id.in_(foreign_scene_ids),
-                        VfxSceneItemSource.is_active.is_(True),
-                    )
-                    .all()
-                }
-                for sv in (
-                    SceneVersion.query.filter(
-                        SceneVersion.project_id == p.id,
-                        SceneVersion.scene_id.in_(foreign_scene_ids),
-                    )
-                    .order_by(SceneVersion.scene_id, SceneVersion.version_number.desc())
-                    .all()
-                ):
-                    foreign_sv_map[int(sv.scene_id)].append(sv)
-            for a in assigns_in:
-                sc = db.session.get(ShootingDayScene, int(a.scene_id))
-                if sc is None:
-                    continue
-                origin_ep = _scene_production_episode_key(sc)
-                if origin_ep == int(episode_number):
-                    continue  # already an original scene in this episode
-                card = _make_scene_card(
-                    sc,
-                    sv_list=foreign_sv_map.get(int(sc.id), []),
-                    linked_ids=foreign_linked_ids,
-                )
-                card["editorial_origin"] = origin_ep
-                card["editorial_assignment_reason"] = a.reason or ""
-                editorial_scene_cards.append(card)
-                editorial_assigned_count += 1
-                if shooting_items_mod.counts_toward_episode_runtime(sc):
-                    editorial_runtime_seconds += ed.shooting_day_scene_duration_seconds(sc)
+        # Informational counts for the statistics panel.
+        editorial_assigned_count = (
+            shooting_items_mod.count_unique_real_scenes(assigned_in_scenes)
+            if assigned_in_scenes
+            else 0
+        )
+        editorial_runtime_seconds = sum(
+            ed.shooting_day_scene_duration_seconds(s)
+            for s in assigned_in_scenes
+            if shooting_items_mod.counts_toward_episode_runtime(s)
+        )
         episode_versions = (
             []
             if special_collection
@@ -25894,60 +25963,58 @@ def create_app() -> Flask:
             .all()
         )
         if is_establishing_collection:
-            shooting_scene_count = len(scenes)
+            shooting_scene_count = len(editorial_scenes)
             real_scene_list = []
         elif is_episode_x:
             real_scene_list = [
-                r for r in scenes if shooting_items_mod.counts_toward_shooting_day_sync_edit(r)
+                r
+                for r in editorial_scenes
+                if shooting_items_mod.counts_toward_shooting_day_sync_edit(r)
             ]
             shooting_scene_count = shooting_items_mod.count_unique_real_scenes_on_day(
-                scenes, include_unassigned=True
+                editorial_scenes, include_unassigned=True
             )
         else:
-            real_scene_list = shooting_items_mod.real_scene_rows(scenes)
-            shooting_scene_count = shooting_items_mod.count_unique_real_scenes(scenes)
+            real_scene_list = shooting_items_mod.real_scene_rows(editorial_scenes)
+            shooting_scene_count = shooting_items_mod.count_unique_real_scenes(editorial_scenes)
         real_scene_row_count = len(real_scene_list)
         total_scenes = shooting_scene_count
         total_dur_sec = sum(
             ed.shooting_day_scene_duration_seconds(s)
-            for s in scenes
+            for s in editorial_scenes
             if shooting_items_mod.counts_toward_episode_runtime(s)
         )
-        # Exclude scenes that were editorially assigned to another episode from
-        # this episode's displayed Total Scene Count and Episode Runtime.
-        if reassigned_ids:
-            retained_scenes = [s for s in scenes if int(s.id) not in reassigned_ids]
-            total_scenes = shooting_items_mod.count_unique_real_scenes(retained_scenes)
-            total_dur_sec = sum(
-                ed.shooting_day_scene_duration_seconds(s)
-                for s in retained_scenes
-                if shooting_items_mod.counts_toward_episode_runtime(s)
-            )
-        reshoot_count = shooting_items_mod.count_reshoot_versions(scenes)
-        runtime_selection_needed = shooting_items_mod.episode_runtime_selection_needed(scenes)
-        vfx_scenes = [s for s in scenes if bool(s.needs_vfx)]
+        reshoot_count = shooting_items_mod.count_reshoot_versions(editorial_scenes)
+        runtime_selection_needed = shooting_items_mod.episode_runtime_selection_needed(
+            editorial_scenes
+        )
+        vfx_scenes = [s for s in editorial_scenes if bool(s.needs_vfx)]
+        # VFX Item Count is editorial: the active VFX items that contain at least
+        # one scene currently assigned to this editorial episode.
         vfx_items_count = 0
-        if not special_collection:
-            vfx_items_count = VfxSceneItem.query.filter_by(
-                project_id=p.id,
-                episode_number=int(episode_number),
-                is_active=True,
-            ).count()
-        elif is_episode_x:
+        if is_episode_x:
             vfx_items_count = VfxSceneItem.query.filter_by(
                 project_id=p.id,
                 episode_number=0,
                 is_active=True,
             ).count()
+        elif vfx_item_ids_for_episode:
+            vfx_items_count = VfxSceneItem.query.filter(
+                VfxSceneItem.id.in_(vfx_item_ids_for_episode),
+                VfxSceneItem.is_active.is_(True),
+            ).count()
         vfx_shot_count = len(all_shots)
         pending_vfx = sum(1 for sh in all_shots if not ed.vfx_shot_is_terminal(sh))
         approved_vfx = vfx_shot_count - pending_vfx
-        critical_scene_count = sum(1 for s in scenes if bool(s.is_critical))
+        critical_scene_count = sum(1 for s in editorial_scenes if bool(s.is_critical))
+        editorial_day_ids = {
+            int(s.shooting_day_id) for s in editorial_scenes if s.shooting_day_id
+        }
         critical_note_count = 0
-        if day_ids:
+        if editorial_day_ids:
             critical_note_count = (
                 ShootingDayCriticalNote.query.filter(
-                    ShootingDayCriticalNote.shooting_day_id.in_(day_ids),
+                    ShootingDayCriticalNote.shooting_day_id.in_(editorial_day_ids),
                     ShootingDayCriticalNote.solved_at.is_(None),
                     ShootingDayCriticalNote.is_critical.is_(True),
                 ).count()
@@ -26004,13 +26071,11 @@ def create_app() -> Flask:
             ),
             "shooting_scene_count": shooting_scene_count,
             "critical_count": critical_count,
-            # Editorial layer: originals count toward Script Scene Count only;
-            # editorially-assigned scenes add to Displayed Scenes + runtime only.
+            # Editorial layer: all counts above are already editorial. This is how
+            # many of the displayed scenes were assigned in from other episodes.
             "editorial_assigned_count": editorial_assigned_count,
-            "displayed_scene_count": int(total_scenes) + int(editorial_assigned_count),
+            "displayed_scene_count": int(total_scenes),
             "editorial_runtime_seconds": editorial_runtime_seconds,
-            "total_duration_with_editorial_seconds": int(total_dur_sec)
-            + int(editorial_runtime_seconds),
             "estimated_episode_duration_seconds": estimated_episode_duration_seconds,
             "sync_done_count": sync_done_n,
             "first_edit_done_count": first_edit_n,

@@ -1,49 +1,500 @@
 {% extends "base.html" %}
-{% block title %}Episodes · {{ project.name }} · {{ app_name }}{% endblock %}
-{% block content %}
-<div class="project-detail-page">
-  <div class="page-head project-detail-head">
-    <div class="project-detail-head-main">
-      <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /</p>
-      <h1>{{ project.name }}</h1>
-      <p class="muted">{{ project.project_type }} · {{ project.production_house }} · Director: {{ project.director }}</p>
-      {% include 'partials/project_workflow_nav.html' %}
-    </div>
-  </div>
-
-  <section class="panel panel--page-tone" aria-label="Episodes">
-    {% if episodes %}
-    <ul class="production-days-simple-list project-episode-list">
-      {% for ep in episodes %}
-      <li class="production-days-simple-item production-days-simple-stack">
-        <span class="production-days-simple-main">Episode {{ ep.episode_number }}</span>
-        <span class="production-days-simple-sub project-episode-meta">Total Duration: {{ ep.total_duration }} min · Scenes: {{ ep.scene_count }}</span>
-        <span class="production-days-simple-sub">
-          Sync:
-          {% if ep.scene_count == 0 %}
-          <span class="badge badge--muted">Empty</span>
-          {% elif ep.sync_done %}
-          <span class="badge badge--success">Done</span>
-          {% else %}
-          <span class="badge badge--danger">Pending</span>
+{% macro episode_dock_stat_icon(kind) -%}
+{% if kind == 'duration' %}
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+{% elif kind == 'scenes' %}
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+{% elif kind == 'shots' %}
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 20V10l6-6 6 6v10"/><path d="M10 20v-6h4v6"/></svg>
+{% endif %}
+{%- endmacro %}
+{% macro episode_dock_card(ep) %}
+      <li class="episode-dock-card{% if ep.is_episode_x %} episode-dock-card--episode-x{% elif ep.is_establishing_collection %} episode-dock-card--establishing{% endif %}" role="listitem">
+        <div class="episode-dock-card__inner">
+          <div class="episode-dock-card__title-line">
+            {% if ep.is_episode_x %}
+            <span class="episode-dock-card__title">Episode X</span>
+            <span class="episode-dock-card__badge">Unassigned</span>
+            {% elif ep.is_establishing_collection %}
+            <span class="episode-dock-card__title">Establishing Shot</span>
+            <span class="episode-dock-card__badge episode-dock-card__badge--establishing">Collection</span>
+            {% else %}
+            <span class="episode-dock-card__title">Episode {{ ep.episode_number }}</span>
+            {% endif %}
+          </div>
+          <div class="episode-dock-card__meta episode-dock-card__meta--stat-icons muted">
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--duration" title="Episode Runtime: {{ ep.episode_runtime_seconds|fmt_duration_total }} (selected scene takes only)">
+              <span class="episode-dock-stat-chip__icon" aria-hidden="true">{{ episode_dock_stat_icon('duration') }}</span>
+              <span class="episode-dock-stat-chip__value">{{ ep.episode_runtime_seconds|fmt_duration_total }}</span>
+              <span class="episode-dock-stat-chip__label sr-only">Episode Runtime</span>
+            </span>
+            {% if ep.is_establishing_collection %}
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--shots" title="{{ ep.item_count }} establishing shot{{ 's' if ep.item_count != 1 else '' }}">
+              <span class="episode-dock-stat-chip__icon" aria-hidden="true">{{ episode_dock_stat_icon('shots') }}</span>
+              <span class="episode-dock-stat-chip__value">{{ ep.item_count }} shot{{ 's' if ep.item_count != 1 else '' }}</span>
+            </span>
+            {% elif ep.is_episode_x %}
+            {% if ep.item_count > 0 %}
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--items" title="{{ ep.item_count }} unassigned items">
+              <span class="episode-dock-stat-chip__value">{{ ep.item_count }} items · {{ ep.vfx_item_count }} VFX · {{ ep.sound_item_count }} sound</span>
+            </span>
+            {% elif ep.scene_count > 0 %}
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--scenes" title="{{ ep.scene_count }} unassigned scene{{ 's' if ep.scene_count != 1 else '' }}">
+              <span class="episode-dock-stat-chip__icon" aria-hidden="true">{{ episode_dock_stat_icon('scenes') }}</span>
+              <span class="episode-dock-stat-chip__value">{{ ep.scene_count }}</span>
+            </span>
+            {% endif %}
+            {% else %}
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--scenes" title="{{ ep.scene_count }} unique scene{{ 's' if ep.scene_count != 1 else '' }} (Scene type only)">
+              <span class="episode-dock-stat-chip__icon" aria-hidden="true">{{ episode_dock_stat_icon('scenes') }}</span>
+              <span class="episode-dock-stat-chip__value">{{ ep.scene_count }}</span>
+            </span>
+            {% if ep.reshoot_count and ep.reshoot_count > 0 %}
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--reshoots" title="{{ ep.reshoot_count }} reshoot version{{ 's' if ep.reshoot_count != 1 else '' }}">
+              <span class="episode-dock-stat-chip__value">{{ ep.reshoot_count }} reshoot{{ 's' if ep.reshoot_count != 1 else '' }}</span>
+            </span>
+            {% endif %}
+            {% endif %}
+          </div>
+          {% if ep.runtime_selection_needed and not ep.is_episode_x and not ep.is_establishing_collection %}
+          <p class="episode-dock-runtime-warn" role="status">Runtime selection needed</p>
           {% endif %}
-          · 1st Edit:
-          {% if ep.scene_count == 0 %}
-          <span class="badge badge--info">Empty</span>
-          {% elif ep.first_edit_done %}
-          <span class="badge badge--success">Done</span>
-          {% else %}
-          <span class="badge badge--danger">Pending</span>
+          {% if ep.linked_editing_item and can('editing_items', 'view') %}
+          <a href="{{ ep.linked_editing_item.url }}" class="episode-dock-editing-item episode-dock-editing-item--linked" title="{{ ep.linked_editing_item.title|e }} — {{ ep.linked_editing_item.overall_status_label|e }}">
+            <span class="episode-dock-editing-item__code">{{ ep.linked_editing_item.code|e }}</span>
+            <span class="episode-dock-editing-item__status">{{ ep.linked_editing_item.overall_status_label|e }}</span>
+          </a>
+          {% elif not ep.is_episode_x and not ep.is_establishing_collection and can('editing_items', 'view') %}
+          <div class="episode-dock-editing-item episode-dock-editing-item--missing">
+            <span class="muted">No editing pipeline item</span>
+            {% if project_is_tv_series(project.project_type) and (can('editing_items', 'create') or can('editing_items', 'edit')) %}
+            <form method="post" action="{{ url_for('project_episode_ensure_editing_item', project_id=project.id, episode_number=ep.episode_number) }}" class="inline-form episode-dock-editing-item__repair-form">
+              <input type="hidden" name="next" value="{{ url_for('project_episodes', project_id=project.id) }}">
+              <button type="submit" class="btn btn--small btn--ghost">Sync episode</button>
+            </form>
+            {% endif %}
+          </div>
           {% endif %}
-        </span>
+          {% if ep.is_episode_x %}
+          <div class="episode-dock-card__script-stats episode-dock-card__script-stats--episode-x">
+            <span class="episode-dock-card__script-stat muted">Production items not assigned to an episode yet</span>
+          </div>
+          {% elif ep.is_establishing_collection %}
+          <div class="episode-dock-card__script-stats episode-dock-card__script-stats--establishing">
+            <span class="episode-dock-card__script-stat muted">All establishing shots across shooting days</span>
+          </div>
+          {% else %}
+          <div class="episode-dock-card__script-stats{% if ep.has_script and ep.script_analysis_status == 'completed' %} episode-dock-card__script-stats--ok{% elif not ep.has_script %} episode-dock-card__script-stats--empty{% endif %}">
+            {% if ep.has_script %}
+            {% if ep.script_analysis_status == 'completed' %}
+            <span class="episode-dock-card__script-stat"><strong>{{ ep.script_page_count }}</strong> pages</span>
+            <span class="episode-dock-card__detail-sep" aria-hidden="true">·</span>
+            <span class="episode-dock-card__script-stat"><strong>{{ ep.script_scene_count }}</strong> script scenes</span>
+            {% elif ep.script_page_count > 0 %}
+            <span class="episode-dock-card__script-stat"><strong>{{ ep.script_page_count }}</strong> pages</span>
+            {% if ep.script_analysis_error %}
+            <span class="episode-dock-card__detail-sep" aria-hidden="true">·</span>
+            <span class="episode-dock-card__script-stat episode-dock-card__script-stat--warn">{{ ep.script_analysis_error }}</span>
+            {% endif %}
+            {% elif ep.script_analysis_error %}
+            <span class="episode-dock-card__script-stat episode-dock-card__script-stat--warn">{{ ep.script_analysis_error }}</span>
+            {% else %}
+            <span class="episode-dock-card__script-stat muted">Analyzing script…</span>
+            {% endif %}
+            {% else %}
+            <span class="episode-dock-card__script-stat">Upload a PDF below for pages &amp; scenes</span>
+            {% endif %}
+          </div>
+          {% endif %}
+          {% if ep.combo_slides and ep.combo_slides|length > 0 and not ep.is_episode_x and not ep.is_establishing_collection %}
+          <div class="episode-dock-card__charts" aria-label="Episode charts">
+            <figure class="episode-chart episode-chart--combo">
+              <div
+                class="episode-combo-chart episode-combo-chart--rotating"
+                data-episode-combo-donut
+                tabindex="0"
+              >
+                <template class="episode-combo-slides-data">{{ ep.combo_slides | tojson }}</template>
+                <svg
+                  class="episode-combo-donut"
+                  viewBox="0 0 120 120"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <circle class="episode-combo-donut__track episode-combo-donut__track--scenes" cx="60" cy="60" r="48"></circle>
+                  <circle class="episode-combo-donut__track episode-combo-donut__track--outer" cx="60" cy="60" r="40"></circle>
+                  <circle class="episode-combo-donut__track episode-combo-donut__track--inner" cx="60" cy="60" r="32"></circle>
+                  <circle class="episode-combo-donut__ring episode-combo-donut__ring--shoot"
+                          cx="60" cy="60" r="48"
+                          pathLength="100"
+                          stroke-dasharray="{{ ep.scenes_shoot_pct }} 100"
+                          transform="rotate(-90 60 60)"></circle>
+                  <circle class="episode-combo-donut__ring episode-combo-donut__ring--sync"
+                          cx="60" cy="60" r="40"
+                          pathLength="100"
+                          stroke-dasharray="{{ ep.sync_done_pct }} 100"
+                          transform="rotate(-90 60 60)"></circle>
+                  <circle class="episode-combo-donut__ring episode-combo-donut__ring--edit"
+                          cx="60" cy="60" r="32"
+                          pathLength="100"
+                          stroke-dasharray="{{ ep.first_edit_done_pct }} 100"
+                          transform="rotate(-90 60 60)"></circle>
+                  <text class="episode-combo-donut__center-num"
+                        x="60" y="56"
+                        text-anchor="middle"
+                        dominant-baseline="middle">{{ ep.sync_done_pct }}%</text>
+                  <text class="episode-combo-donut__center-lbl"
+                        x="60" y="72"
+                        text-anchor="middle"
+                        dominant-baseline="middle">SYNC</text>
+                </svg>
+              </div>
+              <figcaption class="episode-combo-chart__caption" aria-hidden="true">
+                <ul class="episode-combo-chart__legend">
+                  <li>
+                    <span class="episode-chart__swatch episode-chart__swatch--shoot" aria-hidden="true"></span>
+                    <span>{{ ep.scenes_shoot_pct }}% shoot</span>
+                  </li>
+                  <li>
+                    <span class="episode-chart__swatch episode-chart__swatch--sync" aria-hidden="true"></span>
+                    <span>{{ ep.sync_done_pct }}% sync</span>
+                  </li>
+                  <li>
+                    <span class="episode-chart__swatch episode-chart__swatch--edit" aria-hidden="true"></span>
+                    <span>{{ ep.first_edit_done_pct }}% 1st edit</span>
+                  </li>
+                </ul>
+              </figcaption>
+            </figure>
+          </div>
+          {% endif %}
+          <div class="episode-dock-card__actions">
+            {% if ep.is_episode_x %}
+            <a href="{{ url_for('project_episode_x_detail', project_id=project.id) }}" class="btn btn--small btn--ghost btn--icon episode-dock-card__open{% if ep.scene_count > 0 or ep.item_count > 0 %} episode-dock-card__open--has-scenes{% endif %}" aria-label="Open Episode X{% if ep.item_count > 0 %} — {{ ep.item_count }} item{{ 's' if ep.item_count != 1 else '' }}{% endif %}" title="{% if ep.item_count > 0 %}Episode X — {{ ep.item_count }} item{{ 's' if ep.item_count != 1 else '' }}{% else %}Episode X details{% endif %}">
+            {% elif ep.is_establishing_collection %}
+            <a href="{{ url_for('project_episode_establishing_detail', project_id=project.id) }}" class="btn btn--small btn--ghost btn--icon episode-dock-card__open{% if ep.item_count > 0 %} episode-dock-card__open--has-scenes{% endif %}" aria-label="Open Establishing Shot collection{% if ep.item_count > 0 %} — {{ ep.item_count }} shot{{ 's' if ep.item_count != 1 else '' }}{% endif %}" title="{% if ep.item_count > 0 %}Establishing shots — {{ ep.item_count }} shot{{ 's' if ep.item_count != 1 else '' }}{% else %}Establishing Shot collection{% endif %}">
+            {% else %}
+            <a href="{{ url_for('project_episode_detail', project_id=project.id, episode_number=ep.episode_number) }}" class="btn btn--small btn--ghost btn--icon episode-dock-card__open{% if ep.scene_count > 0 %} episode-dock-card__open--has-scenes{% endif %}" aria-label="Open episode {{ ep.episode_number }}{% if ep.scene_count > 0 %} — {{ ep.scene_count }} shooting scene{{ 's' if ep.scene_count != 1 else '' }}{% endif %}" title="{% if ep.scene_count > 0 %}Episode details — {{ ep.scene_count }} shooting scene{{ 's' if ep.scene_count != 1 else '' }}{% else %}Episode details{% endif %}">
+            {% endif %}
+              <span class="btn__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+            </a>
+            {% if not ep.is_episode_x and not ep.is_establishing_collection %}
+            <div class="episode-script-control">
+              {% if ep.has_script and ep.script_url %}
+              <a href="{{ ep.script_url }}" class="btn btn--small btn--ghost btn--icon episode-script-control__open episode-script-control__open--has-script" target="_blank" rel="noopener noreferrer" aria-label="{% if ep.script_analysis_status == 'completed' %}View script — {{ ep.script_page_count }} pages, {{ ep.script_scene_count }} scenes{% else %}View script{% endif %}" title="{% if ep.script_analysis_status == 'completed' %}View script — {{ ep.script_page_count }} pages, {{ ep.script_scene_count }} scenes{% else %}View script{% endif %}">
+                <span class="btn__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+              </a>
+              {% else %}
+              <button type="button" class="btn btn--small btn--ghost btn--icon episode-script-control__open episode-script-control__open--empty" data-episode-upload-trigger="episode-script-input-{{ ep.episode_number }}" aria-label="Upload script" title="Upload script">
+                <span class="btn__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </span>
+              </button>
+              {% endif %}
+              <details class="episode-script-menu">
+                <summary class="episode-script-menu__trigger" aria-label="Script options for episode {{ ep.episode_number }}"><span class="episode-script-menu__trigger-dots" aria-hidden="true">⋯</span></summary>
+                <div class="episode-script-menu__panel" role="menu">
+                  <label for="episode-script-input-{{ ep.episode_number }}" class="episode-script-menu__item episode-script-menu__item--action" role="menuitem">Replace script</label>
+                  {% if ep.has_script %}
+                  {% if is_macos %}
+                  <form method="post" action="{{ url_for('project_episode_script_reveal', project_id=project.id, episode_number=ep.episode_number) }}" class="episode-script-menu__form">
+                    <button type="submit" class="episode-script-menu__btn" role="menuitem">Show in Finder</button>
+                  </form>
+                  {% endif %}
+                  <form method="post" action="{{ url_for('project_episode_script_remove', project_id=project.id, episode_number=ep.episode_number) }}" class="episode-script-menu__form" data-confirm="Remove the script for episode {{ ep.episode_number }}?">
+                    <button type="submit" class="episode-script-menu__btn episode-script-menu__btn--danger" role="menuitem">Remove script</button>
+                  </form>
+                  {% endif %}
+                </div>
+              </details>
+              <form
+                method="post"
+                action="{{ url_for('project_episode_script_upload', project_id=project.id, episode_number=ep.episode_number) }}"
+                enctype="multipart/form-data"
+                class="episode-script-upload-form"
+              >
+                <input
+                  type="file"
+                  name="script_file"
+                  accept="application/pdf,.pdf"
+                  class="episode-script-upload-input sr-only"
+                  id="episode-script-input-{{ ep.episode_number }}"
+                  data-episode-upload
+                >
+              </form>
+            </div>
+            {% endif %}
+          </div>
+        </div>
       </li>
-      {% endfor %}
-    </ul>
-    {% else %}
+{% endmacro %}
+{% macro editing_dock_card(item) %}
+      <li class="episode-dock-card episode-dock-card--editing-item" role="listitem">
+        <div class="episode-dock-card__inner">
+          <div class="episode-dock-card__title-line">
+            <span class="episode-dock-card__title">{{ item.title|e }}</span>
+            <span class="episode-dock-card__badge episode-dock-card__badge--editing">{{ item.item_type_label|e }}</span>
+          </div>
+          <div class="episode-dock-card__meta episode-dock-card__meta--stat-icons muted">
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--items" title="Edit status">
+              <span class="episode-dock-stat-chip__value">{{ item.edit_status_label|e }}</span>
+              <span class="episode-dock-stat-chip__label sr-only">Edit status</span>
+            </span>
+          </div>
+          <a href="{{ item.url }}" class="episode-dock-editing-item episode-dock-editing-item--linked" title="{{ item.title|e }} — {{ item.overall_status_label|e }}">
+            <span class="episode-dock-editing-item__code">{{ item.code|e }}</span>
+            <span class="episode-dock-editing-item__status">{{ item.overall_status_label|e }}</span>
+          </a>
+          <div class="episode-dock-card__script-stats episode-dock-card__script-stats--empty">
+            <span class="episode-dock-card__script-stat muted">Editorial pipeline · {{ item.item_type_label|e }}</span>
+          </div>
+          <div class="episode-dock-card__actions">
+            <a href="{{ item.url }}" class="btn btn--small btn--ghost btn--icon episode-dock-card__open episode-dock-card__open--has-scenes" aria-label="Open {{ item.code|e }} in editing pipeline" title="Open {{ item.code|e }} in editing pipeline">
+              <span class="btn__icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+            </a>
+          </div>
+        </div>
+      </li>
+{% endmacro %}
+{% macro editing_add_dock_card() %}
+      <li class="episode-dock-card episode-dock-card--add" role="listitem">
+        <button type="button" class="episode-dock-card__inner episode-dock-card__inner--add" data-editing-open="add-item" aria-label="Add new editing item">
+          <span class="episode-dock-card__add-icon" aria-hidden="true">
+            <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </span>
+          <span class="episode-dock-card__add-label">Add editing item</span>
+        </button>
+      </li>
+{% endmacro %}
+{% block title %}Editing elements · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/editing-items.css') }}">
+{% endblock %}
+{% block content %}
+{% include 'partials/project_page_head.html' %}
+
+<p class="muted project-page-section-lead">Production episodes, scenes, scripts, runtime and shooting progress.</p>
+
+{% if episode_conflicts and episode_conflicts.has_real_conflicts and can('editing_items', 'view') %}
+<div class="editing-items-conflicts editing-items-conflicts--compact" role="status">
+  <p class="editing-items-conflicts__lede">
+    Episode pipeline conflicts detected.
+    {% if episode_conflicts.unlinked_episode_items %}
+    {{ episode_conflicts.unlinked_episode_items|length }} unlinked episode editing item{{ 's' if episode_conflicts.unlinked_episode_items|length != 1 else '' }}.
+    {% endif %}
+    {% if episode_conflicts.duplicate_links %}
+    {{ episode_conflicts.duplicate_links|length }} duplicate link{{ 's' if episode_conflicts.duplicate_links|length != 1 else '' }}.
+    {% endif %}
+  </p>
+  {% if project_is_tv_series(project.project_type) and (can('editing_items', 'create') or can('editing_items', 'edit')) %}
+  <form method="post" action="{{ url_for('project_editing_repair_episodes', project_id=project.id) }}" class="inline-form">
+    <input type="hidden" name="next" value="{{ url_for('project_episodes', project_id=project.id) }}">
+    <button type="submit" class="btn btn--ghost btn--small">Repair episode links</button>
+  </form>
+  {% endif %}
+</div>
+{% elif episode_conflicts and episode_conflicts.needs_initial_sync and can('editing_items', 'view') %}
+<div class="editing-items-setup editing-items-setup--compact" role="status">
+  <p class="editing-items-setup__text">{{ episode_conflicts.missing_editing_items|length }} episode{{ 's' if episode_conflicts.missing_editing_items|length != 1 else '' }} still need editing pipeline items.</p>
+  {% if can('editing_items', 'create') %}
+  <form method="post" action="{{ url_for('project_editing_sync_episodes', project_id=project.id) }}" class="inline-form">
+    <input type="hidden" name="next" value="{{ url_for('project_episodes', project_id=project.id) }}">
+    <button type="submit" class="btn btn--primary btn--small">Sync episodes</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+<section class="panel panel--page-tone project-episodes-panel" aria-label="Editing">
+    {% if episodes or episode_x or establishing_shots %}
+    {% if episode_x or establishing_shots %}
+    <div class="episode-dock-section">
+      <h2 class="episode-dock-section__title">Collections</h2>
+      <ul class="episode-dock-grid episode-dock-grid--collections" role="list">
+        {% if episode_x %}
+        {{ episode_dock_card(episode_x) }}
+        {% endif %}
+        {% if establishing_shots %}
+        {{ episode_dock_card(establishing_shots) }}
+        {% endif %}
+        {% if can('editing_items', 'create') %}
+        {{ editing_add_dock_card() }}
+        {% endif %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if episodes %}
+    <div class="episode-dock-section{% if episode_x or establishing_shots %} episode-dock-section--episodes{% endif %}">
+      {% if episode_x or establishing_shots %}
+      <h2 class="episode-dock-section__title">Episodes</h2>
+      {% endif %}
+      <ul class="episode-dock-grid" role="list">
+        {% for ep in episodes %}
+        {{ episode_dock_card(ep) }}
+        {% endfor %}
+        {% if can('editing_items', 'create') and not (episode_x or establishing_shots) %}
+        {{ editing_add_dock_card() }}
+        {% endif %}
+      </ul>
+    </div>
+    {% endif %}
+    {% elif not (can('editing_items', 'view') and other_editing_items) and not can('editing_items', 'create') %}
     <p class="empty empty--in-panel">No episodes configured on this project.</p>
+    {% elif can('editing_items', 'create') and not episodes and not episode_x and not establishing_shots %}
+    <ul class="episode-dock-grid" role="list">
+      {{ editing_add_dock_card() }}
+    </ul>
+    {% endif %}
+    {% if can('editing_items', 'view') and other_editing_items %}
+    <div class="episode-dock-section episode-dock-section--editing-items">
+      <h2 class="episode-dock-section__title">Editing items</h2>
+      <ul class="episode-dock-grid" role="list">
+        {% for item in other_editing_items %}
+        {{ editing_dock_card(item) }}
+        {% endfor %}
+        {% if can('editing_items', 'create') and not (episode_x or establishing_shots or episodes) %}
+        {{ editing_add_dock_card() }}
+        {% endif %}
+      </ul>
+    </div>
     {% endif %}
   </section>
 
-  <p class="panel-after-link"><a href="{{ url_for('project_detail', project_id=project.id) }}">← Back to project overview</a></p>
-</div>
+{% if can('editing_items', 'create') %}
+<dialog id="editing-add-item-modal" class="project-edit-modal editing-items-modal editing-items-modal--wide" aria-labelledby="editing-add-item-modal-title">
+  <div class="project-edit-modal__card">
+    <h2 id="editing-add-item-modal-title" class="project-edit-modal__title">Add Deliverable</h2>
+    {% if allows_episode_sync %}
+    <p class="editing-items-modal__scope-hint muted">TV episodes are created via Sync Episodes or Repair Episode Links — not as free-form items. Add trailers, promos, and other deliverables here.</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('project_editing_item_create', project_id=project.id) }}" class="form-stack editing-items-modal__form">
+      <input type="hidden" name="next" value="{{ url_for('project_episodes', project_id=project.id) }}">
+      <label class="field field--grow">
+        <span class="field-label">Type</span>
+        <select name="item_type" class="input" required>
+          {% for t in item_types %}<option value="{{ t }}">{{ t|replace('_',' ')|title }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Title</span>
+        <input type="text" name="title" class="input" required maxlength="200">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Number (optional)</span>
+        <input type="number" name="number" class="input" min="1">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Description</span>
+        <textarea name="description" class="input" rows="3"></textarea>
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Priority</span>
+        <select name="priority" class="input">{% for pr in priorities %}<option value="{{ pr }}"{% if pr == 'normal' %} selected{% endif %}>{{ pr|title }}</option>{% endfor %}</select>
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Due date</span>
+        <input type="date" name="due_date" class="input">
+      </label>
+      <label class="field field--grow">
+        <span class="field-label">Assigned editor</span>
+        <select name="assigned_editor_id" class="input"><option value="">—</option>{% for u in editors %}<option value="{{ u.id }}">{{ u.name|e }}</option>{% endfor %}</select>
+      </label>
+      <div class="project-edit-modal__actions">
+        <button type="button" class="btn btn--ghost" data-editing-close>Cancel</button>
+        <button type="submit" class="btn btn--primary">Create</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/episode-combo-donut.js') }}" defer></script>
+<script>
+/* Real-time: refresh the episode list cards when any editorial assignment
+   changes in this project (source and destination episodes) — no manual
+   refresh needed. Uses the shared editorial statistics on reload. */
+(function () {
+  var projectId = {{ project.id|int }};
+  function wire(socket) {
+    if (!socket) return;
+    try { socket.emit("join_project", { project_id: projectId }); } catch (e) {}
+    socket.on("SceneEditorialChanged", function (data) {
+      data = data || {};
+      if (parseInt(data.projectId, 10) === projectId) window.location.reload();
+    });
+  }
+  if (window.__tmSocket) {
+    wire(window.__tmSocket);
+  } else {
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries += 1;
+      if (window.__tmSocket) { clearInterval(timer); wire(window.__tmSocket); }
+      else if (tries > 40) { clearInterval(timer); }
+    }, 250);
+  }
+})();
+</script>
+{% if can('editing_items', 'create') %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  function openDialog(dlg) {
+    if (dlg && typeof dlg.showModal === "function") dlg.showModal();
+  }
+  function closeDialog(dlg) {
+    if (dlg && typeof dlg.close === "function" && dlg.open) dlg.close();
+  }
+  document.querySelectorAll('[data-editing-open="add-item"]').forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      openDialog(document.getElementById("editing-add-item-modal"));
+    });
+  });
+  document.querySelectorAll("[data-editing-close]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      closeDialog(btn.closest("dialog"));
+    });
+  });
+  var modal = document.getElementById("editing-add-item-modal");
+  if (modal) {
+    modal.addEventListener("click", function (ev) {
+      if (ev.target === modal) closeDialog(modal);
+    });
+  }
+});
+</script>
+{% endif %}
+{% if episodes or episode_x or establishing_shots %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("[data-episode-upload-trigger]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var id = btn.getAttribute("data-episode-upload-trigger");
+      var input = id ? document.getElementById(id) : null;
+      if (input) input.click();
+    });
+  });
+  document.querySelectorAll("[data-episode-upload]").forEach(function (input) {
+    input.addEventListener("change", function () {
+      if (!input.files || !input.files.length) return;
+      var menu = input.closest(".episode-script-control");
+      if (menu) {
+        var details = menu.querySelector(".episode-script-menu");
+        if (details) details.removeAttribute("open");
+      }
+      var form = input.closest("form");
+      if (form) form.submit();
+    });
+  });
+});
+</script>
+{% endif %}
 {% endblock %}

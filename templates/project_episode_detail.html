@@ -266,16 +266,12 @@ Sc {{ sc.scene_number }}
         aria-current="{% if active_tab == 'scenes' %}page{% else %}false{% endif %}"
       >
         <span class="stat-value">{{ overview.total_scenes }}</span>
-        <span class="stat-label">{% if (overview.editorial_assigned_count|default(0)) > 0 %}Original scenes{% else %}Total scene count{% endif %}</span>
+        <span class="stat-label">Total scene count</span>
       </a>
       {% if (overview.editorial_assigned_count|default(0)) > 0 %}
-      <div class="project-stat project-stat--small project-stat--editorial" title="Scenes assigned into this episode from other production episodes (runtime only — not counted in Script Scene Count)">
+      <div class="project-stat project-stat--small project-stat--editorial" title="How many of the displayed scenes were editorially assigned in from other production episodes">
         <span class="stat-value">{{ overview.editorial_assigned_count }}</span>
         <span class="stat-label">Editorially assigned</span>
-      </div>
-      <div class="project-stat project-stat--small project-stat--editorial" title="Original scenes + editorially-assigned scenes shown in the edit">
-        <span class="stat-value">{{ overview.displayed_scene_count }}</span>
-        <span class="stat-label">Displayed scenes</span>
       </div>
       {% endif %}
       <a
@@ -297,12 +293,6 @@ Sc {{ sc.scene_number }}
         <span class="stat-value">{{ overview.total_duration_seconds|fmt_duration_total }}</span>
         <span class="stat-label">Episode Runtime</span>
       </div>
-      {% if (overview.editorial_assigned_count|default(0)) > 0 %}
-      <div class="project-stat project-stat--small project-stat--editorial" title="Production runtime plus editorially-assigned scenes">
-        <span class="stat-value">{{ overview.total_duration_with_editorial_seconds|fmt_duration_total }}</span>
-        <span class="stat-label">Runtime (with editorial)</span>
-      </div>
-      {% endif %}
       {% if overview.reshoot_count|default(0) > 0 %}
       <div class="project-stat project-stat--small">
         <span class="stat-value">{{ overview.reshoot_count }}</span>
@@ -460,7 +450,14 @@ Sc {{ sc.scene_number }}
   <section class="panel episode-detail-tab-panel" aria-label="Scenes">
     <h2 class="panel-title">Scenes</h2>
     {% if not scene_cards and not editorial_scene_cards %}
-    <p class="empty empty--in-panel">No scenes in this episode yet.</p>
+    <div class="empty empty--in-panel episode-editorial-empty">
+      {% if not is_episode_x|default(false) and not is_establishing_collection|default(false) %}
+      <p class="episode-editorial-empty__title">No scenes assigned to this Editorial Episode.</p>
+      <p class="episode-editorial-empty__hint muted">This Episode currently contains no editorial content.</p>
+      {% else %}
+      <p class="episode-editorial-empty__title">No scenes in this collection yet.</p>
+      {% endif %}
+    </div>
     {% else %}
     <ul class="episode-dock-grid episode-detail-scene-dock-grid" role="list">
       <li class="episode-dock-card episode-scene-dock-card episode-dock-card--script" role="listitem">
@@ -990,6 +987,40 @@ window.__EPISODE_SCENE_VERSION__ = {
   projectId: {{ project.id|int }},
   episodeNumber: {% if is_episode_x|default(false) %}0{% else %}{{ episode_number|int }}{% endif %}
 };
+</script>
+<script>
+/* Real-time: when a scene is editorially assigned/removed anywhere in this
+   project, refresh the episode page if it affects the episode being viewed
+   (source or destination) — no manual refresh required. */
+(function () {
+  var cfg = window.__EPISODE_SCENE_VERSION__;
+  if (!cfg) return;
+  function wire(socket) {
+    if (!socket) return;
+    try { socket.emit("join_project", { project_id: cfg.projectId }); } catch (e) {}
+    socket.on("SceneEditorialChanged", function (data) {
+      data = data || {};
+      if (parseInt(data.projectId, 10) !== parseInt(cfg.projectId, 10)) return;
+      var cur = parseInt(cfg.episodeNumber, 10);
+      var origin = parseInt(data.originEpisode, 10);
+      var editorial = parseInt(data.editorialEpisode, 10);
+      if (cur === origin || cur === editorial) {
+        window.location.reload();
+      }
+    });
+  }
+  if (window.__tmSocket) {
+    wire(window.__tmSocket);
+  } else {
+    // realtime.js sets window.__tmSocket on DOMContentLoaded; retry briefly.
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries += 1;
+      if (window.__tmSocket) { clearInterval(timer); wire(window.__tmSocket); }
+      else if (tries > 40) { clearInterval(timer); }
+    }, 250);
+  }
+})();
 </script>
 <script>
 (function () {

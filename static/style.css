@@ -24634,14 +24634,14 @@ body.episode-color-body--standalone #episode-color-panel-gallery.is-active .epis
   text-align: center;
   text-decoration: none;
   color: var(--text, #e6edf3);
-  border: 1.5px dashed rgba(120, 170, 255, 0.4);
+  border: 1.5px dashed rgba(120, 210, 170, 0.45);
   border-radius: 14px;
-  background: rgba(90, 140, 240, 0.06);
+  background: rgba(120, 210, 170, 0.06);
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 .episode-dock-card--script a.episode-dock-card--script__inner:hover {
-  background: rgba(90, 140, 240, 0.14);
-  border-color: rgba(120, 170, 255, 0.7);
+  background: rgba(120, 210, 170, 0.14);
+  border-color: rgba(120, 210, 170, 0.7);
 }
 .episode-dock-card--script a.episode-dock-card--script__inner:active {
   transform: scale(0.995);
@@ -24725,6 +24725,19 @@ body.episode-color-body--standalone #episode-color-panel-gallery.is-active .epis
 }
 .project-stat--editorial .stat-value {
   color: #d3aaff;
+}
+.episode-editorial-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+}
+.episode-editorial-empty__title {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+  font-size: 1rem;
+}
+.episode-editorial-empty__hint {
+  margin: 0;
+  font-size: 0.9rem;
 }
 .episode-dock-card--script .episode-dock-card--script__upload {
   width: 100%;
