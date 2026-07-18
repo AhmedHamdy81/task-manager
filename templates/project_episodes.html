@@ -23,9 +23,9 @@
             {% endif %}
           </div>
           <div class="episode-dock-card__meta episode-dock-card__meta--stat-icons muted">
-            <span class="episode-dock-stat-chip episode-dock-stat-chip--duration" title="Episode Runtime: {{ ep.episode_runtime_seconds|fmt_duration_total }} (selected scene takes only)">
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--duration" title="Episode Runtime: {{ ep.runtime_display }} (selected scene takes only)">
               <span class="episode-dock-stat-chip__icon" aria-hidden="true">{{ episode_dock_stat_icon('duration') }}</span>
-              <span class="episode-dock-stat-chip__value">{{ ep.episode_runtime_seconds|fmt_duration_total }}</span>
+              <span class="episode-dock-stat-chip__value">{{ ep.runtime_display }}</span>
               <span class="episode-dock-stat-chip__label sr-only">Episode Runtime</span>
             </span>
             {% if ep.is_establishing_collection %}

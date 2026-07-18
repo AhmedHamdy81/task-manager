@@ -25018,6 +25018,122 @@ def create_app() -> Flask:
             "used_in_map": used_in_map,
         }
 
+    def build_editorial_episode_statistics(
+        project: Project,
+        episode_number: int,
+        *,
+        production_rows: list | None = None,
+        membership: dict | None = None,
+    ) -> dict:
+        """SINGLE authoritative editorial statistics for one episode.
+
+        This is the ONE calculation consumed by BOTH the Episode List cards
+        (``project_episodes``) and the Episode Detail page
+        (``_build_episode_detail_context``) so their scene count, runtime and
+        VFX figures are always identical.
+
+        Scene membership comes ONLY from the editorial relationship
+        (``calculate_editorial_episode_scene_set`` -> active
+        ``SceneEditorialAssignment`` rows). Production origin
+        (``ShootingDayScene.episode_number``) is used only to seed the candidate
+        set and is never modified. VFX totals are resolved from ACTIVE
+        ``VfxSceneItemSource`` links for the current editorial scene ids, never
+        from the (possibly stale) ``VfxSceneItem.episode_number``.
+
+        Pass ``membership`` (a prior ``calculate_editorial_episode_scene_set``
+        result) or ``production_rows`` to avoid re-querying.
+        """
+        ep = int(episode_number)
+        if membership is None:
+            membership = calculate_editorial_episode_scene_set(
+                project, ep, production_rows=production_rows
+            )
+        rows = membership["rows"]
+        scene_ids = [int(s.id) for s in rows]
+        runtime_seconds = sum(
+            shooting_day_scene_duration_seconds(r)
+            for r in rows
+            if shooting_items_mod.counts_toward_episode_runtime(r)
+        )
+        scene_count = shooting_items_mod.count_unique_real_scenes(rows)
+        # VFX is derived ONLY from active source links for the CURRENT editorial
+        # scene ids (never VfxSceneItem.episode_number, which may be stale after
+        # a scene is editorially reassigned).
+        vfx_item_ids: set[int] = set()
+        scenes_with_vfx_ids: set[int] = set()
+        if scene_ids:
+            for sid, item_id in (
+                db.session.query(
+                    VfxSceneItemSource.shooting_day_scene_id,
+                    VfxSceneItemSource.vfx_scene_item_id,
+                )
+                .filter(
+                    VfxSceneItemSource.shooting_day_scene_id.in_(scene_ids),
+                    VfxSceneItemSource.is_active.is_(True),
+                )
+                .all()
+            ):
+                scenes_with_vfx_ids.add(int(sid))
+                if item_id is not None:
+                    vfx_item_ids.add(int(item_id))
+        vfx_item_count = 0
+        if vfx_item_ids:
+            vfx_item_count = VfxSceneItem.query.filter(
+                VfxSceneItem.id.in_(vfx_item_ids),
+                VfxSceneItem.is_active.is_(True),
+            ).count()
+        all_shots: list = []
+        for r in rows:
+            shots = r.vfx_shots or []
+            if shots:
+                all_shots.extend(shots)
+                scenes_with_vfx_ids.add(int(r.id))
+        vfx_shot_count = len(all_shots)
+        pending_vfx_count = sum(1 for sh in all_shots if not ed.vfx_shot_is_terminal(sh))
+        completed_vfx_count = vfx_shot_count - pending_vfx_count
+        return {
+            "scene_ids": scene_ids,
+            "scene_count": int(scene_count),
+            "runtime_seconds": int(runtime_seconds),
+            "runtime_display": format_duration_day_total(runtime_seconds),
+            "vfx_item_count": int(vfx_item_count),
+            "scenes_with_vfx": len(scenes_with_vfx_ids),
+            "vfx_shot_count": int(vfx_shot_count),
+            "pending_vfx_count": int(pending_vfx_count),
+            "completed_vfx_count": int(completed_vfx_count),
+            "membership": membership,
+        }
+
+    def _log_editorial_stats_debug(source: str, project, episode_number, stats) -> None:
+        """Dev-only parity logging (set EDITORIAL_STATS_DEBUG=1 to enable).
+
+        Prints the scene ids / runtime / origins used by each call site so the
+        Episode List and Episode Detail sets can be compared. Disabled by
+        default so production logs stay quiet.
+        """
+        if not os.environ.get("EDITORIAL_STATS_DEBUG"):
+            return
+        try:
+            mem = stats.get("membership") or {}
+            mem_rows = mem.get("rows") or []
+            app.logger.info(
+                "[EDITORIAL-STATS %s] project=%s ep=%s scene_ids=%s runtime_seconds=%s "
+                "scene_count=%s origins=%s used_in=%s vfx_items=%s vfx_shots=%s pending_vfx=%s",
+                source,
+                int(project.id),
+                int(episode_number),
+                stats.get("scene_ids"),
+                stats.get("runtime_seconds"),
+                stats.get("scene_count"),
+                {int(r.id): _scene_production_episode_key(r) for r in mem_rows},
+                {int(k): v for k, v in (mem.get("used_in_map") or {}).items()},
+                stats.get("vfx_item_count"),
+                stats.get("vfx_shot_count"),
+                stats.get("pending_vfx_count"),
+            )
+        except Exception:  # pragma: no cover - logging must never break a page
+            pass
+
     def _episode_dock_card_from_rows(
         rows: list,
         *,
@@ -25120,6 +25236,7 @@ def create_app() -> Flask:
             "scene_count": shooting_n,
             "total_duration": total_duration,
             "episode_runtime_seconds": episode_runtime_seconds,
+            "runtime_display": format_duration_day_total(episode_runtime_seconds),
             "reshoot_count": reshoot_count,
             "runtime_selection_needed": runtime_selection_needed,
             "sync_done": bool(real_rows) and sync_done_n == real_row_count,
@@ -25252,19 +25369,32 @@ def create_app() -> Flask:
         pipeline_by_num = ensure_production_episode_rows(p)
         episodes = []
         for ep_num in range(1, episode_count + 1):
-            # Editorial cut membership (shared with the Episode Detail page) so
-            # the card's runtime / scene / VFX / progress match the detail page.
-            editorial_rows = calculate_editorial_episode_scene_set(
+            # SINGLE source of truth: the same editorial statistics the Episode
+            # Detail page uses. The card's scene count / runtime / VFX numbers
+            # are populated exclusively from this result (never from production
+            # episode_number or stored aggregates), so list == detail always.
+            stats = build_editorial_episode_statistics(
                 p, ep_num, production_rows=by_episode.get(ep_num, [])
-            )["rows"]
-            episodes.append(
-                _episode_dock_card_from_rows(
-                    editorial_rows,
-                    episode_number=ep_num,
-                    project=p,
-                    pe=pipeline_by_num.get(ep_num),
-                )
             )
+            card = _episode_dock_card_from_rows(
+                stats["membership"]["rows"],
+                episode_number=ep_num,
+                project=p,
+                pe=pipeline_by_num.get(ep_num),
+            )
+            card["scene_count"] = stats["scene_count"]
+            card["episode_runtime_seconds"] = stats["runtime_seconds"]
+            card["total_duration"] = (
+                (stats["runtime_seconds"] + 59) // 60 if stats["runtime_seconds"] else 0
+            )
+            card["runtime_display"] = stats["runtime_display"]
+            card["vfx_item_count"] = stats["vfx_item_count"]
+            card["scenes_with_vfx"] = stats["scenes_with_vfx"]
+            card["vfx_shot_count"] = stats["vfx_shot_count"]
+            card["pending_vfx_count"] = stats["pending_vfx_count"]
+            card["completed_vfx_count"] = stats["completed_vfx_count"]
+            _log_editorial_stats_debug("LIST", p, ep_num, stats)
+            episodes.append(card)
         episode_x = None
         establishing_shots = None
         if episode_count > 0:
@@ -25847,6 +25977,11 @@ def create_app() -> Flask:
             assigned_in_reason = _ed_set["assigned_in_reason"]
             reassigned_ids = _ed_set["reassigned_ids"]
             used_in_map = _ed_set["used_in_map"]
+            # SINGLE source of truth shared with the Episode List cards.
+            ep_stats = build_editorial_episode_statistics(
+                p, int(episode_number), membership=_ed_set
+            )
+            _log_editorial_stats_debug("DETAIL", p, int(episode_number), ep_stats)
         else:
             editorial_scenes = scenes
             assigned_in_scenes = []
@@ -25854,6 +25989,7 @@ def create_app() -> Flask:
             assigned_in_reason = {}
             reassigned_ids = set()
             used_in_map = {}
+            ep_stats = None
         ed_scene_ids = [int(sc.id) for sc in editorial_scenes]
 
         # VFX aggregation (editorial).
@@ -25975,8 +26111,12 @@ def create_app() -> Flask:
                 editorial_scenes, include_unassigned=True
             )
         else:
-            real_scene_list = shooting_items_mod.real_scene_rows(editorial_scenes)
-            shooting_scene_count = shooting_items_mod.count_unique_real_scenes(editorial_scenes)
+            # PRODUCTION progress ("Shooting completed", Sync, First edit, VFX)
+            # is measured against the immutable shooting-day scenes shot for THIS
+            # episode (production origin), never the editorial cut — shooting days
+            # do not change when a scene is editorially reassigned.
+            real_scene_list = shooting_items_mod.real_scene_rows(scenes)
+            shooting_scene_count = shooting_items_mod.count_unique_real_scenes(scenes)
         real_scene_row_count = len(real_scene_list)
         total_scenes = shooting_scene_count
         total_dur_sec = sum(
@@ -25988,7 +26128,9 @@ def create_app() -> Flask:
         runtime_selection_needed = shooting_items_mod.episode_runtime_selection_needed(
             editorial_scenes
         )
-        vfx_scenes = [s for s in editorial_scenes if bool(s.needs_vfx)]
+        # VFX progress row (Production progress) tracks the shooting-day scenes
+        # that need VFX for this episode's production origin.
+        vfx_scenes = [s for s in scenes if bool(s.needs_vfx)]
         # VFX Item Count is editorial: the active VFX items that contain at least
         # one scene currently assigned to this editorial episode.
         vfx_items_count = 0
@@ -26006,6 +26148,21 @@ def create_app() -> Flask:
         vfx_shot_count = len(all_shots)
         pending_vfx = sum(1 for sh in all_shots if not ed.vfx_shot_is_terminal(sh))
         approved_vfx = vfx_shot_count - pending_vfx
+        # For a numbered editorial episode, all summary figures come from the
+        # shared statistics function so the detail page and the list card are
+        # guaranteed to match (same scene ids -> same runtime / VFX numbers).
+        vfx_scenes_display_count = len(vfx_scenes)
+        if ep_stats is not None:
+            # Editorial summary tiles (Total scenes / Runtime / VFX) come from the
+            # shared editorial statistics. shooting_scene_count is intentionally
+            # NOT overridden here — it stays production (shooting-day) based.
+            total_scenes = ep_stats["scene_count"]
+            total_dur_sec = ep_stats["runtime_seconds"]
+            vfx_items_count = ep_stats["vfx_item_count"]
+            vfx_shot_count = ep_stats["vfx_shot_count"]
+            pending_vfx = ep_stats["pending_vfx_count"]
+            approved_vfx = ep_stats["completed_vfx_count"]
+            vfx_scenes_display_count = ep_stats["scenes_with_vfx"]
         critical_scene_count = sum(1 for s in editorial_scenes if bool(s.is_critical))
         editorial_day_ids = {
             int(s.shooting_day_id) for s in editorial_scenes if s.shooting_day_id
@@ -26043,9 +26200,10 @@ def create_app() -> Flask:
             "total_scenes": total_scenes,
             "shooting_days_count": len(shooting_days),
             "total_duration_seconds": total_dur_sec,
+            "runtime_display": format_duration_day_total(total_dur_sec),
             "reshoot_count": reshoot_count,
             "runtime_selection_needed": runtime_selection_needed,
-            "vfx_scenes_count": len(vfx_scenes),
+            "vfx_scenes_count": vfx_scenes_display_count,
             "vfx_items_count": vfx_items_count,
             "vfx_shot_count": vfx_shot_count,
             "pending_vfx": pending_vfx,
@@ -33346,12 +33504,19 @@ def create_app() -> Flask:
         "VfxProjectDiscussion": VfxProjectDiscussion,
         "ShootingDay": ShootingDay,
         "ShootingDayScene": ShootingDayScene,
+        "SceneEditorialAssignment": SceneEditorialAssignment,
+        "ProductionEpisode": ProductionEpisode,
         "PermissionPage": PermissionPage,
         "RolePermission": RolePermission,
         "JobTitlePermission": JobTitlePermission,
         "UserPermissionOverride": UserPermissionOverride,
     }
     app.extensions["tm_test_helpers"] = {
+        "build_editorial_episode_statistics": build_editorial_episode_statistics,
+        "calculate_editorial_episode_scene_set": calculate_editorial_episode_scene_set,
+        "_assign_scene_editorial": _assign_scene_editorial,
+        "_unassign_scene_editorial": _unassign_scene_editorial,
+        "_scene_production_episode_key": _scene_production_episode_key,
         "_vfx_sync_editor_shot_to_department": _vfx_sync_editor_shot_to_department,
         "_vfx_mgmt_transition_allowed": _vfx_mgmt_transition_allowed,
         "_vfx_dependency_creates_cycle": _vfx_dependency_creates_cycle,
