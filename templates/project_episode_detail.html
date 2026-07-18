@@ -1,70 +1,1621 @@
 {% extends "base.html" %}
-{% block title %}Episode {{ episode.episode_number }} · {{ project.name }} · {{ app_name }}{% endblock %}
+{% from "partials/episode_edit_upload_inline_form.html" import episode_edit_upload_inline_form %}
+{% macro episode_display(ep_num) %}{% if is_establishing_collection|default(false) %}Establishing Shot{% elif is_episode_x|default(false) %}Episode X{% else %}Ep {{ '%02d'|format(ep_num) }}{% endif %}{% endmacro %}
+{% macro scene_display(sc) -%}
+{%- if (sc.scene_label or '')|trim -%}
+{{ (sc.scene_label or '')|e }}
+{%- else -%}
+Sc {{ sc.scene_number }}
+{%- endif -%}
+{%- endmacro %}
+{% macro scene_dock_badge_icon(badge_id) -%}
+  {% if badge_id == 'needs-vfx' or badge_id == 'vfx-slate' or badge_id == 'vfx-item' %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+    <polyline points="2 17 12 22 22 17"/>
+    <polyline points="2 12 12 17 22 12"/>
+  </svg>
+  {% elif badge_id == 'reshoot' %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+    <polyline points="21 3 21 9 15 9"/>
+  </svg>
+  {% elif badge_id == 'establishing' %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M3 20h18"/>
+    <path d="M6 20V10l6-6 6 6v10"/>
+    <path d="M10 20v-6h4v6"/>
+  </svg>
+  {% elif badge_id == 'sound' %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+    <line x1="12" y1="19" x2="12" y2="22"/>
+  </svg>
+  {% elif badge_id == 'broll' %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <rect x="2" y="5" width="20" height="14" rx="2"/>
+    <path d="M10 9l5 3-5 3V9z"/>
+  </svg>
+  {% elif badge_id == 'technical' %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+  </svg>
+  {% elif badge_id == 'critical' %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M12 9v4"/>
+    <path d="M12 17h.01"/>
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+  </svg>
+  {% else %}
+  <svg class="episode-scene-dock-card__badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+    <line x1="7" y1="7" x2="7.01" y2="7"/>
+  </svg>
+  {% endif %}
+{%- endmacro %}
+{% macro scene_workflow_status_icons(sc, vfx_count=0) -%}
+{% set st = (sc.status or 'pending')|trim|lower %}
+{% if st == 'done' %}
+  {% set pipeline_tip = 'Scene status: complete' %}
+{% elif st in ['in_progress', 'shooting', 'active'] %}
+  {% set pipeline_tip = 'Scene status: in progress' %}
+{% else %}
+  {% set pipeline_tip = 'Scene status: pending' %}
+{% endif %}
+{% set sync_tip = 'Sync: complete' if sc.sync_done else 'Sync: pending' %}
+{% set edit_tip = 'First edit: complete' if sc.first_edit_done else 'First edit: pending' %}
+{% if vfx_count > 0 %}
+  {% set vfx_tip = 'VFX shots: ' ~ vfx_count ~ ' linked' %}
+{% else %}
+  {% set vfx_tip = 'VFX shots: none linked' %}
+{% endif %}
+{% set scene_dur_sec = sc|shooting_row_duration_sec %}
+{% if scene_dur_sec %}
+  {% set duration_tip = 'Scene duration: ' ~ (scene_dur_sec|fmt_duration_mmss) %}
+{% else %}
+  {% set duration_tip = 'Scene duration: not set' %}
+{% endif %}
+<div class="episode-scene-status-row" role="list" aria-label="Scene workflow status">
+  <span class="episode-scene-status-chip episode-scene-status-chip--pipeline episode-scene-status-chip--status-{{ st }}" role="listitem" tabindex="0" data-tooltip="{{ pipeline_tip }}" title="{{ pipeline_tip }}" aria-label="{{ pipeline_tip }}">
+    <span class="episode-scene-status-chip__icon" aria-hidden="true">
+      {% if st == 'done' %}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
+      {% elif st in ['in_progress', 'shooting', 'active'] %}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      {% else %}
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      {% endif %}
+    </span>
+  </span>
+  <span class="episode-scene-status-chip episode-scene-status-chip--sync{% if sc.sync_done %} is-on{% else %} is-off{% endif %}" role="listitem" tabindex="0" data-tooltip="{{ sync_tip }}" title="{{ sync_tip }}" aria-label="{{ sync_tip }}">
+    <span class="episode-scene-status-chip__icon" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+    </span>
+  </span>
+  <span class="episode-scene-status-chip episode-scene-status-chip--edit{% if sc.first_edit_done %} is-on{% else %} is-off{% endif %}" role="listitem" tabindex="0" data-tooltip="{{ edit_tip }}" title="{{ edit_tip }}" aria-label="{{ edit_tip }}">
+    <span class="episode-scene-status-chip__icon" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M10 9l6 3-6 3V9z"/></svg>
+    </span>
+  </span>
+  <span class="episode-scene-status-chip episode-scene-status-chip--vfx{% if vfx_count > 0 %} has-shots{% endif %}" role="listitem" tabindex="0" data-tooltip="{{ vfx_tip }}" title="{{ vfx_tip }}" aria-label="{{ vfx_tip }}">
+    <span class="episode-scene-status-chip__icon" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+    </span>
+    {% if vfx_count > 0 %}<span class="episode-scene-status-chip__count" aria-hidden="true">{{ vfx_count }}</span>{% endif %}
+  </span>
+  <span class="episode-scene-status-chip episode-scene-status-chip--duration{% if not scene_dur_sec %} is-empty{% endif %}" role="listitem" tabindex="0" data-tooltip="{{ duration_tip }}" title="{{ duration_tip }}" aria-label="{{ duration_tip }}">
+    <span class="episode-scene-status-chip__icon" aria-hidden="true">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+    </span>
+    <span class="episode-scene-status-chip__count episode-scene-status-chip__count--duration" aria-hidden="true">{% if scene_dur_sec %}{{ scene_dur_sec|fmt_duration_mmss }}{% else %}—{% endif %}</span>
+  </span>
+</div>
+{%- endmacro %}
+{% macro scene_workflow_status_legend() -%}
+<details class="episode-scene-legend" id="episode-scene-legend" open>
+  <summary class="episode-scene-legend__summary">
+    <span id="episode-scene-legend-heading" class="episode-scene-legend__title">Legend</span>
+    <span class="episode-scene-legend__chevron" aria-hidden="true"></span>
+  </summary>
+  <div class="episode-scene-legend__body">
+  <p class="episode-scene-legend__intro muted">Icons on each scene card show pipeline progress. Hover a chip on a card for the exact value.</p>
+
+  <div class="episode-scene-legend__section">
+    <h4 class="episode-scene-legend__subtitle">Workflow status</h4>
+    <ul class="episode-scene-legend__list">
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--pipeline episode-scene-status-chip--status-done" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>Done</strong> — scene marked complete</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--pipeline episode-scene-status-chip--status-in_progress" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>In progress</strong> — shooting or active work</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--pipeline episode-scene-status-chip--status-pending" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>Pending</strong> — not started yet</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--sync is-on" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>Sync done</strong> — green</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--sync is-off" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>Sync pending</strong> — gray</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--edit is-on" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M10 9l6 3-6 3V9z"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>1st edit done</strong> — blue</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--edit is-off" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4M10 9l6 3-6 3V9z"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>1st edit pending</strong> — gray</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--vfx has-shots" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span>
+          <span class="episode-scene-status-chip__count">3</span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>VFX shots</strong> — gold; number is linked shot count</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--vfx" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>No VFX shots</strong> — muted</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--duration" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+          <span class="episode-scene-status-chip__count episode-scene-status-chip__count--duration">03:45</span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>Scene duration</strong> — amber clock with MM:SS</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-status-chip episode-scene-status-chip--duration is-empty" aria-hidden="true">
+          <span class="episode-scene-status-chip__icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+          <span class="episode-scene-status-chip__count episode-scene-status-chip__count--duration">—</span>
+        </span>
+        <span class="episode-scene-legend__label"><strong>Duration not set</strong> — gray</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="episode-scene-legend__section">
+    <h4 class="episode-scene-legend__subtitle">Corner indicators</h4>
+    <p class="episode-scene-legend__hint muted">Shown top-right on a card when the item type or flags apply.</p>
+    <ul class="episode-scene-legend__list episode-scene-legend__list--badges">
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--vfx" aria-hidden="true">{{ scene_dock_badge_icon('needs-vfx') }}</span>
+        <span class="episode-scene-legend__label">Needs VFX</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--vfx-type" aria-hidden="true">{{ scene_dock_badge_icon('vfx-slate') }}</span>
+        <span class="episode-scene-legend__label">VFX slate / VFX item type</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--reshoot" aria-hidden="true">{{ scene_dock_badge_icon('reshoot') }}</span>
+        <span class="episode-scene-legend__label">Reshoot</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--establishing" aria-hidden="true">{{ scene_dock_badge_icon('establishing') }}</span>
+        <span class="episode-scene-legend__label">Establishing shot</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--sound" aria-hidden="true">{{ scene_dock_badge_icon('sound') }}</span>
+        <span class="episode-scene-legend__label">Sound item</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--broll" aria-hidden="true">{{ scene_dock_badge_icon('broll') }}</span>
+        <span class="episode-scene-legend__label">B-roll / promo</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--technical" aria-hidden="true">{{ scene_dock_badge_icon('technical') }}</span>
+        <span class="episode-scene-legend__label">Technical</span>
+      </li>
+      <li class="episode-scene-legend__item">
+        <span class="episode-scene-dock-card__badge episode-scene-dock-card__badge--critical" aria-hidden="true">{{ scene_dock_badge_icon('critical') }}</span>
+        <span class="episode-scene-legend__label">Critical</span>
+      </li>
+    </ul>
+  </div>
+  </div>
+</details>
+{%- endmacro %}
+{% block title %}{% if is_establishing_collection|default(false) %}Establishing Shot{% elif is_episode_x|default(false) %}Episode X{% else %}Episode {{ '%02d'|format(episode_number) }}{% endif %} · {{ project.name }} · {{ app_name }}{% endblock %}
 {% block content %}
 <div class="project-detail-page">
   <div class="page-head project-detail-head">
-    <p class="breadcrumb"><a href="{{ url_for('projects_list') }}">Projects</a> / <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> / <a href="{{ url_for('project_episodes', project_id=project.id) }}">Episodes</a> /</p>
-    <h1>Episode {{ episode.episode_number }}{% if episode.title %} — {{ episode.title }}{% endif %}</h1>
-    <p class="muted">{{ project.name }}</p>
+    <div class="project-detail-head-main">
+      <h1>{{ project.name|e }}</h1>
+      <p class="muted">{{ project.project_type }} · {{ project.production_house }} · Director: {{ project.director }}</p>
+      {% include 'partials/project_workflow_nav.html' %}
+    </div>
   </div>
-
-  {% include 'partials/project_workflow_nav.html' %}
-
-  <section class="panel">
-    <h2 class="panel-title">Add scene</h2>
-    <form class="form-stack" method="post" action="{{ url_for('project_episode_detail', project_id=project.id, episode_id=episode.id) }}" style="max-width: 36rem;">
-      <div class="form-row">
-        <label class="field field--grow">
-          <span class="field-label">Scene number</span>
-          <input type="number" name="scene_number" class="input" required min="1" step="1" placeholder="e.g. 12">
-        </label>
-        <label class="field field--grow">
-          <span class="field-label">Est. duration (minutes)</span>
-          <input type="number" name="estimated_duration_minutes" class="input" min="0" step="1" value="0">
-        </label>
+  <section class="panel episode-detail-overview" aria-labelledby="episode-overview-heading">
+    <h2 id="episode-overview-heading" class="panel-title">{% if is_establishing_collection|default(false) %}Establishing Shot collection{% elif is_episode_x|default(false) %}Episode X overview{% else %}Episode overview{% endif %}</h2>
+    <p class="muted episode-detail-lede">{% if is_establishing_collection|default(false) %}All establishing shots logged on shooting days for this project.{% elif is_episode_x|default(false) %}Unassigned production items across shooting days.{% else %}Shooting days, scenes, VFX, versions, and review files.{% endif %}</p>
+    {% if overview.runtime_selection_needed|default(false) and not is_episode_x|default(false) and not is_establishing_collection|default(false) %}
+    <p class="episode-runtime-warn" role="status">Runtime selection needed — duplicate scene versions exist but no single take is selected for episode runtime.</p>
+    {% endif %}
+    <div class="project-stats project-stats--inline episode-detail-metrics" aria-label="Episode metrics">
+      <div class="project-stat{% if is_episode_x|default(false) %} project-stat--episode-x{% elif is_establishing_collection|default(false) %} project-stat--establishing{% endif %}">
+        <span class="stat-value">{% if is_establishing_collection|default(false) %}Est.{% elif is_episode_x|default(false) %}X{% else %}{{ '%02d'|format(episode_number) }}{% endif %}</span>
+        <span class="stat-label">{% if is_establishing_collection|default(false) %}Establishing Shot{% elif is_episode_x|default(false) %}Episode X{% else %}Episode{% endif %}</span>
       </div>
-      <label class="field">
-        <span class="field-label">Description</span>
-        <textarea name="description" class="input booking-textarea" rows="2" maxlength="8000" placeholder="Interior / exterior, story beats…"></textarea>
-      </label>
-      <button type="submit" class="btn btn--primary">Add scene</button>
-    </form>
+      <a
+        href="{% if is_establishing_collection|default(false) %}{{ url_for('project_episode_establishing_detail', project_id=project.id, tab='scenes') }}{% elif is_episode_x|default(false) %}{{ url_for('project_episode_x_detail', project_id=project.id, tab='scenes') }}{% else %}{{ url_for('project_episode_detail', project_id=project.id, episode_number=episode_number, tab='scenes') }}{% endif %}"
+        class="btn project-stat project-stat--small project-stat--link episode-detail-metric-btn{% if active_tab == 'scenes' %} is-selected{% endif %}"
+        aria-label="View scenes"
+        aria-current="{% if active_tab == 'scenes' %}page{% else %}false{% endif %}"
+      >
+        <span class="stat-value">{{ overview.total_scenes }}</span>
+        <span class="stat-label">{% if (overview.editorial_assigned_count|default(0)) > 0 %}Original scenes{% else %}Total scene count{% endif %}</span>
+      </a>
+      {% if (overview.editorial_assigned_count|default(0)) > 0 %}
+      <div class="project-stat project-stat--small project-stat--editorial" title="Scenes assigned into this episode from other production episodes (runtime only — not counted in Script Scene Count)">
+        <span class="stat-value">{{ overview.editorial_assigned_count }}</span>
+        <span class="stat-label">Editorially assigned</span>
+      </div>
+      <div class="project-stat project-stat--small project-stat--editorial" title="Original scenes + editorially-assigned scenes shown in the edit">
+        <span class="stat-value">{{ overview.displayed_scene_count }}</span>
+        <span class="stat-label">Displayed scenes</span>
+      </div>
+      {% endif %}
+      <a
+        href="{% if is_establishing_collection|default(false) %}{{ url_for('project_episode_establishing_detail', project_id=project.id, tab='shooting') }}{% elif is_episode_x|default(false) %}{{ url_for('project_episode_x_detail', project_id=project.id, tab='shooting') }}{% else %}{{ url_for('project_episode_detail', project_id=project.id, episode_number=episode_number, tab='shooting') }}{% endif %}"
+        class="btn project-stat project-stat--small project-stat--link episode-detail-metric-btn{% if active_tab == 'shooting' %} is-selected{% endif %}"
+        aria-label="View shooting days"
+        aria-current="{% if active_tab == 'shooting' %}page{% else %}false{% endif %}"
+      >
+        <span class="stat-value">{{ overview.shooting_days_count }}</span>
+        <span class="stat-label">Shooting days</span>
+      </a>
+      {% if (overview.critical_count|default(0)) > 0 %}
+      <div class="project-stat project-stat--small project-stat--critical">
+        <span class="stat-value">{{ overview.critical_count }}</span>
+        <span class="stat-label">Criticals</span>
+      </div>
+      {% endif %}
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">{{ overview.total_duration_seconds|fmt_duration_total }}</span>
+        <span class="stat-label">Episode Runtime</span>
+      </div>
+      {% if (overview.editorial_assigned_count|default(0)) > 0 %}
+      <div class="project-stat project-stat--small project-stat--editorial" title="Production runtime plus editorially-assigned scenes">
+        <span class="stat-value">{{ overview.total_duration_with_editorial_seconds|fmt_duration_total }}</span>
+        <span class="stat-label">Runtime (with editorial)</span>
+      </div>
+      {% endif %}
+      {% if overview.reshoot_count|default(0) > 0 %}
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">{{ overview.reshoot_count }}</span>
+        <span class="stat-label">Reshoot count</span>
+      </div>
+      {% endif %}
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">{{ overview.vfx_items_count|default(0) }}</span>
+        <span class="stat-label">VFX items</span>
+      </div>
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">{{ overview.vfx_scenes_count }}</span>
+        <span class="stat-label">Scenes with VFX</span>
+      </div>
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">{{ overview.vfx_shot_count }}</span>
+        <span class="stat-label">VFX shots</span>
+      </div>
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">{{ overview.pending_vfx }}</span>
+        <span class="stat-label">Pending VFX</span>
+      </div>
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">{{ overview.approved_vfx }}</span>
+        <span class="stat-label">Approved VFX</span>
+      </div>
+      {% if not is_episode_x|default(false) and not is_establishing_collection|default(false) %}
+      <div class="project-stat project-stat--small">
+        <span class="stat-value">
+          {% if overview.latest_episode_version %}v{{ '%03d'|format(overview.latest_episode_version.version_number) }}{% else %}—{% endif %}
+        </span>
+        <span class="stat-label">Latest version</span>
+      </div>
+      <div class="project-stat project-stat--small">
+        <span class="stat-value stat-value--sm">
+          {% if overview.latest_episode_version and overview.latest_episode_version.uploaded_at %}
+          {{ overview.latest_episode_version.uploaded_at.strftime('%Y-%m-%d') }}
+          {% else %}—{% endif %}
+        </span>
+        <span class="stat-label">Latest upload</span>
+      </div>
+      {% endif %}
+    </div>
+
+    <h3 class="panel-title episode-detail-progress-title">Production progress</h3>
+    <div class="episode-detail-progress-grid">
+      {% for key, label in [('shooting', 'Shooting completed'), ('sync', 'Sync completed'), ('first_edit', 'First edit completed'), ('vfx', 'VFX approved'), ('duration', 'Scene duration / estimated episode duration')] %}
+      {% set ratio = overview.progress_ratios[key] %}
+      <div class="episode-detail-progress">
+        <div class="episode-detail-progress__head">
+          <span>
+            {{ label }}
+            {% if key == 'shooting' %}
+              {% if overview.script_scene_count > 0 %}
+              <span class="muted episode-detail-progress__ratio">({{ ratio.done }} / {{ ratio.total }} {{ ratio.suffix }})</span>
+              {% elif not overview.has_script %}
+              <span class="muted episode-detail-progress__hint">· Upload the script PDF for scenes calculation</span>
+              {% else %}
+              <span class="muted episode-detail-progress__hint">· No script scenes detected in PDF</span>
+              {% endif %}
+            {% elif key == 'duration' %}
+              {% if overview.estimated_episode_duration_seconds > 0 %}
+              <span class="muted episode-detail-progress__ratio">({{ ratio.done_seconds|fmt_duration_total }} / {{ ratio.total_seconds|fmt_duration_total }})</span>
+              {% else %}
+              <span class="muted episode-detail-progress__hint">· Set estimated episode duration on the project</span>
+              {% endif %}
+            {% elif ratio.total > 0 %}
+            <span class="muted episode-detail-progress__ratio">({{ ratio.done }} / {{ ratio.total }} {{ ratio.suffix }})</span>
+            {% elif ratio.done > 0 %}
+            <span class="muted episode-detail-progress__ratio">({{ ratio.done }} {{ ratio.suffix }})</span>
+            {% endif %}
+          </span>
+          <strong>{{ overview.progress[key] }}%</strong>
+        </div>
+        <div class="episode-detail-progress__bar" role="progressbar" aria-valuenow="{{ overview.progress[key] }}" aria-valuemin="0" aria-valuemax="100">
+          {% set pct = overview.progress[key]|int %}
+          {% if pct > 80 %}
+          {% set progress_tone = 'green' %}
+          {% elif pct > 50 %}
+          {% set progress_tone = 'yellow' %}
+          {% else %}
+          {% set progress_tone = 'red' %}
+          {% endif %}
+          <span class="episode-detail-progress__fill episode-detail-progress__fill--{{ progress_tone }}" style="width: {{ pct }}%"></span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
   </section>
 
-  <section class="panel">
-    <h2 class="panel-title">Scenes</h2>
-    {% if scenes %}
-    <div class="production-scenes-table-wrap project-episode-scenes-wrap">
-      <table class="production-scenes-table" aria-label="Scenes in this episode">
-        <thead>
-          <tr>
-            <th scope="col">Scene</th>
-            <th scope="col">Description</th>
-            <th scope="col">Duration</th>
-            <th scope="col">Editing</th>
-            <th scope="col"><span class="sr-only">Actions</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for sc in scenes %}
-          <tr>
-            <td>{{ sc.scene_number }}</td>
-            <td class="project-scene-desc-cell">{{ (sc.description or '')|e }}</td>
-            <td>{{ sc.estimated_duration_minutes }} min</td>
-            <td>{% if sc.ready_for_editing %}<span class="booking-pill booking-pill--ok">Ready</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-            <td class="project-scene-actions-cell">
-              <a class="btn btn--small btn--ghost" href="{{ url_for('project_scene_edit', project_id=project.id, episode_id=episode.id, scene_id=sc.id) }}">Edit</a>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+  {% if active_tab == 'shooting' %}
+  <section class="panel episode-detail-tab-panel" aria-label="Shooting days">
+    <h2 class="panel-title">Shooting days</h2>
+    {% if not shooting_day_cards %}
+    <p class="empty empty--in-panel">No shooting days linked to this episode yet.</p>
     {% else %}
-    <p class="empty empty--in-panel">No scenes yet.</p>
+    <div class="episode-shooting-units">
+      {% for unit in shooting_day_cards|group_episode_shooting_units %}
+      <section class="episode-shooting-unit" aria-labelledby="shooting-unit-{{ unit.unit_number }}-heading">
+        <header class="episode-shooting-unit__head">
+          <h3 id="shooting-unit-{{ unit.unit_number }}-heading" class="episode-shooting-unit__title">Unit {{ unit.unit_number }}</h3>
+        </header>
+        <div class="episode-shooting-table-wrap">
+          <table class="data-table episode-shooting-table">
+            <thead>
+              <tr>
+                <th scope="col">Day</th>
+                <th scope="col">Date</th>
+                <th scope="col">Scene</th>
+                <th scope="col">Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for card in unit.days %}
+              {% set day = card.day %}
+              {% if card.scenes %}
+              {% for sc in card.scenes %}
+              <tr>
+                <td>
+                  <a href="{{ card.day_url }}">{{ day.day_name|e }}</a>
+                </td>
+                <td class="muted">{{ day.shooting_date.strftime('%Y-%m-%d') }}</td>
+                <td>{{ scene_display(sc) }}</td>
+                <td class="muted episode-shooting-table__duration">{{ sc.duration_seconds|fmt_duration_mmss if sc.duration_seconds else (sc.duration|string + 'm') }}</td>
+              </tr>
+              {% endfor %}
+              <tr class="episode-shooting-table__summary">
+                <td colspan="3" class="muted">{{ day.day_name|e }} · {{ episode_display(episode_number) }} total</td>
+                <td class="episode-shooting-table__duration">{{ card.episode_duration_seconds|fmt_duration_total }}</td>
+              </tr>
+              {% else %}
+              <tr>
+                <td>
+                  <a href="{{ card.day_url }}">{{ day.day_name|e }}</a>
+                </td>
+                <td class="muted">{{ day.shooting_date.strftime('%Y-%m-%d') }}</td>
+                <td colspan="2" class="muted">No scenes</td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if unit.hdd_labels %}
+        <p class="episode-shooting-table__hdd muted">HDD: {{ unit.hdd_labels|join(', ') }}</p>
+        {% endif %}
+      </section>
+      {% endfor %}
+    </div>
     {% endif %}
   </section>
+  {% endif %}
 
-  <p class="panel-after-link"><a href="{{ url_for('project_episodes', project_id=project.id) }}">← All episodes</a></p>
+  {% if active_tab == 'scenes' %}
+  <section class="panel episode-detail-tab-panel" aria-label="Scenes">
+    <h2 class="panel-title">Scenes</h2>
+    {% if not scene_cards and not editorial_scene_cards %}
+    <p class="empty empty--in-panel">No scenes in this episode yet.</p>
+    {% else %}
+    <ul class="episode-dock-grid episode-detail-scene-dock-grid" role="list">
+      <li class="episode-dock-card episode-scene-dock-card episode-dock-card--script" role="listitem">
+        <div class="episode-dock-card__inner episode-dock-card--script__wrap">
+          {% if overview.script_url %}
+          <a href="{{ overview.script_url }}" target="_blank" rel="noopener" class="episode-dock-card--script__inner episode-dock-card--script__inner--link" title="Open the uploaded episode script (PDF)">
+            <span class="episode-dock-card--script__icon" aria-hidden="true">
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></svg>
+            </span>
+            <span class="episode-dock-card--script__label">Open Script</span>
+            {% if overview.script_label %}<span class="episode-dock-card--script__hint muted">{{ overview.script_label }}</span>{% endif %}
+          </a>
+          {% else %}
+          <div class="episode-dock-card--script__inner is-disabled" title="No script uploaded for this episode" aria-disabled="true">
+            <span class="episode-dock-card--script__icon" aria-hidden="true">
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+            </span>
+            <span class="episode-dock-card--script__label">No script uploaded</span>
+            <span class="episode-dock-card--script__hint muted">Upload a PDF script for this episode</span>
+          </div>
+          {% endif %}
+          {% if not is_episode_x|default(false) and episode_number %}
+          <form method="post" action="{{ url_for('project_episode_script_upload', project_id=project.id, episode_number=episode_number) }}" enctype="multipart/form-data" class="episode-dock-card--script__footer">
+            <input type="hidden" name="return_to" value="{{ request.path }}">
+            <input type="file" name="script_file" accept="application/pdf,.pdf" class="sr-only" id="episode-detail-script-input" data-detail-script-upload>
+            <button type="button" class="btn btn--small btn--primary episode-dock-card--script__upload" data-detail-script-trigger="episode-detail-script-input">{{ 'Replace script' if overview.script_url else 'Upload script' }}</button>
+          </form>
+          {% endif %}
+        </div>
+      </li>
+      {% for card in (scene_cards + editorial_scene_cards) %}
+      {% set sc = card.scene %}
+      {% set day = card.day %}
+      {% set scene_badges = sc|shooting_row_dock_badges %}
+      {% set is_editorial = card.editorial_origin is not none %}
+      <li class="episode-dock-card episode-scene-dock-card{% if is_editorial %} episode-scene-dock-card--editorial{% endif %}" role="listitem">
+        <div class="episode-dock-card__inner" style="--scene-badge-count: {{ scene_badges|length }}">
+          {% if scene_badges %}
+          <div class="episode-scene-dock-card__badges" aria-label="Scene indicators">
+            {% for badge in scene_badges %}
+            <span
+              class="episode-scene-dock-card__badge episode-scene-dock-card__badge--{{ badge.tone }}"
+              tabindex="0"
+              data-tooltip="{{ badge.label|e }}"
+              title="{{ badge.label|e }}"
+              aria-label="{{ badge.label|e }}"
+            >{{ scene_dock_badge_icon(badge.id) }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          <div class="episode-scene-dock-card__thumb{% if sc.scene_thumbnail_frame %} episode-scene-dock-card__thumb--has-image{% endif %}" aria-label="Scene thumbnail frame">
+            {% if sc.scene_thumbnail_frame %}
+            <img
+              class="episode-scene-dock-card__thumb-img"
+              src="{{ url_for('shooting_day_scene_thumbnail', project_id=project.id, link_id=sc.id) }}"
+              alt="Scene thumbnail for {{ scene_display(sc) }}"
+              loading="lazy"
+            >
+            {% else %}
+            <span class="episode-scene-dock-card__thumb-placeholder" aria-hidden="true">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            </span>
+            <span class="episode-scene-dock-card__thumb-empty muted">No thumbnail frame</span>
+            {% endif %}
+          </div>
+          <div class="episode-dock-card__title-line episode-scene-dock-card__title-line">
+            <h3 class="episode-dock-card__title">{{ scene_display(sc) }}</h3>
+            {% if is_editorial %}
+            <span class="episode-editorial-badge episode-editorial-badge--origin" title="Origin (production) episode — immutable">Origin: E{% if card.editorial_origin %}{{ '%02d'|format(card.editorial_origin) }}{% else %}X{% endif %}</span>
+            <span class="episode-editorial-badge episode-editorial-badge--moved" title="Editorially assigned to this episode">Assigned</span>
+            {% elif card.used_in_episodes %}
+            {% for uep in card.used_in_episodes %}
+            <span class="episode-editorial-badge episode-editorial-badge--usedin" title="Also used in Episode {{ '%02d'|format(uep) }}">Used in E{{ uep }}</span>
+            {% endfor %}
+            {% endif %}
+            <span class="episode-scene-dock-card__shooting-meta muted">
+              <span class="episode-dock-card__detail-sep" aria-hidden="true">·</span>
+              {% if day %}
+              <span>{{ day.day_name|e }}</span>
+              <span class="episode-dock-card__detail-sep" aria-hidden="true">·</span>
+              <span>Unit {{ day.unit_number }}</span>
+              <span class="episode-dock-card__detail-sep" aria-hidden="true">·</span>
+              <span>{{ day.shooting_date.strftime('%Y-%m-%d') }}</span>
+              {% else %}
+              <span>No shooting day</span>
+              {% endif %}
+            </span>
+          </div>
+          <div class="episode-dock-card__meta episode-dock-card__meta--status-icons">
+            {{ scene_workflow_status_icons(sc, card.vfx_count) }}
+          </div>
+          {% if sc.notes %}
+          <p class="episode-scene-dock-card__notes muted">{{ sc.notes|e }}</p>
+          {% endif %}
+          {% if card.latest_version %}
+          {% set lv = card.latest_version %}
+          <button
+            type="button"
+            class="episode-scene-dock-card__version-btn muted episode-scene-version-preview-open"
+            data-version-id="{{ lv.id }}"
+            aria-haspopup="dialog"
+            aria-controls="episode-scene-version-preview-modal"
+          >Latest: {{ lv.title|e }} ({{ lv.status }})</button>
+          {% endif %}
+          <div class="episode-dock-card__actions">
+            {% if move_target_episodes %}
+            {% set _mv_dsec = sc|shooting_row_duration_sec %}
+            {% if is_editorial %}
+            <button type="button"
+              class="btn btn--small btn--ghost episode-editorial-unassign-open"
+              data-scene-id="{{ sc.id }}"
+              data-scene-name="{{ (sc.scene_label or '')|e }}"
+              data-origin-episode="{% if card.editorial_origin %}{{ card.editorial_origin }}{% else %}X{% endif %}"
+              data-editorial-episode="{{ episode_number }}"
+              title="Remove this scene from this editorial episode (production history is kept)">
+              <span class="btn__icon" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </span>
+              Remove from episode
+            </button>
+            {% else %}
+            <button type="button"
+              class="btn btn--small btn--ghost episode-editorial-assign-open"
+              data-scene-id="{{ sc.id }}"
+              data-scene-name="{{ (sc.scene_label or '')|e }}"
+              data-scene-number="{{ sc.scene_number or '' }}"
+              data-origin-episode="{% if sc.is_episode_unassigned or sc.is_establishing_shots_pool %}X{% else %}{{ sc.episode_number }}{% endif %}"
+              data-duration="{% if _mv_dsec %}{{ _mv_dsec|fmt_duration_mmss }}{% else %}—{% endif %}"
+              data-vfx-count="{{ card.vfx_count }}"
+              data-used-in="{{ card.used_in_episodes|join(',') }}"
+              aria-haspopup="dialog"
+              aria-controls="episode-scene-editorial-modal"
+              title="Assign this scene to an editorial episode (production history stays unchanged)">
+              <span class="btn__icon" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              </span>
+              Assign to Editorial Episode
+            </button>
+            {% endif %}
+            {% endif %}
+            {% if card.day_url %}<a href="{{ card.day_url }}" class="btn btn--small btn--ghost">View Shooting Day</a>{% endif %}
+            {% if card.has_vfx %}
+            <a href="{{ vfx_url }}?scene={{ sc.id }}" class="btn btn--small btn--ghost">View VFX</a>
+            {% else %}
+            <span class="btn btn--small btn--ghost is-disabled" role="link" aria-disabled="true" tabindex="-1" title="This scene is not linked to VFX">View VFX</span>
+            {% endif %}
+            {% if can('episode_detail', 'upload_scene_version') %}
+            <button
+              type="button"
+              class="btn btn--small btn--ghost episode-scene-version-upload-open"
+              data-scene-id="{{ sc.id }}"
+              aria-haspopup="dialog"
+              aria-controls="episode-scene-version-upload-modal"
+            >Upload Scene Version</button>
+            {% endif %}
+          </div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {{ scene_workflow_status_legend() }}
+  </section>
+  {% endif %}
+
+  {% if active_tab == 'vfx' %}
+  <section class="panel episode-detail-tab-panel" aria-label="VFX">
+    <div class="episode-detail-panel__toolbar">
+      <h2 class="panel-title episode-detail-panel__toolbar-title">VFX</h2>
+      <div class="episode-detail-panel__toolbar-actions">
+        <a href="{{ vfx_url }}" class="btn btn--small btn--ghost">Open VFX Editor</a>
+        <button type="button" class="btn btn--small btn--ghost" disabled title="Coming soon">Export VFX Report</button>
+      </div>
+    </div>
+    {% if not vfx_by_scene %}
+    <p class="empty empty--in-panel">No VFX shots linked to this episode.</p>
+    {% else %}
+    {% for group in vfx_by_scene %}
+    {% set sc = group.scene %}
+    <div class="episode-detail-vfx-group">
+      <h3 class="episode-detail-vfx-group__title">{{ scene_display(sc) }}</h3>
+      <ul class="episode-detail-vfx-shots">
+        {% for shot in group.shots %}
+        <li class="episode-detail-vfx-shot">
+          <div class="episode-detail-vfx-shot__main">
+            <strong>{{ shot.shot_code|e }}</strong>
+            <p class="muted">{{ (shot.shot_briefing or '')|truncate(120)|e }}</p>
+            <dl class="episode-detail-vfx-shot__meta">
+              <div><dt>Vendor</dt><dd>{{ shot.vendor|e }}{% if shot.vendor_name %} · {{ shot.vendor_name|e }}{% endif %}</dd></div>
+              <div><dt>Editor</dt><dd>{{ shot.status|e }}</dd></div>
+              <div><dt>Department</dt><dd>{{ shot.mgmt_status|e }}</dd></div>
+              <div><dt>Priority</dt><dd>{{ shot.priority|e }}</dd></div>
+              {% if shot.assigned_artist %}<div><dt>Artist</dt><dd>{{ shot.assigned_artist.name|e }}</dd></div>{% endif %}
+              <div><dt>Versions</dt><dd>{{ shot.versions|length }}</dd></div>
+              {% if shot.sent_at %}<div><dt>Sent</dt><dd>{{ shot.sent_at.strftime('%Y-%m-%d') }}</dd></div>{% endif %}
+            </dl>
+          </div>
+          <div class="episode-detail-vfx-shot__actions">
+            <a href="{{ vfx_url }}" class="btn btn--small btn--ghost">Open VFX Shot</a>
+            <a href="{{ vfx_url }}" class="btn btn--small btn--ghost">Open in VFX Editor</a>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if active_tab == 'episode-versions' %}
+  <section class="panel episode-detail-tab-panel" aria-label="Episode versions">
+    <h2 class="panel-title">Episode versions</h2>
+    {% if can('episode_detail', 'upload_episode_version') and production_episode %}
+    {{ episode_edit_upload_inline_form('episode-ver', show_lede=true, show_divider=false) }}
+    {% endif %}
+
+    {% if not episode_versions %}
+    <p class="empty empty--in-panel">No full episode versions uploaded yet. Partial and VFX cuts appear in the Color editor.</p>
+    {% else %}
+    <ul class="episode-detail-version-list">
+      {% for ver in episode_versions %}
+      <li class="episode-detail-version-card">
+        <header>
+          <h4>{{ ver.title|e }}</h4>
+          <span class="badge badge--status badge--status-{{ ver.status }}">{{ ver.status }}</span>
+          {% if ver.is_picture_lock %}<span class="badge badge--status badge--status-approved">Picture lock</span>{% endif %}
+        </header>
+        <p class="muted">
+          {{ ver.uploaded_at.strftime('%Y-%m-%d %H:%M') if ver.uploaded_at else '' }}
+          {% if ver.uploader %} · {{ ver.uploader.name|e }}{% endif %}
+          {% if ver.duration_seconds %} · {{ ver.duration_seconds|fmt_duration_mmss }}{% endif %}
+        </p>
+        {% if ver.notes %}<p>{{ ver.notes|e }}</p>{% endif %}
+        <div class="episode-detail-version-card__actions">
+          <a href="{{ url_for('project_episode_version_preview', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" class="btn btn--small btn--primary" target="_blank" rel="noopener">Play</a>
+          {% if can('episode_detail', 'download_original') %}
+          <a href="{{ url_for('project_episode_version_original', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" class="btn btn--small btn--ghost">Download original</a>
+          {% endif %}
+          {% if can('episode_detail', 'approve_version') %}
+          <form method="post" action="{{ url_for('project_episode_version_picture_lock', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" class="episode-detail-inline-form">
+            <input type="hidden" name="lock" value="{{ '0' if ver.is_picture_lock else '1' }}">
+            <button type="submit" class="btn btn--small btn--ghost">{% if ver.is_picture_lock %}Clear picture lock{% else %}Mark picture lock{% endif %}</button>
+          </form>
+          <form method="post" action="{{ url_for('project_episode_version_status', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" class="episode-detail-inline-form">
+            <input type="hidden" name="status" value="review">
+            <button type="submit" class="btn btn--small btn--ghost">Mark review</button>
+          </form>
+          <form method="post" action="{{ url_for('project_episode_version_status', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" class="episode-detail-inline-form">
+            <input type="hidden" name="status" value="approved">
+            <button type="submit" class="btn btn--small btn--ghost">Mark approved</button>
+          </form>
+          <form method="post" action="{{ url_for('project_episode_version_status', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" class="episode-detail-inline-form">
+            <input type="hidden" name="status" value="archived">
+            <button type="submit" class="btn btn--small btn--ghost">Archive</button>
+          </form>
+          {% endif %}
+          {% if can('episode_detail', 'delete_version') %}
+          <form method="post" action="{{ url_for('project_episode_version_delete', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" class="episode-detail-inline-form" data-confirm="Delete this version?">
+            <button type="submit" class="btn btn--small btn--ghost btn--danger">Delete</button>
+          </form>
+          {% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if active_tab == 'scene-versions' %}
+  <section class="panel episode-detail-tab-panel" aria-label="Scene versions">
+    <h2 class="panel-title">Scene versions</h2>
+    {% if can('episode_detail', 'upload_scene_version') %}
+    <form class="form-stack episode-detail-upload-form" method="post" enctype="multipart/form-data" action="{{ url_for('project_scene_version_upload', project_id=project.id, episode_number=episode_number) }}">
+      <h3 class="panel-title panel-title--sub">Upload scene version</h3>
+      <label class="field">
+        <span class="field-label">Scene</span>
+        <select name="scene_id" class="input form-input" required>
+          <option value="">Select scene…</option>
+          {% for card in scene_cards %}
+          {% set sc = card.scene %}
+          <option value="{{ sc.id }}">{{ scene_display(sc) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Media file</span>
+        <input type="file" name="media_file" class="input form-input" accept=".xml,.fcpxml,video/*,.mxf" required>
+      </label>
+      <label class="field">
+        <span class="field-label">Notes</span>
+        <textarea name="notes" class="input form-input" rows="2"></textarea>
+      </label>
+      <button type="submit" class="btn btn--primary btn--small">Upload</button>
+    </form>
+    {% endif %}
+
+    {% if not scene_cards %}
+    <p class="empty empty--in-panel">No scenes in this episode yet.</p>
+    {% elif not scene_versions %}
+    <p class="empty empty--in-panel">No scene versions uploaded yet.</p>
+    {% else %}
+    <ul class="episode-detail-scene-version-list">
+      {% for card in scene_cards %}
+      {% set sc = card.scene %}
+      {% set versions = sv_by_scene.get(sc.id, []) %}
+      {% if versions %}
+      <li class="episode-detail-scene-version-group" id="scene-{{ sc.id }}">
+        <header>
+          <h4>{{ scene_display(sc) }}</h4>
+          <span class="muted">{{ versions|length }} version{{ 's' if versions|length != 1 else '' }}</span>
+        </header>
+        {% set latest = versions[0] %}
+        <div class="episode-detail-version-card episode-detail-version-card--compact">
+          <p><strong>Latest:</strong> {{ latest.title|e }} · {{ latest.status }} · {{ latest.uploaded_at.strftime('%Y-%m-%d') if latest.uploaded_at else '' }}</p>
+          <div class="episode-detail-version-card__actions">
+            <a href="{{ url_for('project_scene_version_preview_file', project_id=project.id, episode_number=episode_number, version_id=latest.id) }}" class="btn btn--small btn--primary" target="_blank" rel="noopener">Play latest</a>
+          </div>
+          <details class="episode-detail-version-history">
+            <summary>View all versions</summary>
+            <ul>
+              {% for ver in versions %}
+              <li>
+                {{ ver.title|e }} · {{ ver.status }}
+                <a href="{{ url_for('project_scene_version_preview_file', project_id=project.id, episode_number=episode_number, version_id=ver.id) }}" target="_blank" rel="noopener">Play</a>
+              </li>
+              {% endfor %}
+            </ul>
+          </details>
+        </div>
+      </li>
+      {% endif %}
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if active_tab == 'notes' %}
+  <section class="panel episode-detail-tab-panel" aria-label="Notes">
+    <h2 class="panel-title">Notes</h2>
+    {% if can('episode_detail', 'edit_notes') %}
+    <form class="form-stack episode-detail-upload-form" method="post" action="{{ url_for('project_episode_note_create', project_id=project.id, episode_number=episode_number) }}">
+      <h3 class="panel-title panel-title--sub">Add note</h3>
+      <label class="field">
+        <span class="field-label">Type</span>
+        <select name="note_type" class="input form-input">
+          <option value="editorial">Editorial</option>
+          <option value="director">Director</option>
+          <option value="producer">Producer</option>
+          <option value="vfx">VFX</option>
+          <option value="delivery">Delivery</option>
+          <option value="general">General</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Note</span>
+        <textarea name="body" class="input form-input" rows="4" required maxlength="20000"></textarea>
+      </label>
+      <button type="submit" class="btn btn--primary btn--small">Save note</button>
+    </form>
+    {% endif %}
+
+    {% if not notes %}
+    <p class="empty empty--in-panel">No notes yet.</p>
+    {% else %}
+    <ul class="episode-detail-notes-list">
+      {% for note in notes %}
+      <li class="episode-detail-note">
+        <header>
+          <span class="badge">{{ note.note_type|replace('_', ' ')|title }}</span>
+          <span class="muted">{{ note.created_at.strftime('%Y-%m-%d %H:%M') if note.created_at else '' }}{% if note.author %} · {{ note.author.name|e }}{% endif %}</span>
+        </header>
+        <p>{{ note.body|e }}</p>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <p class="panel-after-link"><a href="{{ episodes_url }}">← All episodes</a></p>
+
+  {% if can('episode_detail', 'upload_scene_version') and scene_cards %}
+  <dialog id="episode-scene-version-upload-modal" class="project-edit-modal" aria-labelledby="episode-scene-version-upload-modal-title">
+    <div class="project-edit-modal__card">
+      <h2 id="episode-scene-version-upload-modal-title" class="project-edit-modal__title">Upload scene version</h2>
+      <form id="episode-scene-version-upload-form" class="form-stack episode-detail-upload-form episode-detail-upload-form--modal" method="post" enctype="multipart/form-data" action="{{ url_for('project_scene_version_upload', project_id=project.id, episode_number=episode_number) }}">
+        <input type="hidden" name="return_tab" value="scenes">
+        <label class="field">
+          <span class="field-label">Scene</span>
+          <select name="scene_id" id="episode-scene-version-upload-scene" class="input form-input" required>
+            <option value="">Select scene…</option>
+            {% for card in scene_cards %}
+            {% set modal_sc = card.scene %}
+            <option value="{{ modal_sc.id }}">{{ scene_display(modal_sc) }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Media file</span>
+          <input type="file" name="media_file" class="input form-input" accept=".xml,.fcpxml,video/*,.mxf" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Notes</span>
+          <textarea name="notes" class="input form-input" rows="2"></textarea>
+        </label>
+        <div class="project-edit-modal__actions">
+          <button type="button" class="btn btn--ghost" id="episode-scene-version-upload-cancel">Cancel</button>
+          <button type="submit" class="btn btn--primary btn--small">Upload</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+  {% endif %}
+
+  <dialog id="episode-scene-version-preview-modal" class="project-edit-modal episode-scene-version-preview-modal" aria-labelledby="episode-scene-version-preview-modal-title">
+    <div class="episode-scene-version-preview-modal__card">
+      <header class="episode-scene-version-preview-modal__head">
+        <h2 id="episode-scene-version-preview-modal-title" class="project-edit-modal__title">Scene version</h2>
+        <button type="button" class="btn btn--ghost btn--small" id="episode-scene-version-preview-close">Close</button>
+      </header>
+      <div class="episode-scene-version-preview-modal__body">
+        <div id="episode-scene-version-preview-media" class="episode-scene-version-preview-modal__media" aria-live="polite">
+          <p class="muted">Loading…</p>
+        </div>
+        <aside class="episode-scene-version-preview-modal__sidebar" aria-label="Version details">
+          <section class="episode-scene-version-preview-modal__section" aria-label="Version history">
+            <h3 class="episode-scene-version-preview-modal__section-title">Version history</h3>
+            <ul id="episode-scene-version-history-list" class="episode-scene-version-history"></ul>
+          </section>
+          <section class="episode-scene-version-preview-modal__section episode-scene-version-preview-modal__section--comments" aria-label="Comments">
+            <h3 class="episode-scene-version-preview-modal__section-title">Comments</h3>
+            <ul id="episode-scene-version-comments-list" class="episode-scene-version-comments"></ul>
+            {% if can('episode_detail', 'edit_notes') %}
+            <form id="episode-scene-version-comment-form" class="episode-scene-version-comment-form">
+              <textarea id="episode-scene-version-comment-body" name="body" class="input form-input" rows="3" placeholder="Add a comment…" maxlength="20000"></textarea>
+              <button type="submit" class="btn btn--primary btn--small">Post</button>
+            </form>
+            {% endif %}
+          </section>
+        </aside>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="episode-scene-editorial-modal" class="project-edit-modal" aria-labelledby="episode-scene-editorial-title">
+    <div class="project-edit-modal__card">
+      <h2 id="episode-scene-editorial-title" class="project-edit-modal__title">Assign to Editorial Episode</h2>
+      <p class="muted episode-editorial-lead">Production history stays unchanged. This only controls where the scene appears in the final edit.</p>
+      <dl class="episode-scene-move-meta">
+        <div><dt>Scene name</dt><dd id="episode-scene-editorial-name">—</dd></div>
+        <div><dt>Current Production Episode</dt><dd id="episode-scene-editorial-origin">—</dd></div>
+        <div><dt>Current Editorial Episode(s)</dt><dd id="episode-scene-editorial-usedin">—</dd></div>
+        <div><dt>Duration</dt><dd id="episode-scene-editorial-duration">—</dd></div>
+      </dl>
+      <label class="field">
+        <span class="field-label">Target Editorial Episode</span>
+        <select id="episode-scene-editorial-target" class="input form-input">
+          <option value="">Select episode…</option>
+          {% for ep in move_target_episodes %}
+          <option value="{{ ep.number }}">{{ ep.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Reason (optional)</span>
+        <input type="text" id="episode-scene-editorial-reason" class="input form-input" maxlength="500" placeholder="e.g. Director's Cut, Flashback, Recap">
+      </label>
+      <label class="field field--checkbox">
+        <input type="checkbox" id="episode-scene-editorial-notify">
+        <span>Notify related departments</span>
+      </label>
+      <p class="episode-scene-move-vfx-warning" id="episode-scene-editorial-vfx-warning" hidden></p>
+      <p class="form-error" id="episode-scene-editorial-msg" role="alert" hidden></p>
+      <div class="project-edit-modal__actions">
+        <button type="button" class="btn btn--ghost" id="episode-scene-editorial-cancel">Cancel</button>
+        <button type="button" class="btn btn--primary btn--small" id="episode-scene-editorial-confirm">Assign</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="episode-scene-editorial-remove-modal" class="project-edit-modal" aria-labelledby="episode-scene-editorial-remove-title">
+    <div class="project-edit-modal__card">
+      <h2 id="episode-scene-editorial-remove-title" class="project-edit-modal__title">Remove editorial assignment</h2>
+      <p class="muted">Remove <strong id="episode-scene-editorial-remove-name">this scene</strong> from this editorial episode? Its production history (origin episode, shooting day) is kept.</p>
+      <label class="field">
+        <span class="field-label">Reason (optional)</span>
+        <input type="text" id="episode-scene-editorial-remove-reason" class="input form-input" maxlength="500">
+      </label>
+      <label class="field field--checkbox">
+        <input type="checkbox" id="episode-scene-editorial-remove-notify">
+        <span>Notify related departments</span>
+      </label>
+      <p class="form-error" id="episode-scene-editorial-remove-msg" role="alert" hidden></p>
+      <div class="project-edit-modal__actions">
+        <button type="button" class="btn btn--ghost" id="episode-scene-editorial-remove-cancel">Cancel</button>
+        <button type="button" class="btn btn--danger btn--small" id="episode-scene-editorial-remove-confirm">Remove</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="episode-scene-move-vfx-modal" class="project-edit-modal" aria-labelledby="episode-scene-move-vfx-title">
+    <div class="project-edit-modal__card">
+      <h2 id="episode-scene-move-vfx-title" class="project-edit-modal__title">Move scene to another VFX item</h2>
+      <p class="muted" id="episode-scene-move-vfx-lead">Select the VFX item to move this scene into. This also updates the VFX portal.</p>
+      <label class="field">
+        <span class="field-label">Target VFX item</span>
+        <select id="episode-scene-move-vfx-target" class="input form-input">
+          <option value="">Loading…</option>
+        </select>
+      </label>
+      <p class="form-error" id="episode-scene-move-vfx-msg" role="alert" hidden></p>
+      <div class="project-edit-modal__actions">
+        <button type="button" class="btn btn--ghost" id="episode-scene-move-vfx-cancel">Cancel</button>
+        <button type="button" class="btn btn--primary btn--small" id="episode-scene-move-vfx-confirm">Move</button>
+      </div>
+    </div>
+  </dialog>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+window.__EPISODE_SCENE_VERSION__ = {
+  projectId: {{ project.id|int }},
+  episodeNumber: {% if is_episode_x|default(false) %}0{% else %}{{ episode_number|int }}{% endif %}
+};
+</script>
+<script>
+(function () {
+  var modal = document.getElementById("episode-scene-version-upload-modal");
+  if (!modal) return;
+  var sceneSelect = document.getElementById("episode-scene-version-upload-scene");
+  var form = document.getElementById("episode-scene-version-upload-form");
+  var cancelBtn = document.getElementById("episode-scene-version-upload-cancel");
+
+  function resetForm() {
+    if (!form) return;
+    var fileInput = form.querySelector('input[type="file"]');
+    if (fileInput) fileInput.value = "";
+    var notes = form.querySelector('textarea[name="notes"]');
+    if (notes) notes.value = "";
+  }
+
+  function openModal(sceneId) {
+    if (sceneSelect && sceneId) {
+      sceneSelect.value = String(sceneId);
+    }
+    resetForm();
+    if (modal.showModal) modal.showModal();
+    if (sceneSelect) {
+      try { sceneSelect.focus(); } catch (e) {}
+    }
+  }
+
+  function closeModal() {
+    if (modal.close) modal.close();
+  }
+
+  document.querySelectorAll(".episode-scene-version-upload-open").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      openModal(btn.getAttribute("data-scene-id"));
+    });
+  });
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", closeModal);
+  }
+
+  modal.addEventListener("cancel", function (event) {
+    event.preventDefault();
+    closeModal();
+  });
+})();
+
+(function () {
+  var cfg = window.__EPISODE_SCENE_VERSION__;
+  var previewModal = document.getElementById("episode-scene-version-preview-modal");
+  if (!cfg || !previewModal) return;
+
+  var mediaEl = document.getElementById("episode-scene-version-preview-media");
+  var titleEl = document.getElementById("episode-scene-version-preview-modal-title");
+  var historyEl = document.getElementById("episode-scene-version-history-list");
+  var listEl = document.getElementById("episode-scene-version-comments-list");
+  var commentForm = document.getElementById("episode-scene-version-comment-form");
+  var commentBody = document.getElementById("episode-scene-version-comment-body");
+  var closeBtn = document.getElementById("episode-scene-version-preview-close");
+  var currentVersionId = null;
+  var versionHistory = [];
+
+  function esc(text) {
+    var el = document.createElement("div");
+    el.textContent = text || "";
+    return el.innerHTML;
+  }
+
+  function formatTime(iso) {
+    if (!iso) return "";
+    try {
+      return new Date(iso).toLocaleString();
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function versionApi(pathSuffix) {
+    return (
+      "/projects/" +
+      cfg.projectId +
+      "/episodes/" +
+      cfg.episodeNumber +
+      "/scene-versions/" +
+      currentVersionId +
+      pathSuffix
+    );
+  }
+
+  function renderHistory(history, activeId) {
+    if (!historyEl) return;
+    versionHistory = history || [];
+    if (!versionHistory.length) {
+      historyEl.innerHTML = '<li class="muted episode-scene-version-history__empty">No versions.</li>';
+      return;
+    }
+    historyEl.innerHTML = versionHistory
+      .map(function (item) {
+        var active = String(item.id) === String(activeId);
+        var dateLabel = item.uploadedAt ? formatTime(item.uploadedAt) : "";
+        return (
+          '<li><button type="button" class="episode-scene-version-history__item' +
+          (active ? " episode-scene-version-history__item--active" : "") +
+          '" data-version-id="' +
+          String(item.id) +
+          '" aria-current="' +
+          (active ? "true" : "false") +
+          '"><span class="episode-scene-version-history__title">' +
+          esc(item.title) +
+          '</span><span class="episode-scene-version-history__meta muted">' +
+          esc(item.status) +
+          (dateLabel ? " · " + esc(dateLabel) : "") +
+          "</span></button></li>"
+        );
+      })
+      .join("");
+    historyEl.querySelectorAll("[data-version-id]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var vid = btn.getAttribute("data-version-id");
+        if (vid && String(vid) !== String(currentVersionId)) {
+          loadVersion(vid, false);
+        }
+      });
+    });
+  }
+
+  function applyVersionDetail(version, history) {
+    if (titleEl) {
+      titleEl.textContent = version.title + " (" + version.status + ")";
+    }
+    renderMedia(version);
+    renderComments(version.comments);
+    if (commentForm) commentForm.hidden = !version.canComment;
+    renderHistory(history || versionHistory, version.id);
+  }
+
+  function loadVersion(versionId, showModal) {
+    currentVersionId = versionId;
+    if (showModal && previewModal.showModal) previewModal.showModal();
+    if (mediaEl) mediaEl.innerHTML = '<p class="muted">Loading…</p>';
+    if (listEl) listEl.innerHTML = "";
+    if (commentBody) commentBody.value = "";
+
+    fetch(versionApi("/detail.json"), {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(function (res) {
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data.ok || !data.version) throw new Error("load failed");
+        applyVersionDetail(data.version, data.history);
+      })
+      .catch(function () {
+        if (mediaEl) {
+          mediaEl.innerHTML =
+            '<p class="muted episode-scene-version-preview-modal__status">Could not load preview.</p>';
+        }
+      });
+  }
+
+  function renderComments(comments) {
+    if (!listEl) return;
+    if (!comments || !comments.length) {
+      listEl.innerHTML = '<li class="muted episode-scene-version-comments__empty">No comments yet.</li>';
+      return;
+    }
+    listEl.innerHTML = comments
+      .map(function (c) {
+        var label = c.isUploadNote ? "Upload note" : esc(c.authorName || "—");
+        var cls = c.isUploadNote ? " episode-scene-version-comment--upload" : "";
+        return (
+          '<li class="episode-scene-version-comment' +
+          cls +
+          '"><header class="episode-scene-version-comment__head"><strong>' +
+          label +
+          "</strong>" +
+          (c.createdAt
+            ? '<span class="muted">' + esc(formatTime(c.createdAt)) + "</span>"
+            : "") +
+          "</header><p>" +
+          esc(c.body) +
+          "</p></li>"
+        );
+      })
+      .join("");
+  }
+
+  function renderMedia(version) {
+    if (!mediaEl) return;
+    mediaEl.innerHTML = "";
+    if (version.status === "processing" || version.status === "uploaded") {
+      mediaEl.innerHTML =
+        '<p class="muted episode-scene-version-preview-modal__status">Preview processing…</p>';
+      return;
+    }
+    if (!version.previewUrl) {
+      mediaEl.innerHTML =
+        '<p class="muted episode-scene-version-preview-modal__status">No preview available.</p>';
+      return;
+    }
+    if (version.isVideo) {
+      var video = document.createElement("video");
+      video.className = "episode-scene-version-preview-modal__video";
+      video.controls = true;
+      video.src = version.previewUrl;
+      video.setAttribute("playsinline", "");
+      mediaEl.appendChild(video);
+      return;
+    }
+    var img = document.createElement("img");
+    img.className = "episode-scene-version-preview-modal__image";
+    img.alt = "";
+    img.src = version.previewUrl;
+    mediaEl.appendChild(img);
+  }
+
+  function openPreview(versionId) {
+    if (titleEl) titleEl.textContent = "Scene version";
+    if (historyEl) historyEl.innerHTML = "";
+    loadVersion(versionId, true);
+  }
+
+  function closePreview() {
+    if (previewModal.close) previewModal.close();
+    currentVersionId = null;
+    versionHistory = [];
+    if (historyEl) historyEl.innerHTML = "";
+    if (mediaEl) {
+      var video = mediaEl.querySelector("video");
+      if (video) video.pause();
+      mediaEl.innerHTML = "";
+    }
+  }
+
+  document.querySelectorAll(".episode-scene-version-preview-open").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      openPreview(btn.getAttribute("data-version-id"));
+    });
+  });
+
+  if (closeBtn) closeBtn.addEventListener("click", closePreview);
+  previewModal.addEventListener("cancel", function (event) {
+    event.preventDefault();
+    closePreview();
+  });
+
+  if (commentForm) {
+    commentForm.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (!currentVersionId || !commentBody) return;
+      var body = (commentBody.value || "").trim();
+      if (!body) return;
+      fetch(versionApi("/comments"), {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ body: body }),
+      })
+        .then(function (res) {
+          return res.json();
+        })
+        .then(function (data) {
+          if (!data.ok) return;
+          commentBody.value = "";
+          renderComments(data.comments);
+        });
+    });
+  }
+})();
+
+(function () {
+  var cfg = window.__EPISODE_SCENE_VERSION__;
+  var modal = document.getElementById("episode-scene-move-vfx-modal");
+  if (!cfg || !modal) return;
+  var select = document.getElementById("episode-scene-move-vfx-target");
+  var lead = document.getElementById("episode-scene-move-vfx-lead");
+  var msg = document.getElementById("episode-scene-move-vfx-msg");
+  var cancelBtn = document.getElementById("episode-scene-move-vfx-cancel");
+  var confirmBtn = document.getElementById("episode-scene-move-vfx-confirm");
+  var activeSceneId = null;
+
+  function showMsg(text) {
+    if (!msg) return;
+    if (text) {
+      msg.textContent = text;
+      msg.hidden = false;
+    } else {
+      msg.textContent = "";
+      msg.hidden = true;
+    }
+  }
+
+  function closeModal() {
+    if (modal.close) modal.close();
+    activeSceneId = null;
+  }
+
+  function loadItems(sceneId) {
+    if (!select) return;
+    select.innerHTML = '<option value="">Loading…</option>';
+    showMsg("");
+    fetch("/projects/" + cfg.projectId + "/vfx/items-list?scene=" + encodeURIComponent(sceneId), {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          select.innerHTML = "";
+          showMsg("Could not load VFX items.");
+          return;
+        }
+        var items = data.items || [];
+        var options = ['<option value="">Select VFX item…</option>'];
+        items.forEach(function (it) {
+          if (it.isCurrent) return;
+          var epLabel = it.episodeNumber > 0 ? ("EP" + (it.episodeNumber < 10 ? "0" : "") + it.episodeNumber + " · ") : "";
+          var count = it.sceneCount === 1 ? "1 scene" : (it.sceneCount + " scenes");
+          var label = epLabel + it.label + " (" + count + ")";
+          var el = document.createElement("div");
+          el.textContent = label;
+          options.push('<option value="' + it.id + '">' + el.innerHTML + "</option>");
+        });
+        if (options.length === 1) {
+          select.innerHTML = '<option value="">No other VFX items available</option>';
+          showMsg("There are no other VFX items to move this scene into.");
+        } else {
+          select.innerHTML = options.join("");
+        }
+      })
+      .catch(function () {
+        select.innerHTML = "";
+        showMsg("Could not load VFX items.");
+      });
+  }
+
+  function openModal(sceneId, sceneLabel) {
+    activeSceneId = sceneId;
+    if (lead) {
+      lead.textContent = sceneLabel
+        ? ("Move “" + sceneLabel + "” into another VFX item. This also updates the VFX portal.")
+        : "Select the VFX item to move this scene into. This also updates the VFX portal.";
+    }
+    loadItems(sceneId);
+    if (modal.showModal) modal.showModal();
+  }
+
+  document.querySelectorAll(".episode-scene-move-vfx-open").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      openModal(btn.getAttribute("data-scene-id"), btn.getAttribute("data-scene-label"));
+    });
+  });
+
+  if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+  modal.addEventListener("cancel", function (event) {
+    event.preventDefault();
+    closeModal();
+  });
+
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", function () {
+      if (!activeSceneId || !select) return;
+      var targetId = select.value;
+      if (!targetId) {
+        showMsg("Please select a target VFX item.");
+        return;
+      }
+      confirmBtn.disabled = true;
+      showMsg("");
+      fetch("/projects/" + cfg.projectId + "/vfx/scenes/" + encodeURIComponent(activeSceneId) + "/move-item", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ target_item_id: parseInt(targetId, 10) }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          confirmBtn.disabled = false;
+          if (!data || !data.ok) {
+            showMsg("Could not move the scene. Please try again.");
+            return;
+          }
+          window.location.reload();
+        })
+        .catch(function () {
+          confirmBtn.disabled = false;
+          showMsg("Could not move the scene. Please try again.");
+        });
+    });
+  }
+})();
+
+(function () {
+  var cfg = window.__EPISODE_SCENE_VERSION__;
+  var modal = document.getElementById("episode-scene-editorial-modal");
+  if (!cfg || !modal) return;
+  var elName = document.getElementById("episode-scene-editorial-name");
+  var elOrigin = document.getElementById("episode-scene-editorial-origin");
+  var elUsedIn = document.getElementById("episode-scene-editorial-usedin");
+  var elDuration = document.getElementById("episode-scene-editorial-duration");
+  var selTarget = document.getElementById("episode-scene-editorial-target");
+  var elReason = document.getElementById("episode-scene-editorial-reason");
+  var elNotify = document.getElementById("episode-scene-editorial-notify");
+  var elVfxWarn = document.getElementById("episode-scene-editorial-vfx-warning");
+  var elMsg = document.getElementById("episode-scene-editorial-msg");
+  var cancelBtn = document.getElementById("episode-scene-editorial-cancel");
+  var confirmBtn = document.getElementById("episode-scene-editorial-confirm");
+  var activeSceneId = null;
+  var originEp = "";
+  var usedInList = [];
+  var confirmArmed = false;
+
+  function epLabel(v) {
+    if (v === "X" || v === "" || v == null) return "Episode X";
+    var s = String(v);
+    return "Episode " + (s.length < 2 ? "0" + s : s);
+  }
+
+  function showMsg(text) {
+    if (!elMsg) return;
+    if (text) { elMsg.textContent = text; elMsg.hidden = false; }
+    else { elMsg.textContent = ""; elMsg.hidden = true; }
+  }
+
+  function resetConfirm() {
+    confirmArmed = false;
+    if (confirmBtn) { confirmBtn.textContent = "Assign"; confirmBtn.disabled = false; }
+  }
+
+  function closeModal() {
+    if (modal.close) modal.close();
+    activeSceneId = null;
+    resetConfirm();
+  }
+
+  function openModal(btn) {
+    activeSceneId = btn.getAttribute("data-scene-id");
+    originEp = btn.getAttribute("data-origin-episode") || "";
+    var name = btn.getAttribute("data-scene-name") || "";
+    var dur = btn.getAttribute("data-duration") || "—";
+    var vfxCount = parseInt(btn.getAttribute("data-vfx-count"), 10) || 0;
+    var usedInRaw = (btn.getAttribute("data-used-in") || "").trim();
+    usedInList = usedInRaw ? usedInRaw.split(",").filter(Boolean) : [];
+    if (elName) elName.textContent = name || "—";
+    if (elOrigin) elOrigin.textContent = epLabel(originEp);
+    if (elUsedIn) elUsedIn.textContent = usedInList.length ? usedInList.map(epLabel).join(", ") : "None yet";
+    if (elDuration) elDuration.textContent = dur;
+    if (selTarget) {
+      selTarget.value = "";
+      Array.prototype.forEach.call(selTarget.options, function (opt) {
+        // Cannot assign to the scene's own origin, or to an episode it is already in.
+        opt.disabled = opt.value !== "" && (opt.value === originEp || usedInList.indexOf(opt.value) !== -1);
+      });
+    }
+    if (elReason) elReason.value = "";
+    if (elNotify) elNotify.checked = false;
+    if (elVfxWarn) {
+      if (vfxCount > 0) {
+        elVfxWarn.textContent = "This scene has " + vfxCount + " linked VFX " + (vfxCount === 1 ? "shot" : "shots") + ". They keep their Origin episode and will also appear under the editorial episode.";
+        elVfxWarn.hidden = false;
+      } else {
+        elVfxWarn.textContent = "";
+        elVfxWarn.hidden = true;
+      }
+    }
+    showMsg("");
+    resetConfirm();
+    if (modal.showModal) modal.showModal();
+  }
+
+  document.querySelectorAll(".episode-editorial-assign-open").forEach(function (btn) {
+    btn.addEventListener("click", function () { openModal(btn); });
+  });
+
+  if (selTarget) selTarget.addEventListener("change", resetConfirm);
+  if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+  modal.addEventListener("cancel", function (event) { event.preventDefault(); closeModal(); });
+
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", function () {
+      if (!activeSceneId || !selTarget) return;
+      var target = selTarget.value;
+      if (!target) { showMsg("Please select a target editorial episode."); return; }
+      if (target === originEp) { showMsg("The scene already belongs to that episode in production."); return; }
+      if (!confirmArmed) {
+        confirmArmed = true;
+        confirmBtn.textContent = "Confirm assign to " + epLabel(target);
+        showMsg("");
+        return;
+      }
+      confirmBtn.disabled = true;
+      showMsg("");
+      fetch("/projects/" + cfg.projectId + "/scenes/" + encodeURIComponent(activeSceneId) + "/editorial-assign", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          target_episode_id: parseInt(target, 10),
+          reason: (elReason && elReason.value || "").trim(),
+          notify: !!(elNotify && elNotify.checked),
+        }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+        .then(function (res) {
+          var data = res.data || {};
+          if (!data.ok) {
+            resetConfirm();
+            showMsg(data.message || "Could not assign the scene. Please try again.");
+            return;
+          }
+          window.location.reload();
+        })
+        .catch(function () {
+          resetConfirm();
+          showMsg("Could not assign the scene. Please try again.");
+        });
+    });
+  }
+})();
+
+(function () {
+  var cfg = window.__EPISODE_SCENE_VERSION__;
+  var modal = document.getElementById("episode-scene-editorial-remove-modal");
+  if (!cfg || !modal) return;
+  var elName = document.getElementById("episode-scene-editorial-remove-name");
+  var elReason = document.getElementById("episode-scene-editorial-remove-reason");
+  var elNotify = document.getElementById("episode-scene-editorial-remove-notify");
+  var elMsg = document.getElementById("episode-scene-editorial-remove-msg");
+  var cancelBtn = document.getElementById("episode-scene-editorial-remove-cancel");
+  var confirmBtn = document.getElementById("episode-scene-editorial-remove-confirm");
+  var activeSceneId = null;
+  var editorialEp = null;
+
+  function showMsg(text) {
+    if (!elMsg) return;
+    if (text) { elMsg.textContent = text; elMsg.hidden = false; }
+    else { elMsg.textContent = ""; elMsg.hidden = true; }
+  }
+
+  function closeModal() {
+    if (modal.close) modal.close();
+    activeSceneId = null;
+    if (confirmBtn) confirmBtn.disabled = false;
+  }
+
+  document.querySelectorAll(".episode-editorial-unassign-open").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      activeSceneId = btn.getAttribute("data-scene-id");
+      editorialEp = btn.getAttribute("data-editorial-episode");
+      if (elName) elName.textContent = btn.getAttribute("data-scene-name") || "this scene";
+      if (elReason) elReason.value = "";
+      if (elNotify) elNotify.checked = false;
+      showMsg("");
+      if (confirmBtn) confirmBtn.disabled = false;
+      if (modal.showModal) modal.showModal();
+    });
+  });
+
+  if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+  modal.addEventListener("cancel", function (event) { event.preventDefault(); closeModal(); });
+
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", function () {
+      if (!activeSceneId || !editorialEp) return;
+      confirmBtn.disabled = true;
+      showMsg("");
+      fetch("/projects/" + cfg.projectId + "/scenes/" + encodeURIComponent(activeSceneId) + "/editorial-unassign", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          target_episode_id: parseInt(editorialEp, 10),
+          reason: (elReason && elReason.value || "").trim(),
+          notify: !!(elNotify && elNotify.checked),
+        }),
+      })
+        .then(function (r) { return r.json().then(function (d) { return { status: r.status, data: d }; }); })
+        .then(function (res) {
+          var data = res.data || {};
+          if (!data.ok) {
+            if (confirmBtn) confirmBtn.disabled = false;
+            showMsg(data.message || "Could not remove the assignment. Please try again.");
+            return;
+          }
+          window.location.reload();
+        })
+        .catch(function () {
+          if (confirmBtn) confirmBtn.disabled = false;
+          showMsg("Could not remove the assignment. Please try again.");
+        });
+    });
+  }
+})();
+
+(function () {
+  document.querySelectorAll("[data-detail-script-trigger]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var id = btn.getAttribute("data-detail-script-trigger");
+      var input = id ? document.getElementById(id) : null;
+      if (input) input.click();
+    });
+  });
+  document.querySelectorAll("[data-detail-script-upload]").forEach(function (input) {
+    input.addEventListener("change", function () {
+      if (!input.files || !input.files.length) return;
+      var form = input.closest("form");
+      if (form) form.submit();
+    });
+  });
+})();
+</script>
+{% if can('episode_detail', 'upload_episode_version') and production_episode %}
+<script>
+  window.__EPISODE_VER_UPLOAD__ = {
+    prefix: 'episode-ver',
+    uploadUrl: {{ url_for('episode_color_edit_version_upload', episode_id=production_episode.id)|tojson }},
+    scopeUrlBase: {{ ('/episodes/' ~ production_episode.id ~ '/color-editor-mode/edit-versions/')|tojson }},
+    reloadOnSuccess: true
+  };
+</script>
+<script src="{{ url_for('static', filename='js/episode-edit-upload-form.js') }}?v=1" defer></script>
+{% endif %}
 {% endblock %}
