@@ -6,6 +6,8 @@
 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
 {% elif kind == 'shots' %}
 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h18"/><path d="M6 20V10l6-6 6 6v10"/><path d="M10 20v-6h4v6"/></svg>
+{% elif kind == 'assigned' %}
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
 {% endif %}
 {%- endmacro %}
 {% macro episode_dock_card(ep) %}
@@ -45,10 +47,18 @@
             </span>
             {% endif %}
             {% else %}
-            <span class="episode-dock-stat-chip episode-dock-stat-chip--scenes" title="{{ ep.scene_count }} unique scene{{ 's' if ep.scene_count != 1 else '' }} (Scene type only)">
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--scenes" title="{{ ep.original_scene_count }} original scene{{ 's' if ep.original_scene_count != 1 else '' }} — belong to this episode (production origin)">
               <span class="episode-dock-stat-chip__icon" aria-hidden="true">{{ episode_dock_stat_icon('scenes') }}</span>
-              <span class="episode-dock-stat-chip__value">{{ ep.scene_count }}</span>
+              <span class="episode-dock-stat-chip__value">{{ ep.original_scene_count }}</span>
+              <span class="episode-dock-stat-chip__label sr-only">original scenes</span>
             </span>
+            {% if ep.assigned_scene_count and ep.assigned_scene_count > 0 %}
+            <span class="episode-dock-stat-chip episode-dock-stat-chip--assigned" title="{{ ep.assigned_scene_count }} scene{{ 's' if ep.assigned_scene_count != 1 else '' }} assigned / moved into this episode from other episodes">
+              <span class="episode-dock-stat-chip__icon" aria-hidden="true">{{ episode_dock_stat_icon('assigned') }}</span>
+              <span class="episode-dock-stat-chip__value">+{{ ep.assigned_scene_count }}</span>
+              <span class="episode-dock-stat-chip__label sr-only">assigned-in scenes</span>
+            </span>
+            {% endif %}
             {% if ep.reshoot_count and ep.reshoot_count > 0 %}
             <span class="episode-dock-stat-chip episode-dock-stat-chip--reshoots" title="{{ ep.reshoot_count }} reshoot version{{ 's' if ep.reshoot_count != 1 else '' }}">
               <span class="episode-dock-stat-chip__value">{{ ep.reshoot_count }} reshoot{{ 's' if ep.reshoot_count != 1 else '' }}</span>

@@ -563,6 +563,21 @@ Sc {{ sc.scene_number }}
           >Latest: {{ lv.title|e }} ({{ lv.status }})</button>
           {% endif %}
           <div class="episode-dock-card__actions">
+            {% if card.day_url %}<a href="{{ card.day_url }}" class="btn btn--small btn--ghost">View Shooting Day</a>{% endif %}
+            {% if card.has_vfx %}
+            <a href="{{ vfx_url }}?scene={{ sc.id }}" class="btn btn--small btn--ghost">View VFX</a>
+            {% else %}
+            <span class="btn btn--small btn--ghost is-disabled" role="link" aria-disabled="true" tabindex="-1" title="This scene is not linked to VFX">View VFX</span>
+            {% endif %}
+            {% if can('episode_detail', 'upload_scene_version') %}
+            <button
+              type="button"
+              class="btn btn--small btn--ghost episode-scene-version-upload-open"
+              data-scene-id="{{ sc.id }}"
+              aria-haspopup="dialog"
+              aria-controls="episode-scene-version-upload-modal"
+            >Upload Scene Version</button>
+            {% endif %}
             {% if move_target_episodes %}
             {% set _mv_dsec = sc|shooting_row_duration_sec %}
             {% if is_editorial %}
@@ -597,21 +612,6 @@ Sc {{ sc.scene_number }}
               Assign to Editorial Episode
             </button>
             {% endif %}
-            {% endif %}
-            {% if card.day_url %}<a href="{{ card.day_url }}" class="btn btn--small btn--ghost">View Shooting Day</a>{% endif %}
-            {% if card.has_vfx %}
-            <a href="{{ vfx_url }}?scene={{ sc.id }}" class="btn btn--small btn--ghost">View VFX</a>
-            {% else %}
-            <span class="btn btn--small btn--ghost is-disabled" role="link" aria-disabled="true" tabindex="-1" title="This scene is not linked to VFX">View VFX</span>
-            {% endif %}
-            {% if can('episode_detail', 'upload_scene_version') %}
-            <button
-              type="button"
-              class="btn btn--small btn--ghost episode-scene-version-upload-open"
-              data-scene-id="{{ sc.id }}"
-              aria-haspopup="dialog"
-              aria-controls="episode-scene-version-upload-modal"
-            >Upload Scene Version</button>
             {% endif %}
           </div>
         </div>

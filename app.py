@@ -20332,7 +20332,20 @@ def create_app() -> Flask:
             c.setFillColor(colors.HexColor("#101828"))
             c.setFont("Helvetica-Bold", 16)
             c.drawString(left, y, f"Scene {scene_num}")
-            y -= 18
+            y -= 16
+            # Editorial context: current editorial episode + immutable origin.
+            origin_ep = _scene_production_episode_key(sc)
+            eff_ep = get_effective_editorial_episode(sc)
+            ep_bits = []
+            if eff_ep > 0:
+                ep_bits.append(f"Current Editorial: Episode {eff_ep:02d}")
+            if origin_ep > 0:
+                ep_bits.append(f"Origin: Episode {origin_ep:02d}")
+            if ep_bits:
+                c.setFont("Helvetica", 9)
+                c.setFillColor(colors.HexColor("#667085"))
+                c.drawString(left, y, "    ·    ".join(ep_bits))
+                y -= 12
             c.setStrokeColor(colors.HexColor("#E5E7EB"))
             c.line(left, y, right, y)
             y -= 12
@@ -20570,6 +20583,30 @@ def create_app() -> Flask:
         bridge_models = _vfx_bridge_query_models()
         active_items = vfx_bridge_mod.active_items_for_project(bridge_models, p.id)
         rows_by_id = {int(sc.id): sc for sc in rows}
+        # Editorial: resolve each scene's CURRENT effective editorial episode
+        # (primary SceneEditorialAssignment) so the VFX portal groups by the
+        # editorial cut while origin stays production-based. TV series only —
+        # reels don't use editorial episodes. VfxSceneItem.episode_number is
+        # treated purely as a legacy cache and is NOT used for grouping here.
+        editorial_primary_map = (
+            _active_primary_editorial_targets([int(sc.id) for sc in rows])
+            if is_tv
+            else {}
+        )
+
+        def _effective_ep_for_row(row):
+            target = editorial_primary_map.get(int(getattr(row, "id", 0) or 0))
+            if target:
+                return int(target)
+            return vfx_bridge_mod.episode_key_for_row(row)
+
+        def _editorial_group_key_for_pending(row):
+            eff = _effective_ep_for_row(row)
+            if int(eff) > 0:
+                return int(eff)
+            return shooting_items_mod.VFX_GROUP_EPISODE_X
+
+        effective_episode_fn = _effective_ep_for_row if is_tv else None
         rows_by_vfx_group: dict[int, list] = defaultdict(list)
         for sc in rows:
             gk_row = shooting_items_mod.vfx_editor_group_key(
@@ -20608,7 +20645,11 @@ def create_app() -> Flask:
             source_rows = [r for r in source_rows if r is not None]
             primary = source_rows[0] if source_rows else None
             display_meta = vfx_bridge_mod.build_vfx_item_display_meta(
-                item, source_rows, is_tv=is_tv, max_episode=max_ep
+                item,
+                source_rows,
+                is_tv=is_tv,
+                max_episode=max_ep,
+                effective_episode_fn=effective_episode_fn,
             )
             group_key = int(display_meta["groupKey"])
             if group_key is None:
@@ -20839,6 +20880,9 @@ def create_app() -> Flask:
         on_vfx_labels = vfx_bridge_mod.scene_vfx_item_labels(bridge_models, p.id)
 
         def _episode_production_scene_entries(ep_key: int) -> list[dict]:
+            # A scene belongs to a portal group by its EFFECTIVE editorial
+            # episode (TV). Editorially moved scenes therefore appear as
+            # available/missing under their new episode, not their origin.
             entries: list[dict] = []
             for s in vfx_bridge_mod.production_scenes_for_episode(
                 bridge_models,
@@ -20847,6 +20891,10 @@ def create_app() -> Flask:
                 thumbnail_url_fn=_vfx_version_preview_url,
             ):
                 sid = int(s["id"])
+                if is_tv:
+                    row = rows_by_id.get(sid)
+                    if row is not None and _effective_ep_for_row(row) != int(ep_key):
+                        continue
                 label = s.get("scene_label") or str(s.get("scene_number") or "")
                 on_item = on_vfx_labels.get(sid)
                 entries.append(
@@ -20861,6 +20909,33 @@ def create_app() -> Flask:
                         "onVfxItem": on_item,
                     }
                 )
+            # Scenes editorially MOVED INTO this episode from another production
+            # episode (their production origin != ep_key) — surface them here too.
+            if is_tv:
+                seen = {e["id"] for e in entries}
+                for sid, target in editorial_primary_map.items():
+                    if int(target) != int(ep_key) or sid in seen:
+                        continue
+                    row = rows_by_id.get(int(sid))
+                    if row is None or not shooting_items_mod.is_scene_row_type(
+                        getattr(row, "shooting_item_type", None)
+                    ):
+                        continue
+                    on_item = on_vfx_labels.get(int(sid))
+                    entries.append(
+                        {
+                            "id": int(sid),
+                            "key": shooting_items_mod.vfx_scene_label_key_from_raw(
+                                getattr(row, "scene_label", None),
+                                fallback_number=getattr(row, "scene_number", None),
+                            ),
+                            "label": (getattr(row, "scene_label", None) or "")
+                            or str(getattr(row, "scene_number", "") or ""),
+                            "available": on_item is None,
+                            "onVfxItem": on_item,
+                            "movedInFromEpisode": vfx_bridge_mod.episode_key_for_row(row),
+                        }
+                    )
             return entries
 
         groups = []
@@ -20893,8 +20968,13 @@ def create_app() -> Flask:
                 "id": int(r.id),
                 "label": _vfx_shooting_row_label(r),
                 "episodeNumber": vfx_bridge_mod.episode_key_for_row(r),
-                "groupKey": shooting_items_mod.vfx_editor_group_key(
-                    r, is_tv=is_tv, max_episode=max_ep
+                "originEpisodeNumber": vfx_bridge_mod.episode_key_for_row(r),
+                "groupKey": (
+                    _editorial_group_key_for_pending(r)
+                    if is_tv
+                    else shooting_items_mod.vfx_editor_group_key(
+                        r, is_tv=is_tv, max_episode=max_ep
+                    )
                 ),
             }
             for r in pending_rows
@@ -24928,15 +25008,26 @@ def create_app() -> Flask:
     ) -> dict:
         """Single source of truth for the EDITORIAL membership of an episode.
 
-        Returns the scenes that make up episode ``episode_number`` in the final
-        edit: retained originals (production episode == N and NOT assigned
-        elsewhere) plus scenes assigned INTO this episode from other production
-        episodes. Production data is never modified.
+        A scene's *effective editorial episode* is decided ONLY by its active
+        PRIMARY assignment (SceneEditorialAssignment.is_primary)::
 
-        Both the Episode List cards and the Episode Detail page consume this so
-        their runtime / scene count / VFX / progress figures always match. Pass
-        ``production_rows`` (the scenes whose production episode == N) to avoid a
-        re-query when the caller already has them.
+            effective_editorial_episode =
+                active_primary_assignment.editorial_episode_number
+                if an active primary assignment exists
+                else production_episode  (ShootingDayScene.episode_number)
+
+        So episode N's editorial cut = production scenes whose effective episode
+        is still N (no primary move, or a primary pointing back to N) PLUS scenes
+        from other production episodes whose active primary points to N.
+
+        An assignment merely *existing* is NOT proof the scene moved away — only
+        an active PRIMARY pointing to a DIFFERENT episode removes it. Non-primary
+        (reuse / flashback / recap) assignments never affect this membership.
+
+        Production data is never modified. Both the Episode List cards and the
+        Episode Detail page consume this so their runtime / scene count / VFX /
+        progress figures always match. Pass ``production_rows`` (the scenes whose
+        production episode == N) to avoid a re-query when the caller has them.
         """
         ep = int(episode_number)
         if production_rows is None:
@@ -24957,16 +25048,20 @@ def create_app() -> Flask:
                 )
                 .all()
             )
-        used_in_map: dict[int, list[int]] = defaultdict(list)
-        reassigned_ids: set[int] = set()
         prod_ids = [int(s.id) for s in production_rows]
-        if prod_ids:
-            for a in SceneEditorialAssignment.query.filter(
-                SceneEditorialAssignment.scene_id.in_(prod_ids),
-                SceneEditorialAssignment.is_active.is_(True),
-            ).all():
-                used_in_map[int(a.scene_id)].append(int(a.editorial_episode_number))
-            reassigned_ids = {sid for sid, eps in used_in_map.items() if eps}
+        # Effective editorial episode for each production scene = its active
+        # PRIMARY assignment target (shared resolver — same rule the VFX portal
+        # uses via get_effective_editorial_episode).
+        primary_target = _active_primary_editorial_targets(prod_ids)
+        # A scene leaves this episode ONLY when its active primary points to a
+        # different episode. A primary pointing back to N keeps it here.
+        reassigned_ids = {sid for sid, tgt in primary_target.items() if tgt != ep}
+        used_in_map: dict[int, list[int]] = defaultdict(list)
+        for sid, tgt in primary_target.items():
+            if tgt != ep:
+                used_in_map[sid].append(tgt)
+        retained = [s for s in production_rows if int(s.id) not in reassigned_ids]
+        # Scenes moved IN from OTHER production episodes (active primary -> ep).
         assigned_in_ids: list[int] = []
         assigned_in_reason: dict[int, str] = {}
         for a in (
@@ -24974,17 +25069,19 @@ def create_app() -> Flask:
                 project_id=int(project.id),
                 editorial_episode_number=ep,
                 is_active=True,
+                is_primary=True,
             )
             .order_by(
-                SceneEditorialAssignment.display_order.asc(),
-                SceneEditorialAssignment.id.asc(),
+                SceneEditorialAssignment.added_at.desc(),
+                SceneEditorialAssignment.id.desc(),
             )
             .all()
         ):
-            if int(a.scene_id) not in assigned_in_reason:
-                assigned_in_ids.append(int(a.scene_id))
-                assigned_in_reason[int(a.scene_id)] = a.reason or ""
-        retained = [s for s in production_rows if int(s.id) not in reassigned_ids]
+            sid = int(a.scene_id)
+            if sid not in assigned_in_reason:
+                assigned_in_ids.append(sid)
+                assigned_in_reason[sid] = a.reason or ""
+        prod_id_set = set(prod_ids)
         assigned_in = []
         if assigned_in_ids:
             fetched = {
@@ -25003,8 +25100,9 @@ def create_app() -> Flask:
                 s = fetched.get(sid)
                 if s is None:
                     continue
-                # Never double-count: skip anything whose origin is this episode.
-                if _scene_production_episode_key(s) == ep:
+                # A scene whose production origin is already this episode is a
+                # retained original, never an assigned-in — never double count.
+                if _scene_production_episode_key(s) == ep or sid in prod_id_set:
                     continue
                 assigned_in.append(s)
         rows = ed.sort_shooting_day_scenes_for_display(retained + assigned_in)
@@ -25056,6 +25154,14 @@ def create_app() -> Flask:
             if shooting_items_mod.counts_toward_episode_runtime(r)
         )
         scene_count = shooting_items_mod.count_unique_real_scenes(rows)
+        # Split the count: originals whose production origin is THIS episode and
+        # are still here, versus scenes editorially moved IN from other episodes.
+        original_scene_count = shooting_items_mod.count_unique_real_scenes(
+            membership.get("retained") or []
+        )
+        assigned_scene_count = shooting_items_mod.count_unique_real_scenes(
+            membership.get("assigned_in") or []
+        )
         # VFX is derived ONLY from active source links for the CURRENT editorial
         # scene ids (never VfxSceneItem.episode_number, which may be stale after
         # a scene is editorially reassigned).
@@ -25094,6 +25200,8 @@ def create_app() -> Flask:
         return {
             "scene_ids": scene_ids,
             "scene_count": int(scene_count),
+            "original_scene_count": int(original_scene_count),
+            "assigned_scene_count": int(assigned_scene_count),
             "runtime_seconds": int(runtime_seconds),
             "runtime_display": format_duration_day_total(runtime_seconds),
             "vfx_item_count": int(vfx_item_count),
@@ -25234,6 +25342,8 @@ def create_app() -> Flask:
             "is_episode_x": is_episode_x,
             "is_establishing_collection": is_establishing_collection,
             "scene_count": shooting_n,
+            "original_scene_count": shooting_n,
+            "assigned_scene_count": 0,
             "total_duration": total_duration,
             "episode_runtime_seconds": episode_runtime_seconds,
             "runtime_display": format_duration_day_total(episode_runtime_seconds),
@@ -25383,6 +25493,8 @@ def create_app() -> Flask:
                 pe=pipeline_by_num.get(ep_num),
             )
             card["scene_count"] = stats["scene_count"]
+            card["original_scene_count"] = stats["original_scene_count"]
+            card["assigned_scene_count"] = stats["assigned_scene_count"]
             card["episode_runtime_seconds"] = stats["runtime_seconds"]
             card["total_duration"] = (
                 (stats["runtime_seconds"] + 59) // 60 if stats["runtime_seconds"] else 0
@@ -27274,6 +27386,52 @@ def create_app() -> Flask:
     # Backward-compatible alias (older callers may reference this name).
     _scene_current_episode_key = _scene_production_episode_key
 
+    def _active_primary_editorial_targets(scene_ids) -> dict[int, int]:
+        """scene_id -> newest active PRIMARY editorial episode target.
+
+        The ONE query behind both ``get_effective_editorial_episode`` and
+        ``calculate_editorial_episode_scene_set`` so the Episode system and the
+        VFX portal always resolve the same current editorial episode. Scenes
+        without an active primary assignment are simply absent (== stay in
+        their production origin).
+        """
+        ids = [int(s) for s in scene_ids if s]
+        out: dict[int, int] = {}
+        if not ids:
+            return out
+        for a in (
+            SceneEditorialAssignment.query.filter(
+                SceneEditorialAssignment.scene_id.in_(ids),
+                SceneEditorialAssignment.is_active.is_(True),
+                SceneEditorialAssignment.is_primary.is_(True),
+            )
+            .order_by(
+                SceneEditorialAssignment.added_at.desc(),
+                SceneEditorialAssignment.id.desc(),
+            )
+            .all()
+        ):
+            out.setdefault(int(a.scene_id), int(a.editorial_episode_number))
+        return out
+
+    def get_effective_editorial_episode(scene) -> int:
+        """SINGLE source of truth for a scene's CURRENT editorial episode.
+
+            effective_editorial_episode =
+                active_primary_assignment.editorial_episode_number
+                if an active primary assignment exists
+                else production_episode
+
+        Production origin (``ShootingDayScene.episode_number``) is never changed.
+        Used by BOTH the Episode system and the VFX portal — do not duplicate.
+        """
+        sid = int(getattr(scene, "id", 0) or 0)
+        if sid:
+            target = _active_primary_editorial_targets([sid]).get(sid)
+            if target:
+                return int(target)
+        return _scene_production_episode_key(scene)
+
     def _scene_display_name(scene) -> str:
         return (getattr(scene, "scene_label", "") or "").strip() or (
             f"Scene {getattr(scene, 'scene_number', '') or ''}".strip()
@@ -27349,9 +27507,11 @@ def create_app() -> Flask:
         summary: str,
         reason: str,
         actor: Account | None,
+        actor_uid: int | None = None,
     ) -> None:
         """Append to the scene's editorial assignment history."""
-        actor_uid = directory_user_id_for_account(actor) if actor is not None else None
+        if actor_uid is None:
+            actor_uid = directory_user_id_for_account(actor) if actor is not None else None
         db.session.add(
             EntityMoveAudit(
                 project_id=int(project_id),
@@ -27403,77 +27563,124 @@ def create_app() -> Flask:
                 pass
         return len(recipients)
 
-    def _assign_scene_editorial(
+    def _deactivate_active_primary_assignments(
+        scene_id: int, *, exclude_ep: int | None = None
+    ) -> list:
+        """Set is_active=False on every active PRIMARY assignment for a scene.
+
+        Optionally keep the one that already points to ``exclude_ep`` (it will be
+        reactivated/refreshed by the caller). History rows are preserved.
+        """
+        deactivated = []
+        for a in SceneEditorialAssignment.query.filter(
+            SceneEditorialAssignment.scene_id == int(scene_id),
+            SceneEditorialAssignment.is_active.is_(True),
+            SceneEditorialAssignment.is_primary.is_(True),
+        ).all():
+            if exclude_ep is not None and int(a.editorial_episode_number) == int(exclude_ep):
+                continue
+            a.is_active = False
+            deactivated.append(a)
+        return deactivated
+
+    def _move_scene_editorial(
         scene,
         target_ep: int,
         *,
         project: Project,
-        actor: Account | None,
         reason: str,
-        notify: bool,
-        is_primary: bool = False,
+        notify: bool = False,
+        actor: Account | None = None,
+        actor_uid: int | None = None,
     ) -> dict:
-        """Create (or reactivate) an editorial assignment. Non-destructive."""
+        """MOVE a scene to exactly ONE editorial episode (primary assignment).
+
+        Enforces the single-active-primary invariant at the application level:
+        every prior active primary is deactivated first, then the target primary
+        is created or reactivated. Moving to the scene's production origin simply
+        deactivates all primaries (absence of a primary == stays in origin).
+        Production data (ShootingDayScene.episode_number) is never touched.
+        Does NOT commit — the caller owns the transaction boundary.
+        """
         target_ep = int(target_ep)
         sid = int(scene.id)
         origin_ep = _scene_production_episode_key(scene)
         scene_name = _scene_display_name(scene)
-        actor_uid = directory_user_id_for_account(actor) if actor is not None else None
-        existing = SceneEditorialAssignment.query.filter_by(
-            scene_id=sid, editorial_episode_number=target_ep
-        ).first()
-        reactivated = False
-        if existing is not None:
-            if existing.is_active:
-                # Already assigned — treat as a metadata refresh.
-                if reason:
-                    existing.reason = reason[:5000]
-                if is_primary:
-                    existing.is_primary = True
-                existing.added_at = now_local()
-                assignment = existing
-            else:
+        # Effective editorial episode BEFORE this move (for realtime payload).
+        old_editorial_ep = get_effective_editorial_episode(scene)
+        if actor_uid is None and actor is not None:
+            actor_uid = directory_user_id_for_account(actor)
+        moved_back = target_ep == origin_ep
+        if moved_back:
+            # Back to production origin: no active primary should remain.
+            _deactivate_active_primary_assignments(sid)
+            summary = (
+                f"Moved {scene_name} back to {_episode_label(origin_ep)} "
+                f"(production origin)"
+            )
+            action = "moved_back"
+        else:
+            # Single active primary: drop any other, then set/refresh target.
+            _deactivate_active_primary_assignments(sid, exclude_ep=target_ep)
+            existing = SceneEditorialAssignment.query.filter_by(
+                scene_id=sid, editorial_episode_number=target_ep
+            ).first()
+            if existing is not None:
                 existing.is_active = True
+                existing.is_primary = True
                 existing.reason = (reason or "")[:5000]
-                existing.is_primary = bool(is_primary)
                 existing.added_by_id = actor_uid
                 existing.added_at = now_local()
-                assignment = existing
-                reactivated = True
-        else:
-            assignment = SceneEditorialAssignment(
-                project_id=int(project.id),
-                scene_id=sid,
-                editorial_episode_number=target_ep,
-                is_primary=bool(is_primary),
-                display_order=0,
-                added_by_id=actor_uid,
-                added_at=now_local(),
-                reason=(reason or "")[:5000],
-                notes="",
-                is_active=True,
+            else:
+                db.session.add(
+                    SceneEditorialAssignment(
+                        project_id=int(project.id),
+                        scene_id=sid,
+                        editorial_episode_number=target_ep,
+                        is_primary=True,
+                        display_order=0,
+                        added_by_id=actor_uid,
+                        added_at=now_local(),
+                        reason=(reason or "")[:5000],
+                        notes="",
+                        is_active=True,
+                    )
+                )
+            summary = (
+                f"Moved {scene_name} · {_episode_label(origin_ep)} "
+                f"→ Editorial {_episode_label(target_ep)}"
             )
-            db.session.add(assignment)
-        summary = (
-            f"Assigned {scene_name} · {_episode_label(origin_ep)} "
-            f"→ Editorial {_episode_label(target_ep)}"
-        )
+            action = "moved"
+        # Audit note: how many linked VFX shots were regrouped by this move.
+        try:
+            vfx_shot_n = len(getattr(scene, "vfx_shots", None) or [])
+        except Exception:  # pragma: no cover - defensive
+            vfx_shot_n = 0
+        log_summary = summary
+        if vfx_shot_n:
+            dest_ep = origin_ep if moved_back else target_ep
+            log_summary = (
+                f"{summary} · VFX impact: {vfx_shot_n} linked VFX "
+                f"shot{'s' if vfx_shot_n != 1 else ''} regrouped under "
+                f"{_episode_label(dest_ep)} (production history unchanged)"
+            )
         _log_scene_editorial_event(
             project_id=int(project.id),
             scene_id=sid,
-            action="assigned",
+            action=action,
             from_ep=origin_ep,
             to_ep=target_ep,
-            summary=summary,
+            summary=log_summary,
             reason=reason,
             actor=actor,
+            actor_uid=actor_uid,
         )
         try:
             logger = app.extensions.get("log_security_event")
             if callable(logger):
                 logger(
                     account_id=(actor.id if actor is not None else None),
-                    action="scene_editorial_assigned",
+                    action="scene_editorial_moved",
                     entity_type="scene",
                     entity_id=sid,
                     project_id=int(project.id),
@@ -27482,7 +27689,7 @@ def create_app() -> Flask:
                             "origin_episode": origin_ep,
                             "editorial_episode": target_ep,
                             "reason": reason or "",
-                            "reactivated": reactivated,
+                            "moved_back": moved_back,
                         },
                         ensure_ascii=False,
                     ),
@@ -27495,7 +27702,11 @@ def create_app() -> Flask:
                 project=project,
                 actor=actor,
                 scene=scene,
-                title="Scene assigned to editorial episode",
+                title=(
+                    "Scene moved back to its production episode"
+                    if moved_back
+                    else "Scene moved to editorial episode"
+                ),
                 message=summary + (f" · Reason: {reason}" if reason else ""),
             )
         return {
@@ -27503,10 +27714,241 @@ def create_app() -> Flask:
             "scene_name": scene_name,
             "origin_episode": int(origin_ep),
             "editorial_episode": target_ep,
+            "old_editorial_episode": int(old_editorial_ep),
+            "new_editorial_episode": int(origin_ep if moved_back else target_ep),
             "summary": summary,
             "notified": notified,
-            "reactivated": reactivated,
+            "moved_back": moved_back,
         }
+
+    def _assign_scene_editorial(
+        scene,
+        target_ep: int,
+        *,
+        project: Project,
+        actor: Account | None,
+        reason: str,
+        notify: bool,
+        is_primary: bool = True,
+    ) -> dict:
+        """Assign == MOVE (single active primary). Kept for existing callers."""
+        return _move_scene_editorial(
+            scene,
+            target_ep,
+            project=project,
+            reason=reason,
+            notify=notify,
+            actor=actor,
+        )
+
+    def move_scene_to_editorial_episode(
+        project_id: int,
+        scene_id: int,
+        target_episode_number: int,
+        actor_user_id: int | None = None,
+        reason: str = "",
+        *,
+        notify: bool = False,
+    ) -> dict:
+        """Authoritative Move Scene service (atomic).
+
+        Validates project/target, preserves production origin, deactivates prior
+        primary assignments, creates/reactivates the target primary, records
+        audit history and commits in a single transaction. Raises ValueError for
+        invalid input (rolled back).
+        """
+        p = db.session.get(Project, int(project_id))
+        if p is None:
+            raise ValueError("project_not_found")
+        scene = shooting_day_scene_for_project(int(scene_id), int(project_id))
+        if scene is None:
+            raise ValueError("scene_not_found")
+        target_ep = int(target_episode_number)
+        max_ep = max(0, int(p.number_of_episodes or 0))
+        if target_ep < 1 or (max_ep and target_ep > max_ep):
+            raise ValueError("episode_out_of_range")
+        try:
+            result = _move_scene_editorial(
+                scene,
+                target_ep,
+                project=p,
+                reason=reason or "",
+                notify=notify,
+                actor_uid=actor_user_id,
+            )
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+        return result
+
+    def repair_scene_editorial_primary_assignments(
+        project_id: int | None = None,
+    ) -> dict:
+        """Enforce at most one active PRIMARY editorial assignment per scene.
+
+        - Multiple active primaries for a scene: keep the newest, deactivate the
+          rest.
+        - Active primaries pointing at the scene's OWN production episode: drop
+          them (absence of a primary already means 'stays in origin').
+
+        Rows are only deactivated, never deleted (audit history is preserved).
+        Safe to run repeatedly at startup. Returns a summary of what changed.
+        """
+        q = SceneEditorialAssignment.query.filter(
+            SceneEditorialAssignment.is_active.is_(True),
+            SceneEditorialAssignment.is_primary.is_(True),
+        )
+        if project_id is not None:
+            q = q.filter(SceneEditorialAssignment.project_id == int(project_id))
+        by_scene: dict[int, list] = defaultdict(list)
+        for a in q.all():
+            by_scene[int(a.scene_id)].append(a)
+        if not by_scene:
+            return {"repaired_rows": 0, "scenes": []}
+        origin_by_scene: dict[int, int] = {}
+        for s in ShootingDayScene.query.filter(
+            ShootingDayScene.id.in_(list(by_scene.keys()))
+        ).all():
+            origin_by_scene[int(s.id)] = _scene_production_episode_key(s)
+        repaired: list[tuple[int, int, str]] = []
+        for sid, rows in by_scene.items():
+            origin = origin_by_scene.get(sid)
+            rows.sort(
+                key=lambda a: (
+                    a.added_at.timestamp() if a.added_at else 0.0,
+                    int(a.id),
+                ),
+                reverse=True,
+            )
+            keep = None
+            for a in rows:
+                if origin is not None and int(a.editorial_episode_number) == int(origin):
+                    a.is_active = False
+                    repaired.append((sid, int(a.id), "origin_primary_deactivated"))
+                    continue
+                if keep is None:
+                    keep = a  # newest valid primary stays active
+                else:
+                    a.is_active = False
+                    repaired.append((sid, int(a.id), "stale_primary_deactivated"))
+        if repaired:
+            db.session.commit()
+            app.logger.info(
+                "[editorial-repair] deactivated %d stale primary assignment row(s) "
+                "across %d scene(s)",
+                len(repaired),
+                len({r[0] for r in repaired}),
+            )
+        return {
+            "repaired_rows": len(repaired),
+            "scenes": sorted({r[0] for r in repaired}),
+            "details": repaired,
+        }
+
+    def diagnose_vfx_editorial_consistency(project_id: int | None = None) -> dict:
+        """READ-ONLY report of VFX ↔ editorial inconsistencies. Mutates nothing.
+
+        Surfaces (never deletes) the risky states called out for editorial VFX:
+        stale ``VfxSceneItem.episode_number`` caches, scenes with more than one
+        active primary assignment, active VFX source links pointing at missing
+        scenes, and VFX items whose active source scenes resolve to more than one
+        effective editorial episode (mixed — must be grouped per scene, never
+        duplicated). Intended to run before any repair so operators can review.
+        """
+        item_q = VfxSceneItem.query.filter(VfxSceneItem.is_active.is_(True))
+        if project_id is not None:
+            item_q = item_q.filter(VfxSceneItem.project_id == int(project_id))
+        items = item_q.all()
+        item_ids = [int(i.id) for i in items]
+        # Active source links for those items.
+        links = []
+        if item_ids:
+            links = VfxSceneItemSource.query.filter(
+                VfxSceneItemSource.vfx_scene_item_id.in_(item_ids),
+                VfxSceneItemSource.is_active.is_(True),
+            ).all()
+        scene_ids = {int(l.shooting_day_scene_id) for l in links}
+        scenes = {}
+        if scene_ids:
+            scenes = {
+                int(s.id): s
+                for s in ShootingDayScene.query.filter(
+                    ShootingDayScene.id.in_(list(scene_ids))
+                ).all()
+            }
+        eff_map = _active_primary_editorial_targets(list(scene_ids))
+
+        def _eff(sid):
+            s = scenes.get(int(sid))
+            if s is None:
+                return None
+            t = eff_map.get(int(sid))
+            return int(t) if t else _scene_production_episode_key(s)
+
+        links_by_item: dict[int, list] = defaultdict(list)
+        for l in links:
+            links_by_item[int(l.vfx_scene_item_id)].append(l)
+        stale_cache: list[dict] = []
+        mixed_items: list[dict] = []
+        missing_scene_links: list[dict] = []
+        for it in items:
+            item_links = links_by_item.get(int(it.id), [])
+            eff_eps = set()
+            for l in item_links:
+                sid = int(l.shooting_day_scene_id)
+                if sid not in scenes:
+                    missing_scene_links.append(
+                        {"item_id": int(it.id), "source_id": int(l.id), "scene_id": sid}
+                    )
+                    continue
+                e = _eff(sid)
+                if e is not None:
+                    eff_eps.add(int(e))
+            if len(eff_eps) > 1:
+                mixed_items.append(
+                    {"item_id": int(it.id), "editorial_episodes": sorted(eff_eps)}
+                )
+            elif len(eff_eps) == 1:
+                cached = int(getattr(it, "episode_number", 0) or 0)
+                resolved = next(iter(eff_eps))
+                if cached and cached != resolved:
+                    stale_cache.append(
+                        {
+                            "item_id": int(it.id),
+                            "cached_episode_number": cached,
+                            "resolved_editorial_episode": resolved,
+                        }
+                    )
+        # Scenes with >1 active primary assignment.
+        multi_primary: list[dict] = []
+        pa_q = SceneEditorialAssignment.query.filter(
+            SceneEditorialAssignment.is_active.is_(True),
+            SceneEditorialAssignment.is_primary.is_(True),
+        )
+        if project_id is not None:
+            pa_q = pa_q.filter(SceneEditorialAssignment.project_id == int(project_id))
+        by_scene: dict[int, int] = defaultdict(int)
+        for a in pa_q.all():
+            by_scene[int(a.scene_id)] += 1
+        multi_primary = [
+            {"scene_id": sid, "active_primary_count": n}
+            for sid, n in by_scene.items()
+            if n > 1
+        ]
+        report = {
+            "project_id": project_id,
+            "active_items": len(items),
+            "active_source_links": len(links),
+            "stale_episode_cache": stale_cache,
+            "mixed_editorial_items": mixed_items,
+            "source_links_to_missing_scenes": missing_scene_links,
+            "scenes_with_multiple_active_primaries": multi_primary,
+            "clean": not (
+                stale_cache or mixed_items or missing_scene_links or multi_primary
+            ),
+        }
+        return report
 
     def _unassign_scene_editorial(
         scene,
@@ -27517,52 +27959,42 @@ def create_app() -> Flask:
         reason: str,
         notify: bool,
     ) -> dict:
-        """Deactivate an editorial assignment (soft delete keeps history)."""
-        target_ep = int(target_ep)
+        """Remove a scene from its editorial episode == move it back to origin.
+
+        Deactivates ALL active primary assignments for the scene; the absence of
+        a primary means the scene stays in its production episode. History is
+        preserved. Does NOT commit — the caller owns the transaction.
+        """
         sid = int(scene.id)
         origin_ep = _scene_production_episode_key(scene)
-        scene_name = _scene_display_name(scene)
-        assignment = SceneEditorialAssignment.query.filter_by(
-            scene_id=sid, editorial_episode_number=target_ep, is_active=True
-        ).first()
-        if assignment is None:
-            raise ValueError("assignment_not_found")
-        assignment.is_active = False
-        summary = (
-            f"Removed {scene_name} from Editorial {_episode_label(target_ep)} "
-            f"(Origin {_episode_label(origin_ep)})"
+        has_primary = (
+            SceneEditorialAssignment.query.filter_by(
+                scene_id=sid, is_active=True, is_primary=True
+            ).first()
+            is not None
         )
-        _log_scene_editorial_event(
-            project_id=int(project.id),
-            scene_id=sid,
-            action="removed",
-            from_ep=target_ep,
-            to_ep=origin_ep,
-            summary=summary,
+        if not has_primary:
+            raise ValueError("assignment_not_found")
+        return _move_scene_editorial(
+            scene,
+            origin_ep,
+            project=project,
             reason=reason,
+            notify=notify,
             actor=actor,
         )
-        notified = 0
-        if notify:
-            notified = _notify_scene_editorial(
-                project=project,
-                actor=actor,
-                scene=scene,
-                title="Scene removed from editorial episode",
-                message=summary + (f" · Reason: {reason}" if reason else ""),
-            )
-        return {
-            "scene_id": sid,
-            "scene_name": scene_name,
-            "origin_episode": int(origin_ep),
-            "editorial_episode": target_ep,
-            "summary": summary,
-            "notified": notified,
-        }
 
     def _emit_scene_editorial_changed(
-        project_id: int, scene_id: int, origin_ep: int, editorial_ep: int, summary: str
+        project_id: int,
+        scene_id: int,
+        origin_ep: int,
+        editorial_ep: int,
+        summary: str,
+        *,
+        old_editorial_ep: int | None = None,
+        new_editorial_ep: int | None = None,
     ) -> None:
+        room = f"project_{int(project_id)}"
         try:
             socketio.emit(
                 "SceneEditorialChanged",
@@ -27573,7 +28005,29 @@ def create_app() -> Flask:
                     "editorialEpisode": int(editorial_ep),
                     "summary": summary,
                 },
-                room=f"project_{int(project_id)}",
+                room=room,
+            )
+            # Canonical editorial-move event consumed by Episode detail/list,
+            # the VFX portal, its filters/counters and reports so they all
+            # regroup around the scene's new effective editorial episode.
+            socketio.emit(
+                "scene_editorial_assignment_changed",
+                {
+                    "project_id": int(project_id),
+                    "scene_id": int(scene_id),
+                    "production_episode": int(origin_ep),
+                    "old_editorial_episode": (
+                        int(old_editorial_ep)
+                        if old_editorial_ep is not None
+                        else int(origin_ep)
+                    ),
+                    "new_editorial_episode": (
+                        int(new_editorial_ep)
+                        if new_editorial_ep is not None
+                        else int(editorial_ep)
+                    ),
+                },
+                room=room,
             )
             emit_tasks_feed_changed(int(project_id))
         except Exception:  # pragma: no cover - realtime is best-effort
@@ -27626,7 +28080,13 @@ def create_app() -> Flask:
             db.session.rollback()
             return jsonify({"ok": False, "error": "assign_failed"}), 500
         _emit_scene_editorial_changed(
-            int(project_id), int(scene_id), origin_ep, target_ep, result["summary"]
+            int(project_id),
+            int(scene_id),
+            origin_ep,
+            target_ep,
+            result["summary"],
+            old_editorial_ep=result.get("old_editorial_episode"),
+            new_editorial_ep=result.get("new_editorial_episode"),
         )
         return jsonify(
             {
@@ -27682,7 +28142,13 @@ def create_app() -> Flask:
             db.session.rollback()
             return jsonify({"ok": False, "error": "unassign_failed"}), 500
         _emit_scene_editorial_changed(
-            int(project_id), int(scene_id), origin_ep, target_ep, result["summary"]
+            int(project_id),
+            int(scene_id),
+            origin_ep,
+            target_ep,
+            result["summary"],
+            old_editorial_ep=result.get("old_editorial_episode"),
+            new_editorial_ep=result.get("new_editorial_episode"),
         )
         return jsonify(
             {
@@ -33514,6 +33980,10 @@ def create_app() -> Flask:
     app.extensions["tm_test_helpers"] = {
         "build_editorial_episode_statistics": build_editorial_episode_statistics,
         "calculate_editorial_episode_scene_set": calculate_editorial_episode_scene_set,
+        "get_effective_editorial_episode": get_effective_editorial_episode,
+        "move_scene_to_editorial_episode": move_scene_to_editorial_episode,
+        "repair_scene_editorial_primary_assignments": repair_scene_editorial_primary_assignments,
+        "diagnose_vfx_editorial_consistency": diagnose_vfx_editorial_consistency,
         "_assign_scene_editorial": _assign_scene_editorial,
         "_unassign_scene_editorial": _unassign_scene_editorial,
         "_scene_production_episode_key": _scene_production_episode_key,
@@ -33785,6 +34255,14 @@ def create_app() -> Flask:
     scheduled_jobs_mod.register_scheduled_jobs(app)
 
     security_support_mod.exempt_public_token_views(app, app.extensions.get("csrf"))
+
+    # One-time data repair: enforce a single active PRIMARY editorial assignment
+    # per scene (deactivate stale/origin-pointing primaries). Idempotent.
+    try:
+        with app.app_context():
+            repair_scene_editorial_primary_assignments()
+    except Exception:  # pragma: no cover - never block startup on repair
+        db.session.rollback()
 
     return app
 

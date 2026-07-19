@@ -9457,6 +9457,16 @@ body.app--shell .shooting-row-input .shooting-aux-icon-btn.shooting-aux-icon-btn
   color: #99f6e4;
 }
 
+.episode-dock-stat-chip--assigned {
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(129, 140, 248, 0.38);
+}
+
+.episode-dock-stat-chip--assigned .episode-dock-stat-chip__value {
+  color: #c7d2fe;
+}
+
 .episode-dock-stat-chip--shots {
   color: #8fd4b8;
   background: rgba(61, 154, 122, 0.14);
@@ -24659,17 +24669,53 @@ body.episode-color-body--standalone #episode-color-panel-gallery.is-active .epis
 .episode-scene-move-meta > div {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.2rem;
+  min-width: 0;
 }
 .episode-scene-move-meta dt {
   font-size: 0.72rem;
+  line-height: 1.3;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: rgba(255, 255, 255, 0.5);
+  /* Reserve two lines so single- and two-line labels keep their values
+     aligned on the same baseline across both grid columns. */
+  min-height: calc(0.72rem * 1.3 * 2);
+  display: flex;
+  align-items: flex-end;
 }
 .episode-scene-move-meta dd {
   margin: 0;
   font-weight: 600;
+  line-height: 1.3;
+  word-break: break-word;
+}
+/* Checkbox rows in the editorial modals should read as one inline control,
+   not stack the box above its label (the base .field is a column). */
+#episode-scene-editorial-modal .field--checkbox,
+#episode-scene-editorial-remove-modal .field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+#episode-scene-editorial-modal .field--checkbox input[type="checkbox"],
+#episode-scene-editorial-remove-modal .field--checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+#episode-scene-editorial-modal .field--checkbox span,
+#episode-scene-editorial-remove-modal .field--checkbox span {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+/* Even spacing between the stacked fields (card is plain block flow). */
+#episode-scene-editorial-modal .field,
+#episode-scene-editorial-remove-modal .field {
+  margin-bottom: 0.85rem;
 }
 .episode-scene-move-vfx-warning {
   margin: 0.5rem 0 0;
