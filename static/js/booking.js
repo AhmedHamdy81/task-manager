@@ -22,6 +22,69 @@
     return y + "-" + m + "-" + d;
   }
 
+  function parseISODateLocal(s) {
+    if (!s || typeof s !== "string") return null;
+    var p = s.slice(0, 10).split("-");
+    if (p.length !== 3) return null;
+    var y = parseInt(p[0], 10);
+    var m = parseInt(p[1], 10) - 1;
+    var d = parseInt(p[2], 10);
+    if (!isFinite(y) || !isFinite(m) || !isFinite(d)) return null;
+    return new Date(y, m, d);
+  }
+
+  function toISODateLocal(d) {
+    return (
+      d.getFullYear() +
+      "-" +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(d.getDate()).padStart(2, "0")
+    );
+  }
+
+  function startOfMonthISOLocal(iso) {
+    var d = parseISODateLocal(iso) || parseISODateLocal(todayISO());
+    d.setDate(1);
+    return toISODateLocal(d);
+  }
+
+  function endOfMonthISOLocal(iso) {
+    var d = parseISODateLocal(iso) || parseISODateLocal(todayISO());
+    d.setMonth(d.getMonth() + 1, 0);
+    return toISODateLocal(d);
+  }
+
+  function addMonthsISOLocal(iso, n) {
+    var d = parseISODateLocal(iso) || parseISODateLocal(todayISO());
+    d.setMonth(d.getMonth() + n);
+    return startOfMonthISOLocal(toISODateLocal(d));
+  }
+
+  function formatBookingForDashboard(b) {
+    if (!b) return null;
+    return {
+      suite_name: b.suite_name || b.edit_suite_name || "Room",
+      start_time: b.start_time,
+      end_time: b.end_time,
+      is_full_day: b.is_full_day,
+      project_name: b.project_name || "",
+      booked_for_name: b.booked_for_name || "",
+      booking_date: b.booking_date,
+    };
+  }
+
+  function pickBookingForDate(bookingsByDate, iso, viewerUid) {
+    var list = bookingsByDate[iso] || [];
+    if (!list.length) return null;
+    if (viewerUid != null) {
+      for (var i = 0; i < list.length; i++) {
+        if (Number(list[i].booked_for_id) === Number(viewerUid)) return list[i];
+      }
+    }
+    return list[0];
+  }
+
   function wireFullDay(checkbox, endInput, endWrap) {
     if (!checkbox) return;
     function sync() {
@@ -42,6 +105,71 @@
     if (input.value && input.value < input.min) input.value = input.min;
   }
 
+  function remindersForDate(state, iso) {
+    if (!state || !state.remindersByDate) return [];
+    return state.remindersByDate[iso] || [];
+  }
+
+  function mergeRemindersByDate(reminders) {
+    var byDate = {};
+    (reminders || []).forEach(function (r) {
+      var iso = String((r && (r.dueDate || r.due_date)) || "").slice(0, 10);
+      if (!iso) return;
+      if (!byDate[iso]) byDate[iso] = [];
+      byDate[iso].push(r);
+    });
+    Object.keys(byDate).forEach(function (iso) {
+      byDate[iso].sort(function (a, b) {
+        return String(a.dueTime || "").localeCompare(String(b.dueTime || ""));
+      });
+    });
+    return byDate;
+  }
+
+  function applyDashboardCalDayMarkers(day, iso, state) {
+    var hasBooking = state.bookingsByDate[iso] && state.bookingsByDate[iso].length;
+    var hasReminder = state.remindersByDate[iso] && state.remindersByDate[iso].length;
+    if (hasBooking) day.classList.add("has-booking");
+    if (hasReminder) day.classList.add("has-reminder");
+  }
+
+  function renderDashboardReminders(selectedIso, state) {
+    var wrap = document.getElementById("dashboard-booking-reminders");
+    var list = document.getElementById("dashboard-booking-reminders-list");
+    var label = document.getElementById("db-booking-reminders-label");
+    if (!wrap || !list) return;
+    var rows = remindersForDate(state, selectedIso);
+    list.textContent = "";
+    if (!rows.length) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    if (label) {
+      var dRem = parseISODateLocal(selectedIso);
+      var remDayLabel = dRem
+        ? dRem.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+        : selectedIso;
+      label.textContent =
+        selectedIso === todayISO() ? "Reminders today" : "Reminders on " + remDayLabel;
+    }
+    rows.forEach(function (r) {
+      var li = document.createElement("li");
+      li.className = "dashboard-booking-reminder-item";
+      var text = document.createElement("span");
+      text.className = "dashboard-booking-reminder-text";
+      text.textContent = r.displayTitle || r.title || r.bodyPreview || r.body || "Reminder";
+      li.appendChild(text);
+      if (r.dueTime) {
+        var time = document.createElement("span");
+        time.className = "dashboard-booking-reminder-time";
+        time.textContent = r.dueTime;
+        li.appendChild(time);
+      }
+      list.appendChild(li);
+    });
+  }
+
   /** @param {HTMLElement} card */
   function renderDashboardBooking(card, payload) {
     if (!card) return;
@@ -49,27 +177,251 @@
     var empty = document.getElementById("dashboard-booking-empty");
     if (!filled || !empty) return;
     var b = payload && payload.booking;
+    var selectedIso = (payload && payload.selectedDate) || todayISO();
+    var state = card._dashCalState || payload || {};
+    var emptyTitle = document.getElementById("db-booking-empty-title");
     if (!b) {
       filled.hidden = true;
       empty.hidden = false;
+      if (emptyTitle) {
+        var dEmpty = parseISODateLocal(selectedIso);
+        var dayLabel = dEmpty
+          ? dEmpty.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+          : selectedIso;
+        emptyTitle.textContent =
+          selectedIso === todayISO() ? "No booking today" : "No booking on " + dayLabel;
+      }
+    } else {
+      filled.hidden = false;
+      empty.hidden = true;
+      var suite = document.getElementById("db-booking-suite");
+      var time = document.getElementById("db-booking-time");
+      var proj = document.getElementById("db-booking-project");
+      var forEl = document.getElementById("db-booking-for");
+      if (suite) suite.textContent = b.suite_name || "Room";
+      if (time) {
+        time.textContent =
+          (b.start_time || "").slice(0, 5) +
+          "–" +
+          (b.end_time || "").slice(0, 5) +
+          (b.is_full_day ? " · Full day" : "");
+      }
+      if (proj) proj.textContent = b.project_name || "";
+      if (forEl) forEl.textContent = b.booked_for_name ? "For " + b.booked_for_name : "";
+    }
+    renderDashboardReminders(selectedIso, state);
+  }
+
+  function mergeDashboardBookings(payload, viewerUid) {
+    var byDate = {};
+    function add(b) {
+      if (!b || !b.booking_date) return;
+      if (viewerUid != null && Number(b.booked_for_id) !== Number(viewerUid)) return;
+      var iso = String(b.booking_date).slice(0, 10);
+      if (!byDate[iso]) byDate[iso] = [];
+      byDate[iso].push(b);
+    }
+    (payload.bookings_mine || []).forEach(add);
+    (payload.bookings_assigned || []).forEach(add);
+    Object.keys(byDate).forEach(function (iso) {
+      byDate[iso].sort(function (a, b) {
+        return String(a.start_time || "").localeCompare(String(b.start_time || ""));
+      });
+    });
+    return byDate;
+  }
+
+  function renderDashboardCalendar(card, state) {
+    var host = document.getElementById("dashboard-booking-cal-host");
+    if (!host) return;
+    var anchor = parseISODateLocal(state.monthAnchor || todayISO());
+    if (!anchor) return;
+    var y = anchor.getFullYear();
+    var m = anchor.getMonth();
+    host.textContent = "";
+
+    var head = document.createElement("div");
+    head.className = "dashboard-booking-cal-head";
+    var prev = document.createElement("button");
+    prev.type = "button";
+    prev.className = "dashboard-booking-cal-nav";
+    prev.setAttribute("aria-label", "Previous month");
+    prev.textContent = "‹";
+    var title = document.createElement("span");
+    title.className = "dashboard-booking-cal-title";
+    title.textContent = anchor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    var todayBtn = document.createElement("button");
+    todayBtn.type = "button";
+    todayBtn.className = "dashboard-booking-cal-today btn btn--small btn--ghost";
+    todayBtn.textContent = "Today";
+    var next = document.createElement("button");
+    next.type = "button";
+    next.className = "dashboard-booking-cal-nav";
+    next.setAttribute("aria-label", "Next month");
+    next.textContent = "›";
+    head.appendChild(prev);
+    head.appendChild(title);
+    head.appendChild(todayBtn);
+    head.appendChild(next);
+    host.appendChild(head);
+
+    var grid = document.createElement("div");
+    grid.className = "dashboard-booking-cal-grid";
+    grid.setAttribute("role", "grid");
+    grid.setAttribute("aria-label", "Month");
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach(function (dow) {
+      var lab = document.createElement("div");
+      lab.className = "dashboard-booking-cal-dow";
+      lab.textContent = dow;
+      grid.appendChild(lab);
+    });
+
+    var first = new Date(y, m, 1);
+    var firstWeekday = first.getDay();
+    var daysInMonth = new Date(y, m + 1, 0).getDate();
+    var daysInPrev = new Date(y, m, 0).getDate();
+    var today = todayISO();
+    for (var i = 0; i < 42; i++) {
+      var day = document.createElement("button");
+      day.type = "button";
+      day.className = "dashboard-booking-cal-day";
+      var dayNum = i - firstWeekday + 1;
+      var realY = y;
+      var realM = m;
+      var realD = dayNum;
+      if (dayNum < 1) {
+        realM = m - 1;
+        if (realM < 0) {
+          realM = 11;
+          realY = y - 1;
+        }
+        realD = daysInPrev + dayNum;
+        day.classList.add("is-outside");
+      } else if (dayNum > daysInMonth) {
+        realM = m + 1;
+        if (realM > 11) {
+          realM = 0;
+          realY = y + 1;
+        }
+        realD = dayNum - daysInMonth;
+        day.classList.add("is-outside");
+      }
+      var iso =
+        realY +
+        "-" +
+        String(realM + 1).padStart(2, "0") +
+        "-" +
+        String(realD).padStart(2, "0");
+      day.textContent = String(realD);
+      day.dataset.iso = iso;
+      if (iso === state.selectedDate) day.classList.add("is-selected");
+      if (iso === today) day.classList.add("is-today");
+      applyDashboardCalDayMarkers(day, iso, state);
+      day.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        state.selectedDate = this.dataset.iso || todayISO();
+        renderDashboardCalendar(card, state);
+        var picked = pickBookingForDate(state.bookingsByDate, state.selectedDate, state.viewerUid);
+        renderDashboardBooking(card, {
+          booking: formatBookingForDashboard(picked),
+          selectedDate: state.selectedDate,
+        });
+      });
+      grid.appendChild(day);
+    }
+    host.appendChild(grid);
+
+    prev.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      state.monthAnchor = addMonthsISOLocal(state.monthAnchor, -1);
+      card._dashCalState = state;
+      fetchDashboardMonth(card, state);
+    });
+    next.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      state.monthAnchor = addMonthsISOLocal(state.monthAnchor, 1);
+      card._dashCalState = state;
+      fetchDashboardMonth(card, state);
+    });
+    todayBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      state.selectedDate = todayISO();
+      state.monthAnchor = startOfMonthISOLocal(todayISO());
+      card._dashCalState = state;
+      fetchDashboardMonth(card, state);
+    });
+  }
+
+  function finishDashboardMonth(card, state) {
+    card._dashCalState = state;
+    renderDashboardCalendar(card, state);
+    var picked = pickBookingForDate(state.bookingsByDate, state.selectedDate, state.viewerUid);
+    renderDashboardBooking(card, {
+      booking: formatBookingForDashboard(picked),
+      selectedDate: state.selectedDate,
+    });
+  }
+
+  function fetchDashboardMonth(card, state) {
+    var listUrl = card.getAttribute("data-list-url");
+    var remindersUrl = card.getAttribute("data-reminders-url");
+    var from = startOfMonthISOLocal(state.monthAnchor);
+    var to = endOfMonthISOLocal(state.monthAnchor);
+    if (!listUrl && !remindersUrl) {
+      finishDashboardMonth(card, state);
       return;
     }
-    filled.hidden = false;
-    empty.hidden = true;
-    var suite = document.getElementById("db-booking-suite");
-    var time = document.getElementById("db-booking-time");
-    var proj = document.getElementById("db-booking-project");
-    var forEl = document.getElementById("db-booking-for");
-    if (suite) suite.textContent = b.suite_name || "Room";
-    if (time) {
-      time.textContent =
-        (b.start_time || "").slice(0, 5) +
-        "–" +
-        (b.end_time || "").slice(0, 5) +
-        (b.is_full_day ? " · Full day" : "");
+    var tasks = [];
+    if (listUrl) {
+      var bookingsUrl =
+        listUrl +
+        (listUrl.indexOf("?") >= 0 ? "&" : "?") +
+        "from=" +
+        encodeURIComponent(from) +
+        "&to=" +
+        encodeURIComponent(to);
+      tasks.push(
+        fetch(bookingsUrl, { headers: { Accept: "application/json" }, credentials: "same-origin" })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (j) {
+            state.bookingsByDate = mergeDashboardBookings(j || {}, state.viewerUid);
+          })
+          .catch(function () {
+            state.bookingsByDate = state.bookingsByDate || {};
+          })
+      );
     }
-    if (proj) proj.textContent = b.project_name || "";
-    if (forEl) forEl.textContent = b.booked_for_name ? "For " + b.booked_for_name : "";
+    if (remindersUrl) {
+      var remUrl =
+        remindersUrl +
+        (remindersUrl.indexOf("?") >= 0 ? "&" : "?") +
+        "from=" +
+        encodeURIComponent(from) +
+        "&to=" +
+        encodeURIComponent(to);
+      tasks.push(
+        fetch(remUrl, { headers: { Accept: "application/json" }, credentials: "same-origin" })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (j) {
+            var rows = (j && j.data && j.data.reminders) || [];
+            state.remindersByDate = mergeRemindersByDate(rows);
+          })
+          .catch(function () {
+            state.remindersByDate = state.remindersByDate || {};
+          })
+      );
+    }
+    Promise.all(tasks).then(function () {
+      finishDashboardMonth(card, state);
+    });
   }
 
   function createBookingRowShell() {
@@ -136,6 +488,7 @@
     var sub = li.querySelector('[data-f="sub"]');
     if (sub) {
       var subLine = (b.booked_by_name || "—") + "  →  " + (b.booked_for_name || "—");
+      if (b.job_type) subLine += " · " + b.job_type;
       if (b.scene_label) subLine += " · " + b.scene_label;
       sub.textContent = subLine;
     }
@@ -313,18 +666,261 @@
   function initDashboardCard() {
     var card = document.getElementById("dashboard-booking-card");
     if (!card) return;
-    var url = card.getAttribute("data-today-url");
-    if (!url) return;
-    fetch(url, { headers: { Accept: "application/json" }, credentials: "same-origin" })
-      .then(function (r) {
-        return r.json();
-      })
-      .then(function (j) {
-        renderDashboardBooking(card, j);
-      })
-      .catch(function () {
-        /* keep server-rendered content */
+    var viewerUidParsed = parseInt(card.getAttribute("data-viewer-directory-user-id") || "", 10);
+    var viewerUid = isNaN(viewerUidParsed) ? null : viewerUidParsed;
+    var state = {
+      monthAnchor: startOfMonthISOLocal(todayISO()),
+      selectedDate: todayISO(),
+      bookingsByDate: {},
+      remindersByDate: {},
+      viewerUid: viewerUid,
+    };
+    card._dashCalState = state;
+
+    var calHost = document.getElementById("dashboard-booking-cal-host");
+    if (calHost) {
+      calHost.addEventListener("click", function (e) {
+        e.stopPropagation();
       });
+    }
+
+    var todayUrl = card.getAttribute("data-today-url");
+    if (todayUrl) {
+      fetch(todayUrl, { headers: { Accept: "application/json" }, credentials: "same-origin" })
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (j) {
+          if (state.selectedDate === todayISO()) {
+            renderDashboardBooking(card, {
+              booking: formatBookingForDashboard(j && j.booking),
+              selectedDate: state.selectedDate,
+            });
+          }
+        })
+        .catch(function () {
+          /* keep server-rendered content */
+        });
+    }
+
+    fetchDashboardMonth(card, state);
+    initBookingRemind(card);
+  }
+
+  function renderRemindCalendar(host, state) {
+    if (!host) return;
+    var anchor = parseISODateLocal(state.monthAnchor || todayISO());
+    if (!anchor) return;
+    var y = anchor.getFullYear();
+    var m = anchor.getMonth();
+    host.textContent = "";
+
+    var head = document.createElement("div");
+    head.className = "dashboard-booking-cal-head";
+    var prev = document.createElement("button");
+    prev.type = "button";
+    prev.className = "dashboard-booking-cal-nav";
+    prev.setAttribute("aria-label", "Previous month");
+    prev.textContent = "‹";
+    var title = document.createElement("span");
+    title.className = "dashboard-booking-cal-title";
+    title.textContent = anchor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    var todayBtn = document.createElement("button");
+    todayBtn.type = "button";
+    todayBtn.className = "dashboard-booking-cal-today btn btn--small btn--ghost";
+    todayBtn.textContent = "Today";
+    var next = document.createElement("button");
+    next.type = "button";
+    next.className = "dashboard-booking-cal-nav";
+    next.setAttribute("aria-label", "Next month");
+    next.textContent = "›";
+    head.appendChild(prev);
+    head.appendChild(title);
+    head.appendChild(todayBtn);
+    head.appendChild(next);
+    host.appendChild(head);
+
+    var grid = document.createElement("div");
+    grid.className = "dashboard-booking-cal-grid";
+    grid.setAttribute("role", "grid");
+    grid.setAttribute("aria-label", "Reminder date");
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach(function (dow) {
+      var lab = document.createElement("div");
+      lab.className = "dashboard-booking-cal-dow";
+      lab.textContent = dow;
+      grid.appendChild(lab);
+    });
+
+    var first = new Date(y, m, 1);
+    var firstWeekday = first.getDay();
+    var daysInMonth = new Date(y, m + 1, 0).getDate();
+    var daysInPrev = new Date(y, m, 0).getDate();
+    var today = todayISO();
+    for (var i = 0; i < 42; i++) {
+      var day = document.createElement("button");
+      day.type = "button";
+      day.className = "dashboard-booking-cal-day";
+      var dayNum = i - firstWeekday + 1;
+      var realY = y;
+      var realM = m;
+      var realD = dayNum;
+      if (dayNum < 1) {
+        realM = m - 1;
+        if (realM < 0) {
+          realM = 11;
+          realY = y - 1;
+        }
+        realD = daysInPrev + dayNum;
+        day.classList.add("is-outside");
+      } else if (dayNum > daysInMonth) {
+        realM = m + 1;
+        if (realM > 11) {
+          realM = 0;
+          realY = y + 1;
+        }
+        realD = dayNum - daysInMonth;
+        day.classList.add("is-outside");
+      }
+      var iso =
+        realY +
+        "-" +
+        String(realM + 1).padStart(2, "0") +
+        "-" +
+        String(realD).padStart(2, "0");
+      day.textContent = String(realD);
+      day.dataset.iso = iso;
+      if (iso === state.selectedDate) day.classList.add("is-selected");
+      if (iso === today) day.classList.add("is-today");
+      if (iso < today) {
+        day.disabled = true;
+        day.classList.add("is-past");
+      }
+      day.addEventListener("click", function () {
+        state.selectedDate = this.dataset.iso || todayISO();
+        if (state.hiddenInput) state.hiddenInput.value = state.selectedDate;
+        renderRemindCalendar(host, state);
+      });
+      grid.appendChild(day);
+    }
+    host.appendChild(grid);
+
+    prev.addEventListener("click", function () {
+      state.monthAnchor = addMonthsISOLocal(state.monthAnchor, -1);
+      renderRemindCalendar(host, state);
+    });
+    next.addEventListener("click", function () {
+      state.monthAnchor = addMonthsISOLocal(state.monthAnchor, 1);
+      renderRemindCalendar(host, state);
+    });
+    todayBtn.addEventListener("click", function () {
+      state.selectedDate = todayISO();
+      state.monthAnchor = startOfMonthISOLocal(todayISO());
+      if (state.hiddenInput) state.hiddenInput.value = state.selectedDate;
+      renderRemindCalendar(host, state);
+    });
+  }
+
+  function initBookingRemind(card) {
+    var createUrl = card && card.getAttribute("data-remind-create-url");
+    var openBtn = document.getElementById("dashboard-booking-remind-open");
+    var dialog = document.getElementById("dashboard-booking-remind-dialog");
+    var form = document.getElementById("dashboard-booking-remind-form");
+    var textIn = document.getElementById("dashboard-booking-remind-text");
+    var dateIn = document.getElementById("dashboard-booking-remind-date");
+    var calHost = document.getElementById("dashboard-booking-remind-cal-host");
+    var errEl = document.getElementById("dashboard-booking-remind-error");
+    var submitBtn = document.getElementById("dashboard-booking-remind-submit");
+    if (!createUrl || !openBtn || !dialog || !form) return;
+
+    var remindState = {
+      monthAnchor: startOfMonthISOLocal(todayISO()),
+      selectedDate: todayISO(),
+      hiddenInput: dateIn,
+    };
+
+    function showRemindError(msg) {
+      showError(errEl, msg);
+    }
+
+    function resetRemindForm() {
+      var dashState = card._dashCalState;
+      var picked = (dashState && dashState.selectedDate) || todayISO();
+      remindState.selectedDate = picked >= todayISO() ? picked : todayISO();
+      remindState.monthAnchor = startOfMonthISOLocal(remindState.selectedDate);
+      if (dateIn) dateIn.value = remindState.selectedDate;
+      if (textIn) textIn.value = "";
+      showRemindError("");
+      renderRemindCalendar(calHost, remindState);
+    }
+
+    openBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      resetRemindForm();
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      window.setTimeout(function () {
+        if (textIn) textIn.focus();
+      }, 50);
+    });
+
+    dialog.querySelectorAll("[data-booking-remind-close]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        dialog.close();
+      });
+    });
+    dialog.addEventListener("click", function (ev) {
+      if (ev.target === dialog) dialog.close();
+    });
+    dialog.addEventListener("close", resetRemindForm);
+
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var text = (textIn && textIn.value || "").trim();
+      var due = (dateIn && dateIn.value || "").trim();
+      if (!text) {
+        showRemindError("Enter reminder text.");
+        if (textIn) textIn.focus();
+        return;
+      }
+      if (!due || due < todayISO()) {
+        showRemindError("Pick today or a future date.");
+        return;
+      }
+      showRemindError("");
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Saving…";
+      }
+      fetch(createUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: JSON_ACCEPT,
+        body: JSON.stringify({
+          body: text,
+          due_date: due,
+          is_pinned: "0",
+        }),
+      })
+        .then(function (r) {
+          return r.json().then(function (j) {
+            if (!r.ok) throw new Error((j && j.message) || "Could not save reminder.");
+            return j;
+          });
+        })
+        .then(function () {
+          dialog.close();
+          if (card._dashCalState) fetchDashboardMonth(card, card._dashCalState);
+        })
+        .catch(function (err) {
+          showRemindError(err.message || "Could not save reminder.");
+        })
+        .finally(function () {
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = "Save reminder";
+          }
+        });
+    });
   }
 
   function initBookingPage(root) {
@@ -344,6 +940,7 @@
     var endIn = document.getElementById("booking-end");
     var fullDay = document.getElementById("booking-full-day");
     var bookedForSel = document.getElementById("booking-booked-for");
+    var jobSel = document.getElementById("booking-job");
     var notesTa = document.getElementById("booking-notes");
     var errEl = document.getElementById("booking-form-error");
     var okEl = document.getElementById("booking-form-success");
@@ -366,6 +963,7 @@
     var editSuite = document.getElementById("booking-edit-suite");
     var editProject = document.getElementById("booking-edit-project");
     var editBookedFor = document.getElementById("booking-edit-booked-for");
+    var editJob = document.getElementById("booking-edit-job");
     var editDate = document.getElementById("booking-edit-date");
     var editStart = document.getElementById("booking-edit-start");
     var editEnd = document.getElementById("booking-edit-end");
@@ -1111,6 +1709,7 @@
                   if (fullDay) fullDay.checked = !!bk.is_full_day;
                   wireFullDay(fullDay, endIn, endWrap);
                   if (notesTa && bk) notesTa.value = (bk.notes || "").trim();
+                  if (jobSel && bk) jobSel.value = (bk.job_type || "").trim();
                   enterTimelineFormEditMode(bk);
                 } catch (e2) {}
                 highlightSelectedRoom(state, currentSuiteId());
@@ -1170,7 +1769,13 @@
               timeEl2.textContent =
                 minToHHMM(parseTimeToMin(bk.start_time)) + " → " + minToHHMM(parseTimeToMin(bk.end_time));
             }
-            if (userEl2) userEl2.textContent = (bk.booked_for_name || "").trim();
+            if (userEl2) {
+              var userLine = (bk.booked_for_name || "").trim();
+              if ((bk.job_type || "").trim()) {
+                userLine = userLine ? userLine + " · " + bk.job_type.trim() : bk.job_type.trim();
+              }
+              userEl2.textContent = userLine;
+            }
           }
           blk._bookingData = bk;
         });
@@ -1249,6 +1854,7 @@
         var o = bookedForSel.options[bookedForSel.selectedIndex];
         hasBooked = !!(o && !o.disabled && parseInt(bookedForSel.value, 10) > 0);
       }
+      var hasJob = !!(jobSel && (jobSel.value || "").trim());
       var inner = document.getElementById("booking-timeline-inner");
       var st = inner && inner._tmTimeline;
       var conflict =
@@ -1256,7 +1862,7 @@
         bookingPageSection.classList.contains("is-timeline") &&
         st &&
         st.selConflict;
-      submitBtn.disabled = !(hasSuite && hasProject && hasBooked) || !!conflict;
+      submitBtn.disabled = !(hasSuite && hasProject && hasBooked && hasJob) || !!conflict;
     }
 
     function exitTimelineFormEditMode() {
@@ -1274,6 +1880,7 @@
       timelineFormEditId = parseInt(bk.id, 10) || null;
       if (submitBtn) submitBtn.textContent = "Update booking";
       if (projectSel && bk.project_id != null) projectSel.value = String(bk.project_id);
+      if (jobSel && bk.job_type) jobSel.value = String(bk.job_type);
       fetchUsersForProject(projectSel && projectSel.value ? projectSel.value : "", function () {
         if (bookedForSel && bk.booked_for_id != null) bookedForSel.value = String(bk.booked_for_id);
         refreshBookingFormSubmitState();
@@ -1421,6 +2028,7 @@
         editFull.checked = !!b.is_full_day;
         if (!b.is_full_day) editEnd.value = (b.end_time || "").slice(0, 5);
         if (editNotes) editNotes.value = (b.notes || "").trim();
+        if (editJob) editJob.value = (b.job_type || "").trim();
         setMinDate(editDate);
         if (editEnd) {
           editEnd.disabled = !!editFull.checked;
@@ -1659,6 +2267,9 @@
           fetchUsersForProject(projectSel.value);
         });
       }
+      if (jobSel) {
+        jobSel.addEventListener("change", refreshBookingFormSubmitState);
+      }
 
       if (roomSearchIn) {
         roomSearchIn.addEventListener("input", function () {
@@ -1704,6 +2315,11 @@
           showError(errEl, "Select who the booking is for.");
           return;
         }
+        var jobVal = jobSel ? (jobSel.value || "").trim() : "";
+        if (!jobVal) {
+          showError(errEl, "Select a job.");
+          return;
+        }
         setMinDate(dateIn);
         if (dateIn.value < dateIn.min) {
           showError(errEl, "Date cannot be in the past.");
@@ -1726,6 +2342,7 @@
           start_time: startIn ? startIn.value : "09:00",
           is_full_day: !!(fullDay && fullDay.checked),
           notes: (notesTa && notesTa.value) || "",
+          job_type: jobVal,
         };
         if (!body.is_full_day && endIn) body.end_time = endIn.value;
         if (submitBtn) submitBtn.disabled = true;
@@ -2261,6 +2878,8 @@
           is_full_day: false,
           notes: (data.notes || "").trim(),
         };
+        var dragJob = (data.job_type || "").trim();
+        if (dragJob) body.job_type = dragJob;
         // Some payloads use edit_* keys from booking edit lists; preserve if present.
         if (data.project_id) body.project_id = parseInt(data.project_id, 10) || body.project_id;
         if (data.booked_for_id) body.booked_for_id = parseInt(data.booked_for_id, 10) || body.booked_for_id;
@@ -2322,6 +2941,10 @@
           showError(editErr, "Date cannot be in the past.");
           return;
         }
+        if (!(editJob && (editJob.value || "").trim())) {
+          showError(editErr, "Select a job.");
+          return;
+        }
         var body = {
           edit_suite_id: parseInt(editSuite.value, 10),
           project_id: parseInt(editProject.value, 10),
@@ -2330,6 +2953,7 @@
           start_time: editStart.value,
           is_full_day: editFull.checked,
           notes: (editNotes && editNotes.value) || "",
+          job_type: (editJob && editJob.value) || "",
         };
         if (!body.is_full_day) body.end_time = editEnd.value;
         fetch(listUrl.replace(/\/?$/, "") + "/" + id, {

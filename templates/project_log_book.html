@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Log Book · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/project-log-book.css') }}">
+{% endblock %}
+{% block content %}
+<div class="project-detail-page project-log-book-page"
+     id="project-log-book-root"
+     data-detail-url-tmpl="{{ detail_url }}"
+     data-can-sensitive="{{ '1' if can_view_sensitive else '0' }}">
+{% include 'partials/project_page_head.html' %}
+
+<header class="project-log-book-intro">
+  <h2 class="project-log-book-title">Log Book</h2>
+  <p class="muted project-log-book-lead">Operational activity and audit history for this project</p>
+</header>
+
+<div class="project-log-book-cards" role="group" aria-label="Activity summary">
+  <a class="project-log-book-card{% if filters.bucket == 'all' %} is-active{% endif %}" href="{{ card_url('all') }}">
+    <span class="project-log-book-card__label">All Activity</span>
+    <strong class="project-log-book-card__n">{{ summary.all }}</strong>
+  </a>
+  <a class="project-log-book-card{% if filters.bucket == 'media' %} is-active{% endif %}" href="{{ card_url('media') }}">
+    <span class="project-log-book-card__label">Media Operations</span>
+    <strong class="project-log-book-card__n">{{ summary.media }}</strong>
+  </a>
+  <a class="project-log-book-card{% if filters.bucket == 'shooting' %} is-active{% endif %}" href="{{ card_url('shooting') }}">
+    <span class="project-log-book-card__label">Shooting Changes</span>
+    <strong class="project-log-book-card__n">{{ summary.shooting }}</strong>
+  </a>
+  <a class="project-log-book-card{% if filters.bucket == 'booking' %} is-active{% endif %}" href="{{ card_url('booking') }}">
+    <span class="project-log-book-card__label">Bookings</span>
+    <strong class="project-log-book-card__n">{{ summary.booking }}</strong>
+  </a>
+  <a class="project-log-book-card{% if filters.bucket == 'team' %} is-active{% endif %}" href="{{ card_url('team') }}">
+    <span class="project-log-book-card__label">Team &amp; Settings</span>
+    <strong class="project-log-book-card__n">{{ summary.team }}</strong>
+  </a>
+  <a class="project-log-book-card{% if filters.bucket == 'errors' %} is-active{% endif %}" href="{{ card_url('errors') }}">
+    <span class="project-log-book-card__label">Errors</span>
+    <strong class="project-log-book-card__n">{{ summary.errors }}</strong>
+  </a>
+</div>
+
+<form class="project-log-book-filters" method="get" action="{{ url_for('project_log_book', project_id=project.id) }}">
+  {% if filters.bucket and filters.bucket != 'all' %}
+  <input type="hidden" name="bucket" value="{{ filters.bucket }}">
+  {% endif %}
+  <div class="project-log-book-filters-grid">
+    <label class="field">
+      <span class="field-label">Search</span>
+      <input type="search" name="q" value="{{ filters.q or '' }}" placeholder="Summary, actor, entity…" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">From</span>
+      <input type="date" name="date_from" value="{{ filters.date_from or '' }}">
+    </label>
+    <label class="field">
+      <span class="field-label">To</span>
+      <input type="date" name="date_to" value="{{ filters.date_to or '' }}">
+    </label>
+    <label class="field">
+      <span class="field-label">User</span>
+      <select name="user_id">
+        <option value="">Anyone</option>
+        {% for a in actors %}
+        <option value="{{ a.id }}"{% if filters.user_id == a.id %} selected{% endif %}>{{ a.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Module</span>
+      <select name="module">
+        <option value="">All modules</option>
+        {% for m in modules %}
+        <option value="{{ m.value }}"{% if filters.module == m.value %} selected{% endif %}>{{ m.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Event type</span>
+      <select name="event_type">
+        <option value="">All events</option>
+        {% for et in event_types %}
+        <option value="{{ et }}"{% if filters.event_type == et %} selected{% endif %}>{{ et }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Action</span>
+      <input type="text" name="action" value="{{ filters.action or '' }}" placeholder="created, updated…" autocomplete="off">
+    </label>
+    <label class="field">
+      <span class="field-label">Status</span>
+      <select name="status">
+        <option value="">All statuses</option>
+        {% for st in ['info', 'started', 'completed', 'failed', 'cancelled'] %}
+        <option value="{{ st }}"{% if filters.status == st %} selected{% endif %}>{{ st }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Entity type</span>
+      <select name="entity_type">
+        <option value="">All entities</option>
+        {% for et in ['shooting_day', 'shooting_item', 'booking', 'project_member', 'project', 'media_task'] %}
+        <option value="{{ et }}"{% if filters.entity_type == et %} selected{% endif %}>{{ et }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Shooting day</span>
+      <select name="shooting_day_id">
+        <option value="">Any day</option>
+        {% for d in shooting_days %}
+        <option value="{{ d.id }}"{% if filters.shooting_day_id == d.id %} selected{% endif %}>
+          {{ d.day_name or ('Day ' ~ d.id) }} · {{ d.shooting_date }}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Per page</span>
+      <select name="per_page">
+        {% for n in page_sizes %}
+        <option value="{{ n }}"{% if per_page == n %} selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="project-log-book-filters-actions">
+    <button type="submit" class="btn btn--primary btn--small">Apply filters</button>
+    <a class="btn btn--small btn--ghost" href="{{ clear_url }}">Clear Filters</a>
+  </div>
+</form>
+
+{% if not groups %}
+<p class="muted project-log-book-empty">No activity matches these filters.</p>
+{% else %}
+{% for group in groups %}
+<section class="project-log-book-day" aria-labelledby="log-day-{{ group.date }}">
+  <h3 class="project-log-book-day__title" id="log-day-{{ group.date }}">{{ group.title }}</h3>
+  <ul class="project-log-book-list">
+    {% for row in group.rows %}
+    <li class="project-log-book-row" data-log-id="{{ row.id }}">
+      <div class="project-log-book-row__avatar" aria-hidden="true">{{ (row.actor_name or '?')[:1]|upper }}</div>
+      <div class="project-log-book-row__body">
+        <div class="project-log-book-row__meta">
+          <time datetime="{{ row.occurred_at or '' }}">{{ (row.occurred_at or '')[11:16] if row.occurred_at else '—' }}</time>
+          <span class="project-log-book-row__actor">{{ row.actor_name or 'System' }}</span>
+          <span class="project-log-book-pill">{{ row.module_label }}</span>
+          {% if row.status %}
+          <span class="project-log-book-pill project-log-book-pill--{{ row.status }}">{{ row.status }}</span>
+          {% endif %}
+          {% if row.duration_label %}
+          <span class="project-log-book-row__dur">{{ row.duration_label }}</span>
+          {% endif %}
+        </div>
+        <p class="project-log-book-row__summary">{{ row.summary }}</p>
+        {% if row.entity_label %}
+        <p class="project-log-book-row__entity muted">{{ row.entity_label }}</p>
+        {% endif %}
+      </div>
+      <button type="button" class="btn btn--small btn--ghost project-log-book-row__details" data-log-detail="{{ row.id }}">Details</button>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endfor %}
+{% endif %}
+
+<nav class="project-log-book-pager" aria-label="Log Book pagination">
+  <span class="muted">Page {{ page }} of {{ pages }} · {{ total }} events</span>
+  <span class="project-log-book-pager__links">
+    {% if prev_url %}<a class="btn btn--small btn--ghost" href="{{ prev_url }}">Previous</a>{% endif %}
+    {% if next_url %}<a class="btn btn--small btn--ghost" href="{{ next_url }}">Next</a>{% endif %}
+  </span>
+</nav>
+
+<dialog class="project-edit-modal project-log-book-dialog" id="project-log-book-dialog">
+  <form method="dialog" class="project-edit-modal__card project-log-book-dialog__card">
+    <header class="project-edit-modal__head">
+      <h2 class="project-edit-modal__title" id="project-log-book-dialog-title">Activity details</h2>
+      <button type="submit" class="btn btn--small btn--ghost" value="cancel" aria-label="Close">Close</button>
+    </header>
+    <div class="project-log-book-dialog__body" id="project-log-book-dialog-body">
+      <p class="muted">Loading…</p>
+    </div>
+  </form>
+</dialog>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/project_log_book.js') }}" defer></script>
+{% endblock %}

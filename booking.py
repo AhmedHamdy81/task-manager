@@ -14,6 +14,15 @@ booking_bp = Blueprint("booking", __name__, url_prefix="/booking")
 
 END_OF_DAY = time(23, 59, 59)
 NOTES_MAX_LEN = 10_000
+BOOKING_JOB_TYPES = (
+    "Sync",
+    "Selection",
+    "Assembly",
+    "Offline Editing",
+    "Online editing",
+    "Color Grading",
+)
+BOOKING_JOB_TYPE_SET = frozenset(BOOKING_JOB_TYPES)
 
 
 def _ctx() -> dict[str, Any]:
@@ -121,11 +130,27 @@ def _booking_to_dict(b: Any) -> dict[str, Any]:
         "end_time": b.end_time.isoformat(timespec="seconds"),
         "is_full_day": bool(b.is_full_day),
         "notes": (b.notes or "").strip(),
+        "job_type": (getattr(b, "job_type", None) or "").strip(),
         "is_active": bool(b.is_active),
         "created_at": b.created_at.isoformat(timespec="seconds") if b.created_at else None,
         "scene_id": scene_id,
         "scene_label": scene_label,
     }
+
+
+def _parse_job_type(val: Any) -> tuple[str | None, tuple | None]:
+    job_type = (val or "").strip() if isinstance(val, str) or val is None else str(val).strip()
+    if not job_type:
+        return None, (
+            jsonify({"error": "validation", "message": "Job is required."}),
+            400,
+        )
+    if job_type not in BOOKING_JOB_TYPE_SET:
+        return None, (
+            jsonify({"error": "validation", "message": "Invalid job type."}),
+            400,
+        )
+    return job_type, None
 
 
 def _booking_timeline_mask_dict(b: Any) -> dict[str, Any]:
@@ -146,6 +171,7 @@ def _booking_timeline_mask_dict(b: Any) -> dict[str, Any]:
         "booked_for_id": 0,
         "booked_for_name": "",
         "notes": "",
+        "job_type": "",
         "scene_id": None,
         "scene_label": "",
         "created_at": None,
@@ -546,6 +572,9 @@ def booking_create():
     notes = (data.get("notes") or "").strip()
     if len(notes) > NOTES_MAX_LEN:
         return jsonify({"error": "validation", "message": "Notes are too long."}), 400
+    job_type, job_err = _parse_job_type(data.get("job_type"))
+    if job_err:
+        return job_err
     acc = ctx["account_from_session"]()
     if acc is None or not ctx["account_can_access_project"](acc, project_id):
         return jsonify({"error": "validation", "message": "You cannot book under that project."}), 400
@@ -592,6 +621,7 @@ def booking_create():
         end_time=end_t,
         is_full_day=is_full_day,
         notes=notes,
+        job_type=job_type or "",
         is_active=True,
         created_at=now_local(),
         scene_id=parsed_scene_id,
@@ -610,6 +640,18 @@ def booking_create():
         .filter_by(id=b.id)
         .first()
     )
+    try:
+        import project_activity_events as pae
+        import project_activity_hooks as pah
+
+        pah.log_booking_event(
+            project_id=project_id,
+            event_type=pae.BOOKING_CREATED,
+            booking=b,
+        )
+        db.session.commit()
+    except Exception:
+        current_app.logger.exception("booking create activity log failed")
     return jsonify({"booking": _booking_to_dict(b)}), 201
 
 
@@ -652,6 +694,9 @@ def booking_update(booking_id: int):
     data, bad = _require_json()
     if bad:
         return bad
+    import project_activity_service as pas
+
+    before_snap = pas.booking_snapshot(b)
     suite_id = b.edit_suite_id
     if "edit_suite_id" in data:
         try:
@@ -704,6 +749,11 @@ def booking_update(booking_id: int):
         if len(notes) > NOTES_MAX_LEN:
             return jsonify({"error": "validation", "message": "Notes are too long."}), 400
         b.notes = notes
+    if "job_type" in data:
+        job_type, job_err = _parse_job_type(data.get("job_type"))
+        if job_err:
+            return job_err
+        b.job_type = job_type or ""
     if "scene_id" in data:
         SDS = ctx.get("ShootingDayScene")
         raw_sc = data.get("scene_id")
@@ -762,6 +812,22 @@ def booking_update(booking_id: int):
         .filter_by(id=b.id)
         .first()
     )
+    try:
+        import project_activity_events as pae
+        import project_activity_hooks as pah
+        import project_activity_service as pas
+
+        after_snap = pas.booking_snapshot(b)
+        pah.log_booking_event(
+            project_id=int(b.project_id),
+            event_type=pae.BOOKING_UPDATED,
+            booking=b,
+            before=before_snap,
+            after=after_snap,
+        )
+        db.session.commit()
+    except Exception:
+        current_app.logger.exception("booking update activity log failed")
     return jsonify({"booking": _booking_to_dict(b)})
 
 
@@ -788,6 +854,17 @@ def booking_delete(booking_id: int):
     if not _booking_can_mutate(b, uid, admin):
         return jsonify({"error": "forbidden"}), 403
     b.is_active = False
+    try:
+        import project_activity_events as pae
+        import project_activity_hooks as pah
+
+        pah.log_booking_event(
+            project_id=int(b.project_id),
+            event_type=pae.BOOKING_CANCELLED,
+            booking=b,
+        )
+    except Exception:
+        current_app.logger.exception("booking cancel activity log failed")
     db.session.commit()
     b = (
         Booking.query.options(

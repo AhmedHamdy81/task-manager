@@ -856,6 +856,7 @@ def create_app() -> Flask:
         end_time = db.Column(db.Time, nullable=False)
         is_full_day = db.Column(db.Boolean, nullable=False, default=False)
         notes = db.Column(db.Text, nullable=False, default="")
+        job_type = db.Column(db.String(64), nullable=False, default="")
         created_at = db.Column(db.DateTime, default=now_local)
         is_active = db.Column(db.Boolean, nullable=False, default=True)
         scene_id = db.Column(db.Integer, nullable=True, index=True)
@@ -1611,6 +1612,49 @@ def create_app() -> Flask:
         project = db.relationship("Project", backref=db.backref("vfx_mgmt_activities", lazy=True))
         shot = db.relationship("VfxShot", backref=db.backref("mgmt_activities", lazy=True))
         user = db.relationship("User", backref=db.backref("vfx_mgmt_activities", lazy=True))
+
+    class ProjectActivityLog(db.Model):
+        """Append-only project operational audit trail (Log Book).
+
+        Future archive strategy: move older rows to project_activity_logs_archive
+        without discarding searchable summaries or operation_id links.
+        """
+
+        __tablename__ = "project_activity_logs"
+        __table_args__ = (
+            db.Index("ix_pal_project_occurred", "project_id", "occurred_at"),
+            db.Index("ix_pal_entity", "entity_type", "entity_id"),
+            db.Index("ix_pal_operation", "operation_id"),
+        )
+
+        id = db.Column(db.Integer, primary_key=True)
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+        user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+        actor_name = db.Column(db.String(200), nullable=False, default="")
+        event_type = db.Column(db.String(120), nullable=False, default="", index=True)
+        module = db.Column(db.String(64), nullable=False, default="", index=True)
+        action = db.Column(db.String(64), nullable=False, default="")
+        entity_type = db.Column(db.String(64), nullable=False, default="")
+        entity_id = db.Column(db.Integer, nullable=True)
+        entity_label = db.Column(db.String(255), nullable=False, default="")
+        summary = db.Column(db.String(500), nullable=False, default="")
+        metadata_json = db.Column(db.Text, nullable=False, default="")
+        changes_json = db.Column(db.Text, nullable=False, default="")
+        occurred_at = db.Column(db.DateTime, default=now_local, nullable=False, index=True)
+        started_at = db.Column(db.DateTime, nullable=True)
+        completed_at = db.Column(db.DateTime, nullable=True)
+        duration_seconds = db.Column(db.Integer, nullable=True)
+        status = db.Column(db.String(32), nullable=False, default="info", index=True)
+        severity = db.Column(db.String(32), nullable=False, default="info")
+        source = db.Column(db.String(32), nullable=False, default="ui")
+        operation_id = db.Column(db.String(64), nullable=False, default="")
+        request_id = db.Column(db.String(64), nullable=False, default="")
+        ip_address = db.Column(db.String(64), nullable=True)
+        user_agent = db.Column(db.String(255), nullable=True)
+        is_system_event = db.Column(db.Boolean, nullable=False, default=False)
+
+        project = db.relationship("Project", backref=db.backref("activity_logs", lazy=True))
+        user = db.relationship("User", backref=db.backref("project_activity_logs", lazy=True))
 
     class VfxClientReviewLink(db.Model):
         """Tokenized client review session (no login)."""
@@ -7761,6 +7805,20 @@ def create_app() -> Flask:
         with db.engine.begin() as conn:
             conn.execute(text("ALTER TABLE bookings ADD COLUMN scene_id INTEGER"))
 
+    def ensure_sqlite_bookings_job_type_column() -> None:
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        if "bookings" not in insp.get_table_names():
+            return
+        col_names = {c["name"] for c in insp.get_columns("bookings")}
+        if "job_type" in col_names:
+            return
+        with db.engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE bookings ADD COLUMN job_type VARCHAR(64) NOT NULL DEFAULT ''")
+            )
+
     def migrate_shooting_day_scene_runtime_selected_defaults() -> None:
         """One runtime take per episode+scene: earliest row wins (original first)."""
         rows = (
@@ -8168,6 +8226,69 @@ def create_app() -> Flask:
         insp = inspect(db.engine)
         if "entity_move_audit" not in insp.get_table_names():
             EntityMoveAudit.__table__.create(bind=db.engine, checkfirst=True)
+
+    def ensure_sqlite_project_activity_logs_table() -> None:
+        """Project Log Book append-only audit table + indexes (SQLite additive)."""
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        if "project_activity_logs" not in insp.get_table_names():
+            ProjectActivityLog.__table__.create(bind=db.engine, checkfirst=True)
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_project_activity_logs_project_id "
+                    "ON project_activity_logs (project_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_project_activity_logs_occurred_at "
+                    "ON project_activity_logs (occurred_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_project_activity_logs_user_id "
+                    "ON project_activity_logs (user_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_project_activity_logs_event_type "
+                    "ON project_activity_logs (event_type)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_project_activity_logs_module "
+                    "ON project_activity_logs (module)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_project_activity_logs_status "
+                    "ON project_activity_logs (status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_pal_project_occurred "
+                    "ON project_activity_logs (project_id, occurred_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_pal_entity "
+                    "ON project_activity_logs (entity_type, entity_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_pal_operation "
+                    "ON project_activity_logs (operation_id)"
+                )
+            )
 
     def ensure_sqlite_scene_editorial_assignment_table() -> None:
         """Editorial episode assignment table (SQLite additive)."""
@@ -9757,6 +9878,7 @@ def create_app() -> Flask:
         ensure_sqlite_task_notes_table()
         ensure_sqlite_bookings_v2_columns()
         ensure_sqlite_bookings_scene_id_column()
+        ensure_sqlite_bookings_job_type_column()
         ensure_sqlite_shooting_days_flat_unit_day_name_columns()
         ensure_sqlite_shooting_day_scenes_pipeline_columns()
         ensure_sqlite_shooting_day_critical_notes_table()
@@ -9765,7 +9887,9 @@ def create_app() -> Flask:
         ensure_sqlite_vfx_client_review()
         ensure_sqlite_vfx_scene_item_tables()
         ensure_sqlite_entity_move_audit_table()
+        ensure_sqlite_project_activity_logs_table()
         ensure_sqlite_scene_editorial_assignment_table()
+        ensure_sqlite_safe_delete_challenge_table()
         ensure_sqlite_video_media_records()
         ensure_sqlite_episode_detail_tables()
         ensure_sqlite_color_grading_tables()
@@ -10275,6 +10399,28 @@ def create_app() -> Flask:
             and account_is_editing_team(acc)
         )
 
+    def account_can_view_project_log_book(acc: Account | None, project_id: int) -> bool:
+        import project_activity_service as pas
+
+        return pas.can_view_project_log_book(
+            acc,
+            project_id,
+            account_can_access_project=account_can_access_project,
+            account_may_full_control_project=account_may_full_control_project,
+            account_can_view_project_settings_for=account_can_view_project_settings_for,
+            account_is_elevated=account_is_elevated,
+        )
+
+    def account_can_view_sensitive_log_details(acc: Account | None, project_id: int) -> bool:
+        import project_activity_service as pas
+
+        return pas.can_view_sensitive_log_details(
+            acc,
+            project_id,
+            account_may_full_control_project=account_may_full_control_project,
+            account_is_elevated=account_is_elevated,
+        )
+
     def account_can_move_project_audio_folders_for(
         acc: Account | None, project_id: int
     ) -> bool:
@@ -10436,6 +10582,33 @@ def create_app() -> Flask:
         "account_can_access_project": account_can_access_project,
     }
     app.register_blueprint(booking_bp)
+
+    import project_activity_service as project_activity_service_mod
+
+    def _project_activity_directory_user():
+        acc = account_from_session()
+        return account_directory_user(acc) if acc is not None else None
+
+    _project_activity_logger = project_activity_service_mod.ProjectActivityLogger(
+        db=db,
+        model=ProjectActivityLog,
+        now_local=now_local,
+        get_directory_user=_project_activity_directory_user,
+        get_account=account_from_session,
+        app_logger=app.logger,
+    )
+
+    def log_project_activity(**kwargs):
+        """Best-effort project Log Book write; never raises to callers."""
+        return _project_activity_logger.safe_log(**kwargs)
+
+    app.extensions["project_activity"] = {
+        "logger": _project_activity_logger,
+        "log": log_project_activity,
+        "Model": ProjectActivityLog,
+    }
+    # Booking blueprint can emit project-scoped activity without importing app internals.
+    app.extensions["booking"]["log_project_activity"] = log_project_activity
 
     perm_svc = PermissionService(
         db=db,
@@ -12937,6 +13110,11 @@ def create_app() -> Flask:
         return account_can_manage_project_team_for(acc, int(project_id))
 
     @app.template_global()
+    def can_view_project_log_book_for(project_id: int) -> bool:
+        acc = db.session.get(Account, session.get("account_id"))
+        return account_can_view_project_log_book(acc, int(project_id))
+
+    @app.template_global()
     def can_move_project_audio_folders_for(project_id: int) -> bool:
         acc = db.session.get(Account, session.get("account_id"))
         return account_can_move_project_audio_folders_for(acc, int(project_id))
@@ -13286,6 +13464,9 @@ def create_app() -> Flask:
         db.session.add(day)
         db.session.flush()
         emit_shooting_day_created_activity(day, "production")
+        import project_activity_hooks as pah
+
+        pah.log_shooting_day_created(day, source="production")
         db.session.commit()
         flash("Shooting day added.", "success")
         return redirect(
@@ -13302,6 +13483,9 @@ def create_app() -> Flask:
         if not account_can_access_project(acc, project_id):
             flash("You cannot delete this day.", "error")
             return redirect(url_for("projects_list"))
+        import project_activity_hooks as pah
+
+        pah.log_shooting_day_deleted(d)
         for sc in list(d.pipeline_scenes or []):
             _purge_shooting_day_scene_dependencies(sc.id)
         db.session.delete(d)
@@ -18646,6 +18830,23 @@ def create_app() -> Flask:
             db.session.add(copy_task)
             db.session.flush()
             copy_task_id = int(copy_task.id)
+            import project_activity_hooks as pah
+
+            pah.log_media_started(
+                project_id=p.id,
+                kind="copy",
+                task_id=copy_task_id,
+                day_label=day_name[:80],
+                unit_number=int(unit_number),
+                started_at=copy_task.copy_started_at,
+                metadata={
+                    "source_volume": storage_label,
+                    "destination_volume": (getattr(vol, "name", None) or "") if vol is not None else "",
+                    "destination_path": destination_path,
+                    "estimated_minutes": int(copy_mins) if copy_mins else None,
+                    "shooting_day_id": int(day.id),
+                },
+            )
             _notify_machine_project_team(
                 project_id=p.id,
                 rule=f"copy_task_started|{copy_task_id}",
@@ -18685,6 +18886,9 @@ def create_app() -> Flask:
         try:
             if not start_copy:
                 emit_shooting_day_created_activity(day, "machine", actor=actor)
+                import project_activity_hooks as pah
+
+                pah.log_shooting_day_created(day, source="machine")
             db.session.commit()
         except sa_exc.IntegrityError:
             db.session.rollback()
@@ -19768,8 +19972,14 @@ def create_app() -> Flask:
         if len(day_note) > 20_000:
             flash("Day note is too long.", "error")
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        import project_activity_hooks as pah
+        import project_activity_service as pas
+
+        before = pas.shooting_day_snapshot(day)
         day.location = location
         day.day_note = day_note
+        after = pas.shooting_day_snapshot(day)
+        pah.log_shooting_day_updated(day, before, after)
         db.session.commit()
         flash("Day details updated.", "success")
         return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
@@ -27189,6 +27399,9 @@ def create_app() -> Flask:
                 return jsonify({"ok": False, "error": thumb_err}), 400
             flash(thumb_err, "error")
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        import project_activity_hooks as pah
+
+        pah.log_shooting_item_created(row, d)
         db.session.commit()
         if needs_vfx:
             _ensure_vfx_bridge_for_project(project_id)
@@ -27314,6 +27527,10 @@ def create_app() -> Flask:
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
         dur_sec_i = max(0, int(dur_sec))
         dur_min = (dur_sec_i + 59) // 60 if dur_sec_i else 0
+        import project_activity_hooks as pah
+        import project_activity_service as pas
+
+        before = pas.shooting_item_snapshot(link)
         link.episode_number = ep_num
         link.is_episode_unassigned = is_episode_unassigned
         link.is_establishing_shots_pool = is_establishing_shots_pool
@@ -27346,6 +27563,8 @@ def create_app() -> Flask:
         if thumb_err:
             flash(thumb_err, "error")
             return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        after = pas.shooting_item_snapshot(link)
+        pah.log_shooting_item_updated(link, before, after, day=link.shooting_day)
         db.session.commit()
         if link.needs_vfx:
             _ensure_vfx_bridge_for_project(project_id)
@@ -28339,17 +28558,65 @@ def create_app() -> Flask:
         link = shooting_day_scene_for_project(link_id, project_id)
         if link is None:
             abort(404)
+        # Safe Delete is required for this destructive action.
+        if not safe_delete_request_present():
+            wants_json = (
+                request.is_json
+                or "application/json" in (request.headers.get("Accept") or "")
+                or (request.headers.get("X-VFX-Response") or "").strip().lower() == "json"
+            )
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": "safe_delete_required",
+                            "message": "Confirm with Safe Delete before removing this scene.",
+                        }
+                    ),
+                    400,
+                )
+            flash("Confirm with Safe Delete before removing this scene.", "error")
+            return redirect(
+                url_for(
+                    "project_production_day",
+                    project_id=project_id,
+                    day_id=link.shooting_day_id,
+                )
+            )
+        safe_challenge, sd_err = safe_delete_guard(
+            "scene", link_id, project_id=project_id
+        )
+        if sd_err is not None:
+            return sd_err
         day_id = link.shooting_day_id
         thumb = (link.scene_thumbnail_frame or "").strip()
+        import project_activity_hooks as pah
+
+        pah.log_shooting_item_deleted(link, project_id=project_id, day=link.shooting_day)
         if thumb:
             remove_shooting_scene_thumbnail_file(thumb)
         _purge_shooting_day_scene_dependencies(link_id)
         db.session.delete(link)
+        safe_delete_service.consume(safe_challenge)
         db.session.commit()
-        if (request.headers.get("X-VFX-Response") or "").strip().lower() == "json":
-            return jsonify({"ok": True, "payload": build_vfx_editor_payload(Project.query.get(project_id))})
-        flash("Scene row removed from this day.", "success")
-        return redirect(url_for("project_production_day", project_id=project_id, day_id=day_id))
+        log_security_event(
+            "safe_delete_executed",
+            account_id=acc.id if acc else None,
+            entity_type="scene",
+            entity_id=link_id,
+            project_id=project_id,
+            details={"challenge_id": safe_challenge.id, "delete_kind": "permanent"},
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "redirect": url_for(
+                    "project_production_day", project_id=project_id, day_id=day_id
+                ),
+                "message": "Scene row removed from this day.",
+            }
+        )
 
     @app.route("/projects/<int:project_id>/scenes/<int:scene_id>/mark-done", methods=["POST"])
     def production_scene_mark_done(project_id: int, scene_id: int):
@@ -30164,7 +30431,16 @@ def create_app() -> Flask:
                     return redirect(url_for("project_settings", project_id=p.id))
 
             try:
+                import project_activity_hooks as pah
+                import project_activity_service as pas
+
+                before_settings = pas.project_settings_snapshot(p)
                 apply_settings_to_project(p, data)
+                after_settings = pas.project_settings_snapshot(p, data)
+                settings_changes = pas.build_change_set(
+                    before_settings, after_settings, pas.PROJECT_SETTINGS_TRACKED_FIELDS
+                )
+                pah.log_settings_updated(p.id, settings_changes)
                 p.settings_updated_at = now_local()
                 editor_uid = directory_user_id_for_account(actor)
                 p.settings_updated_by_id = editor_uid
@@ -30574,11 +30850,28 @@ def create_app() -> Flask:
                         else None
                     )
                     if existing is not None:
+                        before_scope = (existing.assigned_post_scope_code or "").strip() or None
+                        before_role = (existing.assignment_role_type or "").strip() or None
                         existing.assigned_post_scope_code = scope_filter
                         if assignment_role:
                             existing.assignment_role_type = assignment_role
                         existing.eligibility_override_reason = reason
                         updated += 1
+                        import project_activity_hooks as pah
+
+                        chg = {}
+                        after_scope = (existing.assigned_post_scope_code or "").strip() or None
+                        after_role = (existing.assignment_role_type or "").strip() or None
+                        if before_scope != after_scope:
+                            chg["assigned_post_scope_code"] = {"old": before_scope, "new": after_scope}
+                        if before_role != after_role:
+                            chg["assignment_role_type"] = {"old": before_role, "new": after_role}
+                        pah.log_member_updated(
+                            p.id,
+                            user_id=uid,
+                            user_name=(u.name or u.email or f"User {uid}"),
+                            changes=chg,
+                        )
                         continue
                     db.session.add(
                         ProjectMember(
@@ -30596,6 +30889,14 @@ def create_app() -> Flask:
                     db.session.add(ProjectMember(project_id=p.id, user_id=uid))
                 known_member_ids.add(uid)
                 added += 1
+                import project_activity_hooks as pah
+
+                pah.log_member_added(
+                    p.id,
+                    user_id=uid,
+                    user_name=(u.name or u.email or f"User {uid}"),
+                    scope=scope_filter,
+                )
             db.session.commit()
         except sa_exc.IntegrityError:
             db.session.rollback()
@@ -30648,6 +30949,12 @@ def create_app() -> Flask:
         if m is None:
             flash("That user is not on this project team.", "error")
             return redirect(url_for("project_team", project_id=p.id))
+        u = db.session.get(User, user_id)
+        uname = ((u.name or u.email) if u is not None else f"User {user_id}") or f"User {user_id}"
+        scope = (m.assigned_post_scope_code or "").strip() or None
+        import project_activity_hooks as pah
+
+        pah.log_member_removed(p.id, user_id=user_id, user_name=uname, scope=scope)
         db.session.delete(m)
         db.session.commit()
         flash("Removed from project team.", "success")
@@ -32965,6 +33272,7 @@ def create_app() -> Flask:
             flash("Enter a convert estimate of at least 1 minute, or choose not to start Convert.", "error")
             return _redirect_after_task_action()
         now = now_local()
+        started_for_log = t.copy_started_at or t.created_at
         est = max(0, int(t.copy_estimated_minutes or 0))
         if est > 0:
             t.copy_started_at = now - timedelta(minutes=est)
@@ -32976,7 +33284,22 @@ def create_app() -> Flask:
         day_nm = (t.copy_day_name or "").strip() or "—"
         unit_nm = t.copy_unit_number if t.copy_unit_number is not None else "—"
         pname = (t.project.name or "").strip() if t.project is not None else ""
+        import project_activity_hooks as pah
+
         if pid is not None:
+            kind = "convert" if title_norm == MR_STREAM_CONVERT_TITLE else "copy"
+            if title_norm in (MR_STREAM_COPY_TITLE, MR_STREAM_CONVERT_TITLE):
+                pah.log_media_finished(
+                    project_id=pid,
+                    kind=kind,
+                    task_id=int(t.id),
+                    day_label=day_nm,
+                    unit_number=unit_nm,
+                    started_at=started_for_log if isinstance(started_for_log, datetime) else None,
+                    completed_at=now,
+                    outcome="completed",
+                    metadata={"estimated_minutes": est or None},
+                )
             if title_norm == MR_STREAM_COPY_TITLE:
                 _notification_emit_to_project(
                     project_id=pid,
@@ -33009,6 +33332,18 @@ def create_app() -> Flask:
                     db.session.add(new_t)
                     db.session.flush()
                     nid = int(new_t.id)
+                    pah.log_media_started(
+                        project_id=pid,
+                        kind="convert",
+                        task_id=nid,
+                        day_label=day_nm,
+                        unit_number=unit_nm,
+                        started_at=now,
+                        metadata={
+                            "estimated_minutes": int(new_t.copy_estimated_minutes or 0),
+                            "parent_copy_task_id": int(t.id),
+                        },
+                    )
                     _notification_emit_to_project(
                         project_id=pid,
                         rule=f"mr_convert_started|{nid}",
@@ -33083,6 +33418,18 @@ def create_app() -> Flask:
             pname = (t.project.name or "").strip() if t.project is not None else ""
             title_norm = (t.title or "").strip()
             is_conv = title_norm == MR_STREAM_CONVERT_TITLE
+            import project_activity_hooks as pah
+
+            pah.log_media_finished(
+                project_id=pid,
+                kind="convert" if is_conv else "copy",
+                task_id=tid,
+                day_label=day_nm,
+                unit_number=unit_nm,
+                started_at=t.copy_started_at or t.created_at,
+                completed_at=now_local(),
+                outcome="cancelled",
+            )
             _notification_emit_to_project(
                 project_id=pid,
                 rule=(f"mr_convert_cancelled|{tid}" if is_conv else f"mr_copy_cancelled|{tid}"),
@@ -34207,6 +34554,27 @@ def create_app() -> Flask:
         "log_security_event": log_security_event,
     }
     machine_room_dashboard_routes_mod.register_machine_room_dashboard_routes(app, _machine_room_dashboard_ctx)
+
+    import project_activity_routes as project_activity_routes_mod
+
+    project_activity_routes_mod.register_project_activity_routes(
+        app,
+        {
+            "db": db,
+            "Project": Project,
+            "ProjectActivityLog": ProjectActivityLog,
+            "User": User,
+            "ShootingDay": ShootingDay,
+            "now_local": now_local,
+            "account_from_session": account_from_session,
+            "account_can_access_project": account_can_access_project,
+            "account_may_full_control_project": account_may_full_control_project,
+            "account_can_view_project_settings_for": account_can_view_project_settings_for,
+            "account_is_elevated": account_is_elevated,
+            "format_datetime_cairo": format_datetime_cairo,
+        },
+    )
+
     _project_storage_ctx = {
         "db": db,
         "Account": Account,

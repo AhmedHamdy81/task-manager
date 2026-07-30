@@ -1,13 +1,51 @@
 {% set wa = workflow_active|default('overview') %}
 {% set _ptype_nav = (project.project_type if project and project.project_type is defined else '') %}
-{% set _is_tv_nav = (_ptype_nav|trim)|lower == 'tv series' %}
+{% set _is_tv_nav = project_is_tv_series(_ptype_nav) %}
+{% macro workflow_nav_icon(name) -%}
+{% if name == 'overview' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+{% elif name == 'episodes' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6"/></svg>
+{% elif name == 'shooting' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+{% elif name == 'editing' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
+{% elif name == 'vfx' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M7 18h10M9 22h6"/><path d="M8 9l2 2 4-4"/></svg>
+{% elif name == 'color' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/></svg>
+{% elif name == 'audio' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+{% elif name == 'team' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+{% elif name == 'settings' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+{% elif name == 'log_book' %}
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h8M8 15h5"/></svg>
+{% endif %}
+{%- endmacro %}
+{% macro workflow_nav_link(href, label, icon_name, active=false) -%}
+<a class="project-workflow-nav-link{% if active %} project-workflow-nav-link--active{% endif %}" href="{{ href }}">
+  <span class="project-workflow-nav-link__icon" aria-hidden="true">{{ workflow_nav_icon(icon_name) }}</span>
+  <span class="project-workflow-nav-link__label">{{ label }}</span>
+</a>
+{%- endmacro %}
 <nav class="project-workflow-nav" aria-label="Production workflow">
-  <a class="project-workflow-nav-link{% if wa == 'overview' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_detail', project_id=project.id) }}">Overview</a>
+  {% include "partials/guest_access_banner.html" %}
+  {{ workflow_nav_link(url_for('project_detail', project_id=project.id), 'Overview', 'overview', wa == 'overview') }}
+  {{ workflow_nav_link(url_for('project_team', project_id=project.id), 'Team', 'team', wa == 'team') }}
   {% if _is_tv_nav %}
-  <a class="project-workflow-nav-link{% if wa == 'episodes' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_episodes', project_id=project.id) }}">Episodes</a>
+  {{ workflow_nav_link(url_for('project_episodes', project_id=project.id), 'Editing Item', 'episodes', wa == 'episodes') }}
   {% endif %}
-  <a class="project-workflow-nav-link{% if wa == 'shooting' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_production', project_id=project.id) }}">Shooting days</a>
-  <a class="project-workflow-nav-link{% if wa == 'vfx' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_vfx', project_id=project.id) }}">VFX Management</a>
-  <a class="project-workflow-nav-link{% if wa == 'audio' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('project_audio_library', project_id=project.id) }}">Audio Library</a>
-  <a class="project-workflow-nav-link{% if wa == 'post' %} project-workflow-nav-link--active{% endif %}" href="{{ url_for('booking.booking_home') }}?project_id={{ project.id }}">Post production</a>
+  {{ workflow_nav_link(url_for('project_production', project_id=project.id), 'Shooting days', 'shooting', wa == 'shooting') }}
+  {{ workflow_nav_link(url_for('project_post_pipeline', project_id=project.id), 'Post Pipeline', 'editing', wa == 'editing') }}
+  {{ workflow_nav_link(url_for('project_vfx', project_id=project.id), 'VFX Portal', 'vfx', wa == 'vfx') }}
+  {{ workflow_nav_link(url_for('project_color_overview', project_id=project.id), 'Color Portal', 'color', wa == 'color') }}
+  {{ workflow_nav_link(url_for('project_audio_library', project_id=project.id), 'Audio Library', 'audio', wa == 'audio') }}
+  {% if can_view_project_settings_for(project.id) %}
+  {{ workflow_nav_link(url_for('project_settings', project_id=project.id), 'Settings', 'settings', wa == 'settings') }}
+  {% endif %}
+  {% if can_view_project_log_book_for(project.id) %}
+  {{ workflow_nav_link(url_for('project_log_book', project_id=project.id), 'Log Book', 'log_book', wa == 'log_book') }}
+  {% endif %}
 </nav>
