@@ -2035,12 +2035,28 @@
           editEnd.value = editFull.checked ? "23:59" : (b.end_time || "").slice(0, 5);
         }
         if (editEndWrap) editEndWrap.classList.toggle("is-muted", !!editFull.checked);
+        var opened = false;
         if (window.tmShell && editHost && editParking) {
-          window.tmShell.openInspector({
-            title: "Edit booking",
-            el: editHost,
-            parking: editParking,
-          });
+          try {
+            window.tmShell.openInspector({
+              title: "Edit booking",
+              el: editHost,
+              parking: editParking,
+              modal: true,
+              bodyClass: "booking-edit-inspector-modal",
+            });
+            opened = true;
+          } catch (e) {
+            opened = false;
+          }
+        }
+        if (!opened && editHost && editParking) {
+          try {
+            editParking.hidden = false;
+            editParking.removeAttribute("aria-hidden");
+            editHost.hidden = false;
+            editHost.style.display = "block";
+          } catch (e) {}
         }
       }
       function loadUsersThenFill() {

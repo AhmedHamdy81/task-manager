@@ -508,6 +508,71 @@ body.app--shell .empty {
   opacity: 1;
 }
 
+/* Booking edit: centered dialog, no open/close motion */
+body.booking-edit-inspector-modal .app-inspector-backdrop,
+.app-inspector-backdrop.app-inspector-backdrop--modal {
+  z-index: 1090;
+  transition: none;
+}
+
+body.booking-edit-inspector-modal .app-inspector,
+.app-inspector.app-inspector--modal {
+  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: min(520px, calc(100vw - 32px));
+  height: max-content;
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  border-left: none;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  transform: none;
+  opacity: 1;
+  pointer-events: none;
+  transition: none;
+  z-index: 1100;
+}
+
+body.booking-edit-inspector-modal .app-inspector.is-open,
+.app-inspector.app-inspector--modal.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+body.booking-edit-inspector-modal .app-inspector-header,
+.app-inspector.app-inspector--modal .app-inspector-header {
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+body.booking-edit-inspector-modal .app-inspector-content,
+.app-inspector.app-inspector--modal .app-inspector-content {
+  flex: 0 1 auto;
+  padding: 1rem 1.1rem 1.25rem;
+  overflow-y: auto;
+  max-height: calc(100dvh - 120px);
+  min-height: 0;
+}
+
+body.booking-edit-inspector-modal .booking-edit-dialog-inner {
+  padding: 0;
+}
+
+body.booking-edit-inspector-modal .booking-form-row {
+  flex-wrap: wrap;
+}
+
+body.booking-edit-inspector-modal .booking-form-row .booking-field {
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
 .app-inspector-header {
   display: flex;
   align-items: center;
