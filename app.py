@@ -10768,6 +10768,14 @@ def create_app() -> Flask:
             initial_permissions_catalog=_perm_catalog_payload(),
         )
 
+    @app.route("/control/access-control/help")
+    @app.route("/admin/access-control/help")
+    def control_access_control_help():
+        acc = account_from_session()
+        if not perm_svc.can(acc, "control_panel", "manage_permissions"):
+            abort(403)
+        return render_template("access_control_help.html")
+
     @app.route("/admin/api/permissions")
     def admin_api_permissions():
         acc = account_from_session()
@@ -17940,6 +17948,53 @@ def create_app() -> Flask:
             initial_thread_id=initial_thread_id,
             initial_message_id=initial_message_id,
             initial_conference_id=initial_conference_id,
+        )
+
+    @app.route("/tour/help/<slug>")
+    def app_tour_help(slug: str):
+        """Illustrated help page for one Take a Tour area."""
+        from pathlib import Path
+
+        from app_tour_help_catalog import TOUR_HELP_SLUGS, build_tour_help_catalog
+
+        key = (slug or "").strip().lower()
+        if key not in TOUR_HELP_SLUGS:
+            abort(404)
+        catalog = build_tour_help_catalog(_)
+        help_page = catalog.get(key)
+        if help_page is None:
+            abort(404)
+        redirect_ep = help_page.get("redirect_to")
+        if redirect_ep:
+            return redirect(url_for(redirect_ep))
+
+        open_url = None
+        open_ep = help_page.get("open_endpoint")
+        if open_ep:
+            # Machine Room roles use a different Tasks entry point.
+            if key == "tasks" and account_is_machine_room_role(account_from_session()):
+                open_url = url_for("machine_room_tasks_tab", tab_slug="progress")
+            else:
+                try:
+                    open_url = url_for(open_ep, **(help_page.get("open_kwargs") or {}))
+                except Exception:
+                    open_url = None
+
+        static_root = Path(app.static_folder or "static")
+        for sec in help_page.get("sections") or []:
+            for shot in sec.get("shots") or []:
+                rel = str(shot.get("src") or "")
+                shot["exists"] = bool(rel) and (static_root / rel).is_file()
+
+        related_machine_room_help = key in ("storage", "machine-room")
+        related_access_control_help = key == "access-control"
+        return render_template(
+            "app_tour_help.html",
+            help=help_page,
+            open_url=open_url,
+            related_machine_room_help=related_machine_room_help,
+            related_access_control_help=related_access_control_help,
+            tour_slug=key,
         )
 
     @app.route("/chat/mentions")

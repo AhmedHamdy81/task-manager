@@ -1,0 +1,192 @@
+/* Task management top nav, All tasks table, Access Control help shots. */
+
+.admin-shell--bar {
+  flex-direction: column;
+  align-items: stretch;
+  max-width: none;
+  gap: 0;
+}
+
+.admin-nav.admin-nav--bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  margin: 0 0 1.15rem;
+  padding: 0.3rem;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow-x: auto;
+}
+
+.admin-nav.admin-nav--bar .admin-nav-item {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 0.45rem 0.8rem;
+}
+
+.admin-nav-item--link.is-active {
+  color: var(--accent);
+}
+
+.admin-section-head:has(> .admin-section-head-text) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem 1.5rem;
+  flex-wrap: wrap;
+}
+
+.admin-section-head-text {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.admin-section-title {
+  margin: 0 0 0.5rem;
+  line-height: 1.2;
+}
+
+.admin-section-lead {
+  margin: 0;
+  max-width: 52ch;
+  line-height: 1.55;
+}
+
+.admin-section-head .admin-section-actions {
+  flex: 0 0 auto;
+  margin: 0.15rem 0 0 auto;
+}
+
+.admin-tasks-sortbar-label {
+  font: inherit;
+  font-size: 1em;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: inherit;
+  margin: 0;
+}
+
+.admin-section[data-admin-panel="all-tasks"] .admin-tasks-table-head,
+.admin-section[data-admin-panel="all-tasks"] .task-row {
+  display: grid;
+  grid-template-columns:
+    4.25rem
+    minmax(8rem, 1.35fr)
+    minmax(8rem, 1.1fr)
+    minmax(6.5rem, 1fr)
+    minmax(6.5rem, 0.9fr)
+    minmax(6.75rem, 0.9fr)
+    minmax(6.5rem, 0.85fr)
+    minmax(12rem, 1.25fr)
+    minmax(4.75rem, 0.55fr)
+    minmax(4.75rem, 0.55fr)
+    minmax(5.5rem, 0.7fr)
+    9rem;
+  min-width: 78rem;
+}
+
+.admin-section[data-admin-panel="all-tasks"] .task-col.task-id {
+  color: var(--text-muted, #9ca3af);
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-section[data-admin-panel="all-tasks"] .task-row > .task-col:nth-child(8) {
+  overflow: visible;
+  text-overflow: unset;
+}
+
+.access-control-help {
+  margin-top: 0.35rem;
+}
+
+body.access-control-workspace.mr-help-page .admin-shell {
+  max-width: none;
+}
+
+body.access-control-workspace .access-control-help .mr-help__layout,
+body.app-tour-help--ac .mr-help__layout {
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+body.access-control-workspace .access-control-help .mr-help__toc,
+body.app-tour-help--ac .mr-help__toc {
+  position: static;
+  max-height: none;
+}
+
+body.access-control-workspace .access-control-help .mr-help__toc ul,
+body.app-tour-help--ac .mr-help__toc ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body.access-control-workspace .access-control-help .mr-help__shot,
+body.app-tour-help--ac .mr-help__shot {
+  width: auto;
+  max-width: min(100%, 52rem);
+  max-height: 28rem;
+  height: auto;
+  object-fit: contain;
+  object-position: top left;
+}
+
+.access-control-badge--mod-admin {
+  background: rgba(77, 163, 255, 0.16);
+  color: #93c5fd;
+  border-color: rgba(77, 163, 255, 0.32);
+}
+
+.access-control-badge--mod-core {
+  background: rgba(52, 211, 153, 0.16);
+  color: #6ee7b7;
+  border-color: rgba(52, 211, 153, 0.32);
+}
+
+.access-control-badge--mod-production {
+  background: rgba(251, 191, 36, 0.16);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.34);
+}
+
+.access-control-badge--mod-machine-room {
+  background: rgba(34, 211, 238, 0.16);
+  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.32);
+}
+
+.access-control-badge--mod-vfx {
+  background: rgba(167, 139, 250, 0.18);
+  color: #c4b5fd;
+  border-color: rgba(167, 139, 250, 0.34);
+}
+
+.access-control-badge--mod-color {
+  background: rgba(244, 114, 182, 0.16);
+  color: #f9a8d4;
+  border-color: rgba(244, 114, 182, 0.34);
+}
+
+.access-control-badge--mod-media {
+  background: rgba(251, 146, 60, 0.16);
+  color: #fdba74;
+  border-color: rgba(251, 146, 60, 0.34);
+}
+
+.access-control-badge--mod-fun {
+  background: rgba(163, 230, 53, 0.16);
+  color: #bef264;
+  border-color: rgba(163, 230, 53, 0.34);
+}

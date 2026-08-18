@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Access Control · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/admin-task-mgmt.css') }}">
+{% endblock %}
+{% block body_class %}access-control-workspace{% endblock %}
+{% block content %}
+<button type="button" class="admin-sidebar-backdrop" id="admin-sidebar-backdrop" tabindex="-1" aria-label="Close menu" hidden></button>
+<div class="admin-shell access-control-shell">
+  <aside class="admin-sidebar" id="admin-sidebar" aria-label="Admin navigation">
+    <div class="admin-sidebar-head">
+      <span class="admin-sidebar-label">Admin</span>
+      <p class="admin-sidebar-title">Access Control</p>
+    </div>
+    {% set active = 'pages' %}
+    {% include "partials/access_control_nav.html" %}
+  </aside>
+
+  <div class="admin-main">
+    <header class="access-control-head">
+      <button type="button" class="admin-sidebar-toggle" id="admin-sidebar-toggle" aria-expanded="false" aria-controls="admin-sidebar" aria-label="Open admin menu">
+        <span class="admin-sidebar-toggle-icon" aria-hidden="true"></span>
+      </button>
+      <div>
+        <h1 class="admin-section-title">Access Control</h1>
+        <p class="muted access-control-lede">Manage which roles and job titles can view, create, edit, and delete across the app. Default is deny unless explicitly allowed.</p>
+      </div>
+      <div class="access-control-head-actions">
+        <span class="access-control-unsaved muted" id="ac-unsaved" hidden>Unsaved changes</span>
+        <button type="button" class="btn btn--primary" id="ac-save-btn" disabled>Save changes</button>
+      </div>
+    </header>
+
+    <p class="access-control-error panel admin-card" id="ac-load-error" hidden role="alert"></p>
+
+    <div class="access-control-panels" id="access-control-panels">
+      <section class="admin-section access-control-panel" data-ac-panel="pages">
+        <div class="access-control-toolbar">
+          <input type="search" class="access-control-search" id="ac-pages-search" placeholder="Search pages…" aria-label="Search pages">
+        </div>
+        <div class="access-control-card-grid" id="ac-pages-list"></div>
+      </section>
+
+      <section class="admin-section access-control-panel" data-ac-panel="actions" hidden>
+        <div class="access-control-card-grid" id="ac-actions-list"></div>
+      </section>
+
+      <section class="admin-section access-control-panel" data-ac-panel="roles" hidden>
+        <div class="access-control-toolbar">
+          <label class="field">
+            <span class="field-label">Role</span>
+            <select id="ac-role-select" class="access-control-select"></select>
+          </label>
+          <input type="search" class="access-control-search" id="ac-roles-search" placeholder="Filter modules…">
+        </div>
+        <div id="ac-role-matrix" class="access-control-matrix"></div>
+      </section>
+
+      <section class="admin-section access-control-panel" data-ac-panel="job-titles" hidden>
+        <div class="access-control-toolbar">
+          <label class="field">
+            <span class="field-label">Job title</span>
+            <select id="ac-job-title-select" class="access-control-select"></select>
+          </label>
+          <input type="search" class="access-control-search" id="ac-jt-search" placeholder="Filter modules…">
+        </div>
+        <div id="ac-jt-matrix" class="access-control-matrix"></div>
+      </section>
+
+      <section class="admin-section access-control-panel" data-ac-panel="overrides" hidden>
+        <div class="access-control-toolbar access-control-toolbar--stack">
+          <label class="field">
+            <span class="field-label">User</span>
+            <select id="ac-override-user" class="access-control-select"></select>
+          </label>
+          <label class="field">
+            <span class="field-label">Page</span>
+            <select id="ac-override-page" class="access-control-select"></select>
+          </label>
+          <label class="field">
+            <span class="field-label">Action</span>
+            <select id="ac-override-action" class="access-control-select"></select>
+          </label>
+          <label class="field">
+            <span class="field-label">Allow</span>
+            <select id="ac-override-allow" class="access-control-select">
+              <option value="1">Allow</option>
+              <option value="0">Deny</option>
+            </select>
+          </label>
+          <label class="field field--grow">
+            <span class="field-label">Note</span>
+            <input type="text" id="ac-override-note" maxlength="255" placeholder="Optional reason">
+          </label>
+          <button type="button" class="btn btn--secondary" id="ac-override-add">Add override</button>
+        </div>
+        <ul class="access-control-override-list" id="ac-override-list"></ul>
+      </section>
+
+      <section class="admin-section access-control-panel" data-ac-panel="preview" hidden>
+        <div class="access-control-toolbar">
+          <label class="field">
+            <span class="field-label">Preview as user</span>
+            <select id="ac-preview-user" class="access-control-select"></select>
+          </label>
+          <button type="button" class="btn btn--ghost" id="ac-preview-run">Refresh preview</button>
+        </div>
+        <div id="ac-preview-result" class="access-control-preview"></div>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+window.ACCESS_CONTROL_BOOT = {
+  apiBase: {{ url_for('admin_api_permissions') | tojson }},
+  roles: {{ account_roles | tojson }},
+  roleLabels: {{ role_labels | tojson }},
+  initialCatalog: {{ initial_permissions_catalog | tojson }}
+};
+</script>
+<script src="{{ url_for('static', filename='js/access-control.js') }}" defer></script>
+{% endblock %}

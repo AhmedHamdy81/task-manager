@@ -3,11 +3,14 @@
 
   var STORAGE_KEY = "tm-admin-control-section";
   var VALID = {
+    "post-scopes": true,
+    "all-tasks": true,
     "task-groups": true,
     "task-titles": true,
-    "job-titles": true,
-    "edit-suites": true,
-    "all-tasks": true,
+  };
+  var LEGACY_SECTION = {
+    "task-groups": "post-scopes",
+    "task-titles": "post-scopes",
   };
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -58,8 +61,15 @@
       if (!mqSidebar()) closeAdminSidebar();
     });
 
+    function normalizeSection(sectionId) {
+      if (LEGACY_SECTION[sectionId]) return LEGACY_SECTION[sectionId];
+      if (!VALID[sectionId]) return "post-scopes";
+      if (sectionId === "task-groups" || sectionId === "task-titles") return "post-scopes";
+      return sectionId;
+    }
+
     function show(sectionId) {
-      if (!VALID[sectionId]) sectionId = "task-groups";
+      sectionId = normalizeSection(sectionId);
       panels.forEach(function (p) {
         var id = p.getAttribute("data-admin-panel");
         var on = id === sectionId;
@@ -86,12 +96,21 @@
     nav.forEach(function (el) {
       if (el.tagName !== "BUTTON") return;
       el.addEventListener("click", function () {
-        show(el.getAttribute("data-admin-nav") || "task-groups");
+        show(el.getAttribute("data-admin-nav") || "post-scopes");
         if (mqSidebar()) closeAdminSidebar();
       });
     });
 
-    var initial = "task-groups";
+    document.querySelectorAll(".admin-shell form[data-confirm]").forEach(function (form) {
+      form.addEventListener("submit", function (e) {
+        var msg = form.getAttribute("data-confirm");
+        if (msg && !window.confirm(msg)) {
+          e.preventDefault();
+        }
+      });
+    });
+
+    var initial = "post-scopes";
     var forced = "";
     try {
       var params = new URLSearchParams(window.location.search || "");
@@ -100,15 +119,14 @@
       forced = "";
     }
     if (forced && VALID[forced]) {
-      initial = forced;
+      initial = normalizeSection(forced);
     } else {
       try {
-        initial = sessionStorage.getItem(STORAGE_KEY) || "task-groups";
+        initial = normalizeSection(sessionStorage.getItem(STORAGE_KEY) || "post-scopes");
       } catch (e2) {
-        initial = "task-groups";
+        initial = "post-scopes";
       }
     }
-    if (!VALID[initial]) initial = "task-groups";
     show(initial);
   });
 })();

@@ -1,0 +1,154 @@
+<div class="mr-help access-control-help">
+  <div class="mr-help__layout">
+    <nav class="mr-help__toc" aria-label="Help contents">
+      <p class="mr-help__toc-title">On this page</p>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#how-it-decides">How access is decided</a></li>
+        <li><a href="#pages">Pages</a></li>
+        <li><a href="#actions">Actions</a></li>
+        <li><a href="#roles">Role permissions</a></li>
+        <li><a href="#job-titles">Job title permissions</a></li>
+        <li><a href="#overrides">User overrides</a></li>
+        <li><a href="#preview">Permission preview</a></li>
+        <li><a href="#save">Saving changes</a></li>
+        <li><a href="#tips">Tips</a></li>
+      </ul>
+    </nav>
+
+    <div class="mr-help__main">
+      <section id="overview" class="mr-help__section">
+        <h2>Overview</h2>
+        <p>Access Control is the studio’s permission manager. Nothing is allowed unless it is granted. Use this area to decide which <strong>roles</strong> and <strong>job titles</strong> can view or change each part of the app, then add per-person exceptions when needed.</p>
+        <p>Open it from Admin → Access Control. The left sidebar switches between the six working screens plus this Help page.</p>
+        <figure class="mr-help__figure">
+          <img class="mr-help__shot" src="{{ url_for('static', filename='img/access-control-help/ac-help-overview.png') }}" alt="Access Control Pages screen with sidebar and page cards" loading="lazy">
+          <figcaption>Access Control: admin sidebar on the left, working area on the right. Default view is Pages.</figcaption>
+        </figure>
+      </section>
+
+      <section id="how-it-decides" class="mr-help__section">
+        <h2>How access is decided</h2>
+        <p>When someone opens a page or tries an action, the app checks grants in this order:</p>
+        <ol>
+          <li><strong>User override</strong> — an explicit Allow or Deny for that person on that page + action. This wins.</li>
+          <li><strong>Job title</strong> — grants attached to the person’s directory job title.</li>
+          <li><strong>Role</strong> — grants attached to their account role (Administrator, Producer, Editor, and so on).</li>
+          <li><strong>Default deny</strong> — if nothing granted the action, it is blocked.</li>
+        </ol>
+        <p>Administrators who can open this screen have <code>manage_permissions</code>. Guests never appear in the role list.</p>
+      </section>
+
+      <section id="pages" class="mr-help__section">
+        <h2>Pages</h2>
+        <p>Pages are the app modules you can protect — Dashboard, Projects, Machine Room, Booking, and so on. Each card shows:</p>
+        <dl class="mr-help__dl">
+          <dt>Name</dt>
+          <dd>Human label used in this UI and in matrices.</dd>
+          <dt>Module badge</dt>
+          <dd>Grouping (core, admin, machine room, and others) used to organize Role and Job title screens.</dd>
+          <dt>Key</dt>
+          <dd>Stable id (for example <code>projects</code>) stored in the database.</dd>
+          <dt>Route</dt>
+          <dd>URL pattern this page covers.</dd>
+          <dt>Inactive</dt>
+          <dd>Shown if the page is registered but turned off in the catalog.</dd>
+        </dl>
+        <p>Use the search box to filter by name, key, or module. Pages themselves are not edited here; they are seeded with the app. You grant <em>actions</em> on these pages in the Role and Job title screens.</p>
+        <figure class="mr-help__figure">
+          <img class="mr-help__shot" src="{{ url_for('static', filename='img/access-control-help/ac-help-pages.png') }}" alt="Page cards listing modules with keys and routes" loading="lazy">
+          <figcaption>Pages: each module is a card with key, route, and module badge. Search filters the grid.</figcaption>
+        </figure>
+      </section>
+
+      <section id="actions" class="mr-help__section">
+        <h2>Actions</h2>
+        <p>Actions are the verbs you can grant on a page: View, Create, Edit, Delete, Upload, Approve, and more specialized ones (Machine Room copy, VFX shots, notification audit, and so on).</p>
+        <p>The matrix screens only show the common verbs used across most modules (view, create, edit, delete, upload, assign, export, and a few admin/machine-room verbs). The Actions catalog lists every verb in the system so you know what a grant means.</p>
+        <figure class="mr-help__figure">
+          <img class="mr-help__shot" src="{{ url_for('static', filename='img/access-control-help/ac-help-actions.png') }}" alt="Actions catalog cards with keys and descriptions" loading="lazy">
+          <figcaption>Actions: each verb has a display name, key, and short description.</figcaption>
+        </figure>
+      </section>
+
+      <section id="roles" class="mr-help__section">
+        <h2>Role permissions</h2>
+        <p>Pick a role, then turn action chips on or off per page. Modules are grouped in expandable sections. A chip that is on means that role may perform that action on that page.</p>
+        <dl class="mr-help__dl">
+          <dt>Role</dt>
+          <dd>Account role (Administrator, Producer, Editor, Colorist, Machine Room, …). Guest is excluded.</dd>
+          <dt>Filter modules</dt>
+          <dd>Narrows the matrix by page name, key, or module.</dd>
+          <dt>Chips</dt>
+          <dd>Click to toggle. Changes stay local until you press <strong>Save changes</strong>.</dd>
+        </dl>
+        <p class="mr-help__note">Unsaved changes are flagged in the header. Leaving the Role or Job title screens without saving discards pending toggles.</p>
+        <figure class="mr-help__figure">
+          <img class="mr-help__shot" src="{{ url_for('static', filename='img/access-control-help/ac-help-roles.png') }}" alt="Role permission matrix with action chips per page" loading="lazy">
+          <figcaption>Role permissions: choose a role, then grant action chips on each page. Save is required.</figcaption>
+        </figure>
+      </section>
+
+      <section id="job-titles" class="mr-help__section">
+        <h2>Job title permissions</h2>
+        <p>Same matrix as roles, but keyed to a directory job title (for example Offline Editor). Use this when two people share a role but should not share the same access — or when a title should carry extra rights regardless of role.</p>
+        <p>Job title grants stack with role grants. A person gets an action if <em>either</em> their role or their job title allows it, unless a user override says otherwise.</p>
+        <figure class="mr-help__figure">
+          <img class="mr-help__shot" src="{{ url_for('static', filename='img/access-control-help/ac-help-job-titles.png') }}" alt="Job title permission matrix" loading="lazy">
+          <figcaption>Job title permissions: select a title, grant chips, then Save changes.</figcaption>
+        </figure>
+      </section>
+
+      <section id="overrides" class="mr-help__section">
+        <h2>User overrides</h2>
+        <p>Overrides are exceptions for one person. They beat both role and job title.</p>
+        <dl class="mr-help__dl">
+          <dt>User</dt>
+          <dd>Directory person to target.</dd>
+          <dt>Page</dt>
+          <dd>Which module the exception applies to.</dd>
+          <dt>Action</dt>
+          <dd>Which verb to Allow or Deny.</dd>
+          <dt>Allow</dt>
+          <dd>Allow grants the action; Deny blocks it even if the role would allow it.</dd>
+          <dt>Note</dt>
+          <dd>Optional reason stored with the override (useful for audits).</dd>
+        </dl>
+        <p>Add override applies immediately. Remove deletes that exception. There is no extra Save on this screen.</p>
+        <figure class="mr-help__figure">
+          <img class="mr-help__shot" src="{{ url_for('static', filename='img/access-control-help/ac-help-overrides.png') }}" alt="User override form and list" loading="lazy">
+          <figcaption>User overrides: pick user, page, action, Allow or Deny, optional note, then Add override.</figcaption>
+        </figure>
+      </section>
+
+      <section id="preview" class="mr-help__section">
+        <h2>Permission preview</h2>
+        <p>Preview shows the <em>effective</em> access for one person after role, job title, and overrides are combined. Use it to confirm a change before telling the crew it is live.</p>
+        <p>Choose a user and press <strong>Refresh preview</strong> (or change the user). Each page card lists whether they can view it and which actions they currently have. Hover a badge to see whether the grant came from role, job title, or override.</p>
+        <figure class="mr-help__figure">
+          <img class="mr-help__shot" src="{{ url_for('static', filename='img/access-control-help/ac-help-preview.png') }}" alt="Permission preview for a selected user" loading="lazy">
+          <figcaption>Permission preview: effective view and action badges for the selected person.</figcaption>
+        </figure>
+      </section>
+
+      <section id="save" class="mr-help__section">
+        <h2>Saving changes</h2>
+        <p><strong>Save changes</strong> appears only on Role permissions and Job title permissions. Toggle chips first; the header shows Unsaved changes until you save. Overrides and preview do not use that button.</p>
+        <p>After a successful save, people may need to refresh or sign in again for menus and API checks to pick up the new grants.</p>
+      </section>
+
+      <section id="tips" class="mr-help__section">
+        <h2>Tips</h2>
+        <ul>
+          <li>Start from Preview when someone reports “I can’t see X” — it shows the real combined result.</li>
+          <li>Grant <code>view</code> before other verbs; most screens require view to open at all.</li>
+          <li>Prefer job titles for craft-specific access and roles for broad studio bands. Use overrides sparingly.</li>
+          <li>A Deny override is the cleanest way to block one person without shrinking a whole role.</li>
+        </ul>
+        <p class="mr-help__footer">
+          <a class="btn btn--primary" href="{{ url_for('control_access_control') }}">Open Access Control</a>
+        </p>
+      </section>
+    </div>
+  </div>
+</div>

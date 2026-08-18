@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ help.title }} · {{ _("Help") }} · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine-room-dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/admin-task-mgmt.css') }}">
+{% endblock %}
+{% block body_class %}mr-help-page app-tour-help-page{% if related_access_control_help %} app-tour-help--ac{% endif %}{% endblock %}
+{% block content %}
+<div class="mr-help app-tour-help">
+  <header class="mr-help__head page-head">
+    <div>
+      <h1>{{ help.title }}</h1>
+      <p class="muted">{{ help.summary }}</p>
+    </div>
+    <div class="mr-help__head-actions">
+      <a class="btn btn-secondary btn-sm" href="{{ url_for('app_tour') }}">{{ _("Back to Tour") }}</a>
+      {% if open_url %}
+      <a class="btn btn-primary btn-sm" href="{{ open_url }}">{{ help.open_label }}</a>
+      {% endif %}
+    </div>
+  </header>
+
+  <div class="mr-help__layout">
+    <nav class="mr-help__toc" aria-label="{{ _('Help contents') }}">
+      <p class="mr-help__toc-title">{{ _("On this page") }}</p>
+      <ul>
+        {% for sec in help.sections %}
+        <li><a href="#{{ sec.id }}">{{ sec.title }}</a></li>
+        {% endfor %}
+        {% if related_machine_room_help %}
+        <li><a href="{{ url_for('machine_room_help') }}">{{ _("Machine Room Help") }}</a></li>
+        {% endif %}
+        {% if related_access_control_help %}
+        <li><a href="{{ url_for('control_access_control_help') }}">{{ _("Access Control Help") }}</a></li>
+        {% endif %}
+      </ul>
+    </nav>
+
+    <div class="mr-help__main">
+      {% for sec in help.sections %}
+      <section id="{{ sec.id }}" class="mr-help__section">
+        <h2>{{ sec.title }}</h2>
+        {% for p in sec.paragraphs %}
+        <p>{{ p }}</p>
+        {% endfor %}
+        {% if sec.bullets %}
+        <ul>
+          {% for b in sec.bullets %}
+          <li>{{ b }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% if sec.dl %}
+        <dl class="mr-help__dl">
+          {% for item in sec.dl %}
+          <dt>{{ item.term }}</dt>
+          <dd>{{ item.definition }}</dd>
+          {% endfor %}
+        </dl>
+        {% endif %}
+        {% for shot in sec.shots %}
+        {% if shot.exists %}
+        <figure class="mr-help__figure">
+          <img
+            class="mr-help__shot"
+            src="{{ url_for('static', filename=shot.src) }}"
+            alt="{{ shot.alt }}"
+            loading="lazy"
+          >
+          <figcaption>{{ shot.caption }}</figcaption>
+        </figure>
+        {% endif %}
+        {% endfor %}
+        {% if sec.note %}
+        <p class="mr-help__note">{{ sec.note }}</p>
+        {% endif %}
+      </section>
+      {% endfor %}
+
+      {% if related_machine_room_help %}
+      <p class="mr-help__footer">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('machine_room_help') }}">{{ _("Open Machine Room Help") }}</a>
+      </p>
+      {% endif %}
+      {% if related_access_control_help %}
+      <p class="mr-help__footer">
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('control_access_control_help') }}">{{ _("Open Access Control Help") }}</a>
+      </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

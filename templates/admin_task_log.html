@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% block title %}Task Log · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/admin-task-log.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/admin-task-mgmt.css') }}">
+{% endblock %}
+{% block content %}
+<div class="admin-shell admin-shell--bar">
+  {% set active = 'task-log' %}
+  {% include "partials/admin_task_management_nav.html" %}
+  <div class="admin-section admin-task-log">
+  <header class="admin-section-head">
+    <div class="admin-section-head-text">
+      <h1 class="admin-section-title">Task Log</h1>
+      <p class="admin-section-lead">Track all requested and assigned tasks across all projects.</p>
+    </div>
+  </header>
+
+  <form class="admin-task-log-filters" method="get" action="{{ url_for('admin_task_log') }}">
+    <div class="admin-task-log-filters-grid">
+      <label class="field admin-task-log-field admin-task-log-field--search">
+        <span class="field-label">Search</span>
+        <input type="search" name="q" value="{{ filters.q }}" placeholder="Title or description…" autocomplete="off">
+      </label>
+      <label class="field admin-task-log-field">
+        <span class="field-label">Project</span>
+        <select name="project_id">
+          <option value="">All projects</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}"{% if filters.project_id == p.id %} selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field admin-task-log-field">
+        <span class="field-label">Assigned to</span>
+        <select name="assigned_to">
+          <option value="">Anyone</option>
+          {% for u in users %}
+          <option value="{{ u.id }}"{% if filters.assigned_to == u.id %} selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field admin-task-log-field">
+        <span class="field-label">Requested by</span>
+        <select name="requested_by" disabled title="Not tracked on tasks yet">
+          <option value="">Anyone</option>
+        </select>
+      </label>
+      <label class="field admin-task-log-field">
+        <span class="field-label">Status</span>
+        <select name="status">
+          <option value="">All statuses</option>
+          {% for key, label in status_labels.items() %}
+          <option value="{{ key }}"{% if filters.status == key %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field admin-task-log-field">
+        <span class="field-label">Priority</span>
+        <select name="priority">
+          <option value="">All priorities</option>
+          {% for key, label in priority_labels.items() %}
+          <option value="{{ key }}"{% if filters.priority == key %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="admin-task-log-field admin-tasks-filter-toggle">
+        <span class="field-label">Completed</span>
+        <input type="checkbox" class="admin-tasks-filter-toggle__input" name="hide_completed" value="1"{% if filters.hide_completed %} checked{% endif %}>
+        <span class="admin-tasks-filter-toggle__btn">Hide completed</span>
+      </label>
+      <label class="field admin-task-log-field">
+        <span class="field-label">Created from</span>
+        <input type="date" name="created_from" value="{{ filters.created_from.isoformat() if filters.created_from else '' }}">
+      </label>
+      <label class="field admin-task-log-field">
+        <span class="field-label">Created to</span>
+        <input type="date" name="created_to" value="{{ filters.created_to.isoformat() if filters.created_to else '' }}">
+      </label>
+      <div class="admin-task-log-filters-actions">
+        <button type="submit" class="btn btn--primary btn--small">Apply filters</button>
+        <a class="btn btn--small btn--ghost" href="{{ url_for('admin_task_log') }}">Reset</a>
+      </div>
+    </div>
+  </form>
+
+  <div class="admin-task-log-summary" aria-label="Task summary">
+    <div class="admin-task-log-summary-card">
+      <span class="admin-task-log-summary-label">Total</span>
+      <strong class="admin-task-log-summary-value">{{ summary.total }}</strong>
+    </div>
+    <div class="admin-task-log-summary-card">
+      <span class="admin-task-log-summary-label">Open</span>
+      <strong class="admin-task-log-summary-value">{{ summary.open }}</strong>
+    </div>
+    <div class="admin-task-log-summary-card">
+      <span class="admin-task-log-summary-label">In progress</span>
+      <strong class="admin-task-log-summary-value">{{ summary.in_progress }}</strong>
+    </div>
+    <div class="admin-task-log-summary-card">
+      <span class="admin-task-log-summary-label">Completed</span>
+      <strong class="admin-task-log-summary-value">{{ summary.completed }}</strong>
+    </div>
+    <div class="admin-task-log-summary-card" title="Due dates are not stored on tasks yet">
+      <span class="admin-task-log-summary-label">Overdue</span>
+      <strong class="admin-task-log-summary-value">{{ summary.overdue }}</strong>
+    </div>
+    <div class="admin-task-log-summary-card" title="Due dates are not stored on tasks yet">
+      <span class="admin-task-log-summary-label">Due this week</span>
+      <strong class="admin-task-log-summary-value">{{ summary.due_this_week }}</strong>
+    </div>
+  </div>
+
+  {% if rows %}
+  <div class="admin-table-wrap admin-task-log-table-wrap">
+    <table class="admin-table admin-table--task-log">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Project</th>
+          <th>Requested by</th>
+          <th>Assigned to</th>
+          <th>Task title</th>
+          <th>Status</th>
+          <th>Priority</th>
+          <th>Due date</th>
+          <th>Created</th>
+          <th>Completed</th>
+          <th>Latest update</th>
+          <th>Notes</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="admin-task-log-row{% if row.archived %} is-archived{% endif %}"
+            data-task-id="{{ row.id }}"
+            data-is-conform-task="{{ '1' if row.is_conform_task else '0' }}"
+            data-failure-note-title="{{ row.failure_note_title|e }}"
+            data-failure-note-body="{{ row.failure_note_body|e }}">
+          <td class="admin-task-log-id">#{{ row.id }}</td>
+          <td>
+            {% if row.project_href %}
+            <a href="{{ row.project_href }}">{{ row.project_name or 'No project' }}</a>
+            {% else %}
+            <span class="muted">No project</span>
+            {% endif %}
+          </td>
+          <td class="muted">{{ row.requested_by_name }}</td>
+          <td>{{ row.assignee_name }}</td>
+          <td class="admin-task-log-title">
+            <a href="{{ row.tasks_href }}">{{ row.title }}</a>
+            {% if row.archived %}<span class="admin-task-log-archived-badge">Archived</span>{% endif %}
+            {% if row.is_conform_task %}<span class="admin-task-log-conform-badge">Conform</span>{% endif %}
+            {% if row.failure_note_body %}
+            <button type="button" class="btn btn--small btn--ghost" data-admin-failure-note>Failure note</button>
+            {% endif %}
+          </td>
+          <td>
+            <span class="admin-task-log-status admin-task-log-status--{{ row.status }}">{{ row.status_label }}</span>
+          </td>
+          <td>
+            <span class="admin-task-log-priority admin-task-log-priority--{{ row.priority }}">{{ row.priority_label }}</span>
+          </td>
+          <td class="muted admin-task-log-when">{{ row.due_date }}</td>
+          <td class="admin-task-log-when">{{ row.created_at }}</td>
+          <td class="admin-task-log-when">{{ row.completed_at }}</td>
+          <td class="admin-task-log-when">{{ row.latest_update }}</td>
+          <td class="admin-task-log-notes"{% if row.notes_full %} title="{{ row.notes_full|e }}"{% endif %}>{{ row.notes_preview }}</td>
+          <td class="admin-task-log-actions">
+            <div class="admin-task-log-status-form"
+                 data-status-url="{{ row.status_update_url }}"
+                 data-conform-status-url="{{ row.conform_status_url }}"
+                 data-task-id="{{ row.id }}"
+                 data-is-conform-task="{{ '1' if row.is_conform_task else '0' }}">
+              <select class="admin-task-log-status-select" aria-label="Change status for task {{ row.id }}" data-last-status="{{ row.status }}">
+                {% for key in row.status_options %}
+                <option value="{{ key }}"{% if row.status == key %} selected{% endif %}>{{ status_labels.get(key, key) }}</option>
+                {% endfor %}
+              </select>
+              <button type="button" class="btn btn--small btn--ghost admin-task-log-status-save">Save</button>
+            </div>
+            <div class="admin-task-log-row-links">
+              <a href="{{ row.tasks_href }}">Task</a>
+              {% if row.project_href %}
+              <a href="{{ row.project_href }}">Project</a>
+              {% endif %}
+              {% if row.is_conform_task and row.color_href %}
+              <a href="{{ row.color_href }}">Color</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="users-pagination" aria-label="Task log pagination">
+    {% if page > 1 %}
+    <a class="btn btn--small btn--ghost" href="{{ prev_url }}">Previous</a>
+    {% endif %}
+    <span class="users-pagination-meta muted">Page {{ page }} of {{ pages }} · {{ total }} tasks</span>
+    {% if page < pages %}
+    <a class="btn btn--small btn--ghost" href="{{ next_url }}">Next</a>
+    {% endif %}
+  </nav>
+  {% endif %}
+  {% else %}
+  <p class="muted admin-task-log-empty">No tasks match the current filters.</p>
+  {% endif %}
+
+<dialog class="project-team-modal" id="admin-task-log-failure-note-modal" aria-labelledby="admin-task-log-failure-note-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="admin-task-log-failure-note-title" class="project-team-modal-title">Failure note</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-admin-failure-note-close aria-label="Close">Close</button>
+    </div>
+    <pre id="admin-task-log-failure-note-body" class="admin-task-log-failure-note-body"></pre>
+  </div>
+</dialog>
+{% include "partials/conform_finish_modal.html" %}
+</div>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/admin-task-log.js') }}" defer></script>
+{% endblock %}

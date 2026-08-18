@@ -1,0 +1,20 @@
+{# Access Control admin sidebar. Set `active` to a panel id or 'help'. #}
+<nav class="admin-nav" role="navigation">
+  <a href="{{ url_for('control_panel') }}" class="admin-nav-item admin-nav-item--link">← Task management</a>
+  {% if active == 'help' %}
+  <a href="{{ url_for('control_access_control') }}" class="admin-nav-item admin-nav-item--link">Pages</a>
+  <a href="{{ url_for('control_access_control', section='actions') }}" class="admin-nav-item admin-nav-item--link">Actions</a>
+  <a href="{{ url_for('control_access_control', section='roles') }}" class="admin-nav-item admin-nav-item--link">Role permissions</a>
+  <a href="{{ url_for('control_access_control', section='job-titles') }}" class="admin-nav-item admin-nav-item--link">Job title permissions</a>
+  <a href="{{ url_for('control_access_control', section='overrides') }}" class="admin-nav-item admin-nav-item--link">User overrides</a>
+  <a href="{{ url_for('control_access_control', section='preview') }}" class="admin-nav-item admin-nav-item--link">Permission preview</a>
+  {% else %}
+  <button type="button" class="admin-nav-item{% if active == 'pages' %} is-active{% endif %}" data-ac-nav="pages"{% if active == 'pages' %} aria-current="page"{% endif %}>Pages</button>
+  <button type="button" class="admin-nav-item{% if active == 'actions' %} is-active{% endif %}" data-ac-nav="actions">Actions</button>
+  <button type="button" class="admin-nav-item{% if active == 'roles' %} is-active{% endif %}" data-ac-nav="roles">Role permissions</button>
+  <button type="button" class="admin-nav-item{% if active == 'job-titles' %} is-active{% endif %}" data-ac-nav="job-titles">Job title permissions</button>
+  <button type="button" class="admin-nav-item{% if active == 'overrides' %} is-active{% endif %}" data-ac-nav="overrides">User overrides</button>
+  <button type="button" class="admin-nav-item{% if active == 'preview' %} is-active{% endif %}" data-ac-nav="preview">Permission preview</button>
+  {% endif %}
+  <a href="{{ url_for('control_access_control_help') }}" class="admin-nav-item admin-nav-item--link{% if active == 'help' %} is-active{% endif %}"{% if active == 'help' %} aria-current="page"{% endif %}>Help</a>
+</nav>

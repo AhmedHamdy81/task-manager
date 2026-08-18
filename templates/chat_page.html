@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}Chat · {{ app_name }}{% endblock %}
+{% block body_class %}chat-page{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chat-page.css') }}">
+{% endblock %}
+{% block content %}
+<div
+  id="chat-page-root"
+  class="chat-page-root"
+  data-threads-url="{{ url_for('chat_threads_api') }}"
+  data-viewer-id="{{ directory_chat_user_id if directory_chat_user_id is not none else '' }}"
+  data-initial-project-id="{{ initial_project_id or '' }}"
+  data-initial-thread-id="{{ initial_thread_id or '' }}"
+  data-initial-message-id="{{ initial_message_id or '' }}"
+  data-is-admin="{{ '1' if current_account_is_admin else '0' }}"
+  aria-label="Chat workspace"
+>
+  <aside class="chat-page-sidebar" id="chat-page-sidebar" aria-label="Chat threads">
+    <header class="chat-page-sidebar-head">
+      <div class="chat-page-sidebar-title-row">
+        <h1 class="chat-page-sidebar-title">Chats</h1>
+        <div class="chat-page-sidebar-actions">
+          {% if current_account_is_admin %}
+          <button type="button" class="btn btn--small btn--ghost" id="chat-page-sync-dept-btn" title="Sync department chats">Sync</button>
+          {% endif %}
+          <button type="button" class="btn btn--small btn--ghost" id="chat-page-new-group-btn">New group</button>
+          <button type="button" class="btn btn--small btn--primary" id="chat-page-new-dm-btn">New message</button>
+        </div>
+      </div>
+      <label class="chat-page-search">
+        <span class="visually-hidden">Search chats</span>
+        <input type="search" id="chat-page-thread-search" class="chat-page-search-input" placeholder="Search chats…" autocomplete="off">
+      </label>
+      <div class="chat-page-global-search-results" id="chat-page-global-search-results" hidden></div>
+    </header>
+    <div class="chat-page-thread-list" id="chat-page-thread-list" role="listbox" aria-label="Chat threads"></div>
+    <p class="chat-page-empty chat-page-empty--threads muted" id="chat-page-threads-empty" hidden>No chats yet. Start a direct message or join a project team.</p>
+  </aside>
+
+  <main class="chat-page-main" id="chat-page-main" aria-label="Conversation">
+    <div class="chat-page-placeholder" id="chat-page-placeholder">
+      <div class="chat-page-placeholder-inner">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <h2>Select a chat</h2>
+        <p class="muted">Choose a direct message, group, department, or project chat from the left.</p>
+      </div>
+    </div>
+
+    <div class="chat-page-conversation" id="chat-page-conversation" hidden>
+      <header class="chat-page-conv-head">
+        <button type="button" class="chat-page-back-btn" id="chat-page-back-btn" aria-label="Back to thread list">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        <div class="chat-page-conv-head-main">
+          <div class="chat-page-conv-avatar chat-avatar" id="chat-page-conv-avatar" aria-hidden="true"><span class="chat-avatar-initial">?</span></div>
+          <div class="chat-page-conv-head-text">
+            <h2 class="chat-page-conv-title" id="chat-page-conv-title">Project</h2>
+            <p class="chat-page-conv-meta muted" id="chat-page-conv-meta"></p>
+          </div>
+        </div>
+        <div class="chat-page-conv-head-actions">
+          <div class="chat-page-call-actions" id="chat-page-call-actions" hidden>
+            <button type="button" class="btn btn--small btn--ghost chat-page-call-menu-btn" id="chat-page-call-menu-btn" aria-haspopup="true" aria-expanded="false" title="Call options">Call ▾</button>
+            <div class="chat-page-call-menu" id="chat-page-call-menu" hidden role="menu">
+              <button type="button" class="chat-page-call-menu-item" id="chat-page-call-start" role="menuitem">Start instant call</button>
+              <button type="button" class="chat-page-call-menu-item" id="chat-page-call-schedule" role="menuitem">Schedule conference</button>
+            </div>
+          </div>
+          <button type="button" class="btn btn--small btn--ghost" id="chat-page-jump-unread-btn" hidden>Jump to first unread</button>
+          <label class="chat-page-msg-search">
+            <span class="visually-hidden">Search in conversation</span>
+            <input type="search" id="chat-page-msg-search" class="chat-page-msg-search-input" placeholder="Search messages…" autocomplete="off">
+          </label>
+          <button type="button" class="btn btn--small btn--ghost" id="chat-page-pinned-btn">Pinned</button>
+          <button type="button" class="btn btn--small btn--ghost" id="chat-page-attachments-btn">Attachments</button>
+          <a class="btn btn--small btn--ghost chat-page-open-project" id="chat-page-open-project" href="#">Open project</a>
+          <button type="button" class="btn btn--small btn--ghost" id="chat-page-team-btn">Team</button>
+        </div>
+      </header>
+
+      <button type="button" class="chat-page-new-msgs-btn" id="chat-page-new-msgs-btn" hidden>New messages</button>
+
+      <div class="chat-page-live-call-banner" id="chat-page-live-call-banner" hidden>
+        <span class="chat-page-live-call-banner__text">Live call in progress</span>
+        <button type="button" class="btn btn--small btn--primary" id="chat-page-live-call-join">Join call</button>
+      </div>
+
+      <div class="chat-page-messages project-chat-stream" id="chat-page-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+
+      <footer class="chat-page-composer">
+        <p class="chat-page-composer-error muted" id="chat-page-composer-error" hidden></p>
+        <p class="chat-page-typing-indicator muted" id="chat-page-typing-indicator" hidden aria-live="polite"></p>
+        <div class="chat-page-reply-preview" id="chat-page-reply-preview" hidden>
+          <div class="chat-page-reply-preview-inner">
+            <span class="chat-page-reply-preview-label" id="chat-page-reply-preview-label">Replying to</span>
+            <span class="chat-page-reply-preview-text" id="chat-page-reply-preview-text"></span>
+          </div>
+          <button type="button" class="chat-page-reply-preview-close" id="chat-page-reply-cancel" aria-label="Cancel reply">&times;</button>
+        </div>
+        <form class="chat-page-composer-form project-chat-composer" id="chat-page-composer-form">
+          <div class="chat-page-composer-toolbar">
+            <input type="file" id="chat-page-file-image" accept="image/png,image/jpeg,image/jpg,image/webp" hidden>
+            <button type="button" class="chat-page-composer-btn" id="chat-page-btn-image" title="Attach image" aria-label="Attach image">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            </button>
+            <button type="button" class="chat-page-composer-btn" id="chat-page-btn-voice" title="Record voice note" aria-label="Record voice note">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg>
+            </button>
+          </div>
+          <div class="project-chat-composer-field chat-page-composer-field">
+            <textarea id="chat-page-composer-input" class="project-chat-composer-input chat-page-composer-input" rows="3" placeholder="Message… (Enter to send, Shift+Enter for new line)" aria-label="Message"></textarea>
+            <ul class="project-chat-mention-suggestions chat-page-mention-list" id="chat-page-mention-list" role="listbox" hidden></ul>
+          </div>
+          <button type="submit" class="btn btn--primary chat-page-send-btn" id="chat-page-send-btn" aria-label="Send message">Send</button>
+        </form>
+      </footer>
+    </div>
+  </main>
+</div>
+
+<div class="chat-page-lightbox" id="chat-page-lightbox" hidden role="dialog" aria-modal="true" aria-label="Image preview">
+  <button type="button" class="chat-page-lightbox-close" id="chat-page-lightbox-close" aria-label="Close preview">&times;</button>
+  <img class="chat-page-lightbox-img" id="chat-page-lightbox-img" alt="">
+</div>
+
+<dialog class="project-team-modal chat-page-team-dialog" id="chat-page-team-dialog" aria-labelledby="chat-page-team-dialog-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="chat-page-team-dialog-title" class="project-team-modal-title">Project team</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-chat-page-team-close aria-label="Close">Close</button>
+    </div>
+    <p class="muted project-team-modal-lede" id="chat-page-team-dialog-meta"></p>
+    <ul class="project-team-list project-team-list--modal chat-page-team-list" id="chat-page-team-list"></ul>
+    <p class="empty chat-page-team-empty muted" id="chat-page-team-empty" hidden>No team members on this project.</p>
+  </div>
+</dialog>
+
+<dialog class="chat-page-pinned-dialog" id="chat-page-pinned-dialog" aria-labelledby="chat-page-pinned-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="chat-page-pinned-title" class="project-team-modal-title">Pinned messages</h2>
+      <button type="button" class="btn btn--small btn--ghost" onclick="this.closest('dialog').close()">Close</button>
+    </div>
+    <ul class="chat-page-pinned-list" id="chat-page-pinned-list"></ul>
+  </div>
+</dialog>
+
+<dialog class="chat-page-attachments-dialog" id="chat-page-attachments-dialog" aria-labelledby="chat-page-attachments-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="chat-page-attachments-title" class="project-team-modal-title">Attachments</h2>
+      <button type="button" class="btn btn--small btn--ghost" onclick="this.closest('dialog').close()">Close</button>
+    </div>
+    <div class="chat-page-attach-tabs">
+      <button type="button" class="chat-page-attach-tab is-active" data-chat-attach-tab="all">All</button>
+      <button type="button" class="chat-page-attach-tab" data-chat-attach-tab="image">Images</button>
+      <button type="button" class="chat-page-attach-tab" data-chat-attach-tab="audio">Audio</button>
+    </div>
+    <div class="chat-page-attachments-list" id="chat-page-attachments-list"></div>
+  </div>
+</dialog>
+
+<dialog class="chat-page-new-dm-dialog" id="chat-page-new-dm-dialog" aria-labelledby="chat-page-new-dm-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="chat-page-new-dm-title" class="project-team-modal-title">New message</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-chat-page-new-dm-close aria-label="Close">Close</button>
+    </div>
+    <label class="chat-page-search">
+      <span class="visually-hidden">Search people</span>
+      <input type="search" id="chat-page-new-dm-search" class="chat-page-search-input" placeholder="Search people…" autocomplete="off">
+    </label>
+    <div class="chat-page-new-dm-list" id="chat-page-new-dm-list" role="listbox" aria-label="People"></div>
+    <p class="empty muted" id="chat-page-new-dm-empty" hidden>No people found.</p>
+  </div>
+</dialog>
+
+<dialog class="chat-page-new-dm-dialog" id="chat-page-new-group-dialog" aria-labelledby="chat-page-new-group-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="chat-page-new-group-title" class="project-team-modal-title">New group</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-chat-page-new-group-close aria-label="Close">Close</button>
+    </div>
+    <label class="chat-page-field">
+      <span class="chat-page-field-label">Group name</span>
+      <input type="text" id="chat-page-new-group-name" class="chat-page-search-input" placeholder="Editorial follow-up" required>
+    </label>
+    <label class="chat-page-field">
+      <span class="chat-page-field-label">Description (optional)</span>
+      <input type="text" id="chat-page-new-group-description" class="chat-page-search-input" placeholder="What is this group for?">
+    </label>
+    <div class="chat-page-new-group-chips" id="chat-page-new-group-chips"></div>
+    <label class="chat-page-search">
+      <span class="visually-hidden">Search people</span>
+      <input type="search" id="chat-page-new-group-search" class="chat-page-search-input" placeholder="Add people…" autocomplete="off">
+    </label>
+    <div class="chat-page-new-dm-list" id="chat-page-new-group-user-list" role="listbox" aria-label="People"></div>
+    <button type="button" class="btn btn--primary" id="chat-page-new-group-create">Create group</button>
+  </div>
+</dialog>
+
+<dialog class="chat-page-new-dm-dialog" id="chat-conf-instant-dialog" aria-labelledby="chat-conf-instant-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="chat-conf-instant-title" class="project-team-modal-title">Start instant call</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-chat-conf-instant-close aria-label="Close">Close</button>
+    </div>
+    <form id="chat-conf-instant-form" class="chat-conf-form">
+      <label class="chat-page-field">
+        <span class="chat-page-field-label">Title</span>
+        <input type="text" id="chat-conf-instant-title-input" class="chat-page-search-input" placeholder="Quick call">
+      </label>
+      <label class="chat-page-field">
+        <span class="chat-page-field-label">Provider</span>
+        <select id="chat-conf-instant-provider" class="chat-page-search-input">
+          <option value="embedded_jitsi" selected>In-app call (Jitsi)</option>
+          <option value="external_link">External meeting link</option>
+        </select>
+      </label>
+      <label class="chat-page-field" id="chat-conf-instant-url-wrap" hidden>
+        <span class="chat-page-field-label">Meeting URL (https)</span>
+        <input type="url" id="chat-conf-instant-url" class="chat-page-search-input" placeholder="https://meet.google.com/...">
+      </label>
+      <fieldset class="chat-conf-participants-field">
+        <legend class="chat-page-field-label">Participants</legend>
+        <div id="chat-conf-instant-participants" class="chat-conf-participants-list"></div>
+      </fieldset>
+      <button type="submit" class="btn btn--primary" id="chat-page-call-btn">Start call</button>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="chat-page-new-dm-dialog" id="chat-conf-schedule-dialog" aria-labelledby="chat-conf-schedule-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="chat-conf-schedule-title" class="project-team-modal-title">Schedule conference</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-chat-conf-schedule-close aria-label="Close">Close</button>
+    </div>
+    <form id="chat-conf-schedule-form" class="chat-conf-form">
+      <label class="chat-page-field">
+        <span class="chat-page-field-label">Title</span>
+        <input type="text" id="chat-conf-schedule-title-input" class="chat-page-search-input" placeholder="Review call" required>
+      </label>
+      <label class="chat-page-field">
+        <span class="chat-page-field-label">Description</span>
+        <input type="text" id="chat-conf-schedule-desc" class="chat-page-search-input" placeholder="Optional">
+      </label>
+      <div class="chat-conf-schedule-row">
+        <label class="chat-page-field">
+          <span class="chat-page-field-label">Date</span>
+          <input type="date" id="chat-conf-schedule-date" class="chat-page-search-input" required>
+        </label>
+        <label class="chat-page-field">
+          <span class="chat-page-field-label">Time</span>
+          <input type="time" id="chat-conf-schedule-time" class="chat-page-search-input" required>
+        </label>
+      </div>
+      <label class="chat-page-field">
+        <span class="chat-page-field-label">Provider</span>
+        <select id="chat-conf-schedule-provider" class="chat-page-search-input">
+          <option value="embedded_jitsi" selected>In-app call (Jitsi)</option>
+          <option value="external_link">External meeting link</option>
+        </select>
+      </label>
+      <label class="chat-page-field" id="chat-conf-schedule-url-wrap" hidden>
+        <span class="chat-page-field-label">Meeting URL (https)</span>
+        <input type="url" id="chat-conf-schedule-url" class="chat-page-search-input" placeholder="https://...">
+      </label>
+      <fieldset class="chat-conf-participants-field">
+        <legend class="chat-page-field-label">Participants</legend>
+        <div id="chat-conf-schedule-participants" class="chat-conf-participants-list"></div>
+      </fieldset>
+      <button type="submit" class="btn btn--primary">Schedule</button>
+    </form>
+  </div>
+</dialog>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/chat/chat-conference-ui.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/chat-page.js') }}" defer></script>
+{% endblock %}

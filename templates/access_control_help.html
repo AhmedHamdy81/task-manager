@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Access Control Help · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine-room-dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/admin-task-mgmt.css') }}">
+{% endblock %}
+{% block body_class %}access-control-workspace mr-help-page{% endblock %}
+{% block content %}
+<button type="button" class="admin-sidebar-backdrop" id="admin-sidebar-backdrop" tabindex="-1" aria-label="Close menu" hidden></button>
+<div class="admin-shell access-control-shell">
+  <aside class="admin-sidebar" id="admin-sidebar" aria-label="Admin navigation">
+    <div class="admin-sidebar-head">
+      <span class="admin-sidebar-label">Admin</span>
+      <p class="admin-sidebar-title">Access Control</p>
+    </div>
+    {% set active = 'help' %}
+    {% include "partials/access_control_nav.html" %}
+  </aside>
+
+  <div class="admin-main">
+    <header class="access-control-head">
+      <button type="button" class="admin-sidebar-toggle" id="admin-sidebar-toggle" aria-expanded="false" aria-controls="admin-sidebar" aria-label="Open admin menu">
+        <span class="admin-sidebar-toggle-icon" aria-hidden="true"></span>
+      </button>
+      <div>
+        <h1 class="admin-section-title">Access Control Help</h1>
+        <p class="muted access-control-lede">How pages, actions, roles, job titles, and user overrides combine — with screenshots of each screen.</p>
+      </div>
+      <div class="access-control-head-actions">
+        <a class="btn btn--ghost" href="{{ url_for('control_access_control') }}">Back to Access Control</a>
+      </div>
+    </header>
+    {% include "partials/access_control_help_content.html" %}
+  </div>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+(function () {
+  var sidebar = document.getElementById("admin-sidebar");
+  var toggle = document.getElementById("admin-sidebar-toggle");
+  var backdrop = document.getElementById("admin-sidebar-backdrop");
+  if (!sidebar) return;
+  function close() {
+    sidebar.classList.remove("is-open");
+    document.body.classList.remove("admin-sidebar-open");
+    if (toggle) toggle.setAttribute("aria-expanded", "false");
+    if (backdrop) {
+      backdrop.setAttribute("hidden", "");
+      backdrop.setAttribute("aria-hidden", "true");
+    }
+  }
+  function open() {
+    sidebar.classList.add("is-open");
+    document.body.classList.add("admin-sidebar-open");
+    if (toggle) toggle.setAttribute("aria-expanded", "true");
+    if (backdrop) {
+      backdrop.removeAttribute("hidden");
+      backdrop.setAttribute("aria-hidden", "false");
+    }
+  }
+  if (toggle) {
+    toggle.addEventListener("click", function () {
+      if (sidebar.classList.contains("is-open")) close();
+      else open();
+    });
+  }
+  if (backdrop) backdrop.addEventListener("click", close);
+})();
+</script>
+{% endblock %}

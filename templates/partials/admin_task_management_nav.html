@@ -1,0 +1,18 @@
+{# Shared Task management top nav. Set `active` to 'post-scopes', 'all-tasks', or 'task-log'. #}
+<nav class="admin-nav admin-nav--bar" role="navigation" aria-label="Task management">
+  {% if active == 'task-log' %}
+  <a href="{{ url_for('control_panel') }}" class="admin-nav-item admin-nav-item--link">Post-production scopes</a>
+  {% if current_account_is_admin %}
+  <a href="{{ url_for('control_panel', section='all-tasks') }}" class="admin-nav-item admin-nav-item--link">List All tasks</a>
+  {% endif %}
+  {% else %}
+  <button type="button" class="admin-nav-item{% if active != 'all-tasks' %} is-active{% endif %}" data-admin-nav="post-scopes"{% if active != 'all-tasks' %} aria-current="page"{% endif %}>Post-production scopes</button>
+  {% if current_account_is_admin %}
+  <button type="button" class="admin-nav-item{% if active == 'all-tasks' %} is-active{% endif %}" data-admin-nav="all-tasks"{% if active == 'all-tasks' %} aria-current="page"{% endif %}>List All tasks</button>
+  {% endif %}
+  {% endif %}
+  {% if current_account_is_admin and can("task_log", "view") %}
+  <a href="{{ url_for('admin_task_log') }}" class="admin-nav-item admin-nav-item--link{% if active == 'task-log' %} is-active{% endif %}"{% if active == 'task-log' %} aria-current="page"{% endif %}>Task Log</a>
+  {% endif %}
+  <span class="admin-nav-item admin-nav-item--placeholder" aria-disabled="true">Settings <span class="admin-nav-soon">Soon</span></span>
+</nav>

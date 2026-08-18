@@ -1,214 +1,104 @@
 {% extends "base.html" %}
-{% block title %}Control panel · {{ app_name }}{% endblock %}
+{% block title %}Task management · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/admin-task-mgmt.css') }}">
+{% endblock %}
 {% block content %}
-<button type="button" class="admin-sidebar-backdrop" id="admin-sidebar-backdrop" tabindex="-1" aria-label="Close menu" hidden></button>
-<div class="admin-shell">
-  <aside class="admin-sidebar" id="admin-sidebar" aria-label="Admin navigation">
-    <div class="admin-sidebar-head">
-      <span class="admin-sidebar-label">Admin</span>
-      <p class="admin-sidebar-title">Control panel</p>
-    </div>
-    <nav class="admin-nav" role="navigation">
-      <button type="button" class="admin-nav-item is-active" data-admin-nav="task-groups" aria-current="page">Task groups</button>
-      <button type="button" class="admin-nav-item" data-admin-nav="task-titles">Task titles</button>
-      <button type="button" class="admin-nav-item" data-admin-nav="job-titles">Job titles</button>
-      {% if current_account_is_admin %}
-      <button type="button" class="admin-nav-item" data-admin-nav="edit-suites">Edit suites</button>
-      <button type="button" class="admin-nav-item" data-admin-nav="all-tasks">List All tasks</button>
-      <a href="{{ url_for('users_list') }}" class="admin-nav-item admin-nav-item--link">Users</a>
-      {% endif %}
-      <span class="admin-nav-item admin-nav-item--placeholder" aria-disabled="true">Settings <span class="admin-nav-soon">Soon</span></span>
-    </nav>
-  </aside>
-
-  <div class="admin-main">
-
-    <div class="admin-panel-stack" id="admin-panel-stack">
-      {# —— Task groups —— #}
-      <div class="admin-section" data-admin-panel="task-groups">
+<div class="admin-shell admin-shell--bar">
+  {% set active = 'all-tasks' if request.args.get('section') == 'all-tasks' else 'post-scopes' %}
+  {% include "partials/admin_task_management_nav.html" %}
+  <div class="admin-panel-stack" id="admin-panel-stack">
+      {# —— Post-production scopes —— #}
+      <div class="admin-section" data-admin-panel="post-scopes">
         <header class="admin-section-head">
-          <h1 class="admin-section-title">Task groups</h1>
-          <p class="muted admin-section-lead">Create and order groups. On the Tasks page, users pick a group first, then a title within that group.</p>
-        </header>
-
-        <section class="panel admin-card">
-          <h2 class="panel-title">Add task group</h2>
-          <form class="form-row" method="post" action="{{ url_for('control_groups_new') }}">
-            <label class="field field--grow">
-              <span class="field-label">Group name</span>
-              <input type="text" name="name" required maxlength="120" placeholder="e.g. Compositing">
-            </label>
-            <button type="submit" class="btn btn--primary">Add group</button>
-          </form>
-        </section>
-
-        {% for g in groups %}
-        <section class="panel admin-card control-group-panel">
-          <div class="control-group-head">
-            <form class="control-rename-form" method="post" action="{{ url_for('control_groups_rename', group_id=g.id) }}">
-              <label class="field field--inline">
-                <span class="field-label sr-only">Group name</span>
-                <input type="text" name="name" value="{{ g.name }}" required maxlength="120" class="input-rename">
-              </label>
-              <button type="submit" class="btn btn--small">Save name</button>
-            </form>
-            <div class="control-group-actions">
-              <form method="post" action="{{ url_for('control_groups_move', group_id=g.id) }}" class="inline">
-                <input type="hidden" name="direction" value="up">
-                <button type="submit" class="btn btn--small" {% if loop.first %}disabled{% endif %} title="Move up">↑</button>
-              </form>
-              <form method="post" action="{{ url_for('control_groups_move', group_id=g.id) }}" class="inline">
-                <input type="hidden" name="direction" value="down">
-                <button type="submit" class="btn btn--small" {% if loop.last %}disabled{% endif %} title="Move down">↓</button>
-              </form>
-              <form method="post" action="{{ url_for('control_groups_delete', group_id=g.id) }}" class="inline" data-confirm="{{ ('Are you sure you want to delete the group “' ~ g.name ~ '”, all of its task title presets, and uncategorize existing tasks in that group? This cannot be undone.')|e }}">
-                <button type="submit" class="btn btn--small btn--danger">Delete group</button>
-              </form>
-            </div>
+          <div class="admin-section-head-text">
+            <h1 class="admin-section-title">Post-production scopes</h1>
+            <p class="muted admin-section-lead">Add task title presets under each scope. When creating tasks, users pick a scope first, then a title within that scope.</p>
           </div>
-        </section>
-        {% endfor %}
-
-        {% if not groups %}
-        <section class="panel admin-card">
-          <p class="empty">No task groups yet. Create one above.</p>
-        </section>
-        {% endif %}
-      </div>
-
-      {# —— Task titles (per group) —— #}
-      <div class="admin-section" data-admin-panel="task-titles" hidden>
-        <header class="admin-section-head">
-          <h1 class="admin-section-title">Task titles</h1>
-          <p class="muted admin-section-lead">Preset titles inside each group. These appear when creating tasks.</p>
+          <div class="admin-section-actions">
+            <form method="post" action="{{ url_for('control_scope_titles_restore_all') }}" class="admin-scope-restore-all">
+              <button type="submit" class="btn btn--small btn--ghost" data-confirm="Add any missing default task titles for all scopes? Custom titles are kept.">Restore default task titles</button>
+            </form>
+          </div>
         </header>
 
-        {% for g in groups %}
-        <section class="panel admin-card control-group-panel">
-          <h2 class="panel-title admin-group-heading">{{ g.name }}</h2>
-          <div class="control-tasks-block">
-            <h3 class="control-subtitle">Titles in this group</h3>
-            {% set gpresets = presets_by_group.get(g.id, []) %}
-            {% if gpresets %}
-            <ul class="control-task-list">
-              {% for pt in gpresets %}
-              <li class="control-task-row">
-                <span class="control-task-title">{{ pt.title }}</span>
-                {% if pt.description %}<span class="control-task-desc">{{ pt.description }}</span>{% endif %}
-                <form method="post" action="{{ url_for('control_title_delete', title_id=pt.id) }}" class="inline" data-confirm="{{ ('Remove the task title “' ~ pt.title ~ '” from this group? Tasks already created from this title are not deleted.')|e }}">
-                  <button type="submit" class="btn btn--small btn--danger">Remove</button>
-                </form>
-              </li>
-              {% endfor %}
-            </ul>
-            {% else %}
-            <p class="empty empty--tight">No task titles yet. Add one below.</p>
-            {% endif %}
-
-            <form class="form-stack control-add-task" method="post" action="{{ url_for('control_title_new') }}">
-              <input type="hidden" name="group_id" value="{{ g.id }}">
-              <h4 class="control-single-title">Add a title</h4>
-              <div class="form-row form-row--tight">
-                <label class="field field--grow">
-                  <span class="field-label">Task title</span>
-                  <input type="text" name="title" required maxlength="200" placeholder="Task name">
-                </label>
+        {% for key, label, hint in task_preset_scope_fields %}
+        {% set scope_group = scope_groups.get(key) %}
+        {% set spresets = presets_by_group.get(scope_group.id, []) if scope_group else [] %}
+        <section class="panel admin-card control-group-panel control-scope-panel">
+          <details class="control-scope-details"{% if loop.first %} open{% endif %}>
+            <summary class="control-scope-summary">
+              <div class="control-scope-heading">
+                <h2 class="panel-title admin-group-heading">{{ label }}</h2>
+                {% if hint %}<p class="muted control-scope-hint">{{ hint }}</p>{% endif %}
               </div>
-              <label class="field">
-                <span class="field-label">Description (optional)</span>
-                <textarea name="description" rows="2" placeholder="Default notes when this title is used"></textarea>
-              </label>
-              <button type="submit" class="btn btn--ghost">Add one title</button>
-            </form>
-          </div>
+              <div class="control-scope-summary-meta">
+                {% if spresets %}
+                <span class="control-scope-count">{{ spresets|length }} title{% if spresets|length != 1 %}s{% endif %}</span>
+                {% endif %}
+                <span class="control-scope-chevron" aria-hidden="true"></span>
+              </div>
+            </summary>
+            <div class="control-tasks-block">
+              {% set emp_for_scope = scope_employment_reverse.get(key, []) if scope_employment_reverse is defined else [] %}
+              {% if emp_for_scope %}
+              <div class="control-scope-employment">
+                <h3 class="control-subtitle">Allowed employment categories</h3>
+                <ul class="control-scope-employment-list">
+                  {% for emp in emp_for_scope %}
+                  <li class="control-scope-employment-item">
+                    <span class="emp-badge {{ emp.badge_class }}">{{ emp.name }}</span>
+                    <span class="muted control-scope-employment-level">{{ emp.access_level|replace('_', ' ') }}</span>
+                  </li>
+                  {% endfor %}
+                </ul>
+                <p class="muted control-scope-employment-link"><a href="{{ employment_structure_url }}">Manage in Employment structure</a></p>
+              </div>
+              {% endif %}
+              <h3 class="control-subtitle">Task titles in this scope</h3>
+              {% if spresets %}
+              <ul class="control-task-list">
+                {% for pt in spresets %}
+                <li class="control-task-row">
+                  <span class="control-task-title">{{ pt.title }}</span>
+                  {% if pt.description %}<span class="control-task-desc">{{ pt.description }}</span>{% endif %}
+                  <form method="post" action="{{ url_for('control_title_delete', title_id=pt.id) }}" class="inline" data-confirm="{{ ('Remove the task title “' ~ pt.title ~ '” from this scope? Tasks already created from this title are not deleted.')|e }}">
+                    <button type="submit" class="btn btn--small btn--danger">Remove</button>
+                  </form>
+                </li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <p class="empty empty--tight">No task titles yet. Add one below.</p>
+              {% endif %}
+
+              {% if scope_group %}
+              <form method="post" action="{{ url_for('control_scope_titles_restore_scope', scope_key=key) }}" class="inline control-scope-restore">
+                <button type="submit" class="btn btn--small btn--ghost" data-confirm="Add missing default titles for {{ label }}? Custom titles are kept.">Restore defaults for this scope</button>
+              </form>
+              <form class="form-stack control-add-task" method="post" action="{{ url_for('control_title_new') }}">
+                <input type="hidden" name="post_scope_key" value="{{ key }}">
+                <h4 class="control-single-title">Add a task title</h4>
+                <div class="form-row form-row--tight">
+                  <label class="field field--grow">
+                    <span class="field-label">Task title</span>
+                    <input type="text" name="title" required maxlength="200" placeholder="Task name">
+                  </label>
+                </div>
+                <label class="field">
+                  <span class="field-label">Description (optional)</span>
+                  <textarea name="description" rows="2" placeholder="Default notes when this title is used"></textarea>
+                </label>
+                <button type="submit" class="btn btn--ghost">Add title</button>
+              </form>
+              {% endif %}
+            </div>
+          </details>
         </section>
         {% endfor %}
-
-        {% if not groups %}
-        <section class="panel admin-card">
-          <p class="empty">No task groups yet. Add a group under <strong>Task groups</strong> first.</p>
-        </section>
-        {% endif %}
-      </div>
-
-      {# —— Job titles —— #}
-      <div class="admin-section" data-admin-panel="job-titles" hidden>
-        <header class="admin-section-head">
-          <h1 class="admin-section-title">Job titles</h1>
-          <p class="muted admin-section-lead">Directory roles (e.g. Editor, Colorist) for user profiles. Separate from task groups and task titles.</p>
-        </header>
-
-        <section class="panel admin-card">
-          {% if job_titles %}
-          <ul class="control-task-list">
-            {% for jt in job_titles %}
-            <li class="control-task-row control-job-title-row">
-              <form class="control-job-title-rename form-row form-row--tight" method="post" action="{{ url_for('control_job_title_rename', job_title_id=jt.id) }}">
-                <label class="field field--grow field--inline">
-                  <span class="field-label sr-only">Job title name</span>
-                  <input type="text" name="name" value="{{ jt.name }}" required maxlength="120" class="input-rename">
-                </label>
-                <button type="submit" class="btn btn--small">Save</button>
-              </form>
-              <form method="post" action="{{ url_for('control_job_title_delete', job_title_id=jt.id) }}" class="inline" data-confirm="{{ ('Delete the job title “' ~ jt.name ~ '”? Users who selected it will have no job title.')|e }}">
-                <button type="submit" class="btn btn--small btn--danger">Delete</button>
-              </form>
-            </li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="empty empty--tight">No job titles yet. Add one below.</p>
-          {% endif %}
-          <form class="form-row control-job-title-add" method="post" action="{{ url_for('control_job_title_new') }}">
-            <label class="field field--grow">
-              <span class="field-label">New job title</span>
-              <input type="text" name="name" required maxlength="120" placeholder="e.g. Colorist">
-            </label>
-            <button type="submit" class="btn btn--primary">Add</button>
-          </form>
-        </section>
       </div>
 
       {% if current_account_is_admin %}
-      <div class="admin-section" data-admin-panel="edit-suites" hidden>
-        <header class="admin-section-head">
-          <h1 class="admin-section-title">Edit suites</h1>
-          <p class="muted admin-section-lead">Rooms users can reserve on the Booking page. Deactivate a suite to hide it from new bookings (existing rows stay in history).</p>
-        </header>
-        <section class="panel admin-card">
-          <div class="booking-edit-suites-head">
-            <button
-              type="button"
-              class="btn btn--primary"
-              id="edit-suite-add-btn"
-              data-api-base="{{ url_for('booking.edit_suites_list') }}"
-            >+ Add suite</button>
-          </div>
-          <div class="booking-suite-head-row" aria-hidden="true">
-            <span>Suite name</span>
-            <span>Status</span>
-            <span class="booking-suite-head-actions">Actions</span>
-          </div>
-          <ul id="edit-suites-list" class="booking-suite-list booking-suite-list--admin" role="list"></ul>
-          <p id="edit-suites-empty" class="empty empty--tight" hidden>No edit suites yet.</p>
-          <p id="edit-suites-error" class="form-error" hidden></p>
-        </section>
-
-        <dialog class="booking-suite-dialog" id="edit-suite-modal" aria-labelledby="edit-suite-modal-title">
-          <div class="booking-suite-dialog-inner">
-            <h2 id="edit-suite-modal-title" class="booking-suite-dialog-title">Add suite</h2>
-            <label class="field booking-field booking-field--grow">
-              <span class="field-label">Suite name</span>
-              <input type="text" id="edit-suite-name" maxlength="200" class="booking-input" placeholder="e.g. Color 1" autocomplete="off">
-            </label>
-            <div class="booking-suite-dialog-actions">
-              <button type="button" class="btn btn--primary" id="edit-suite-save">Save</button>
-              <button type="button" class="btn btn--ghost" id="edit-suite-cancel">Cancel</button>
-            </div>
-          </div>
-        </dialog>
-      </div>
-
       <div class="admin-section" data-admin-panel="all-tasks" hidden>
         <header class="admin-section-head">
           <h1 class="admin-section-title">All tasks</h1>
@@ -219,8 +109,21 @@
         <script type="application/json" id="admin-tasks-boot">{{ admin_all_tasks_boot | tojson | safe }}</script>
         {% endif %}
 
-        <section class="panel admin-card">
+        <section class="panel admin-card admin-tasks-filters">
           <div id="task-filter-form" class="admin-tasks-filter-form" role="search" aria-label="Filter tasks">
+            <label class="field admin-tasks-filter-field">
+              <span class="field-label">Scope</span>
+              <select id="scope-filter" class="admin-tasks-filter-select" aria-label="Post-production scope">
+                <option value="">All scopes</option>
+                <option value="__post_scopes__">All post-production scopes</option>
+              </select>
+            </label>
+            <label class="field admin-tasks-filter-field">
+              <span class="field-label">Project</span>
+              <select id="project-filter" class="admin-tasks-filter-select" aria-label="Project">
+                <option value="">All projects</option>
+              </select>
+            </label>
             <label class="field admin-tasks-filter-field admin-tasks-filter-field--status">
               <span class="field-label">Status</span>
               <select id="status-filter" class="admin-tasks-filter-select" aria-label="Task status">
@@ -230,32 +133,85 @@
                 <option value="done" {% if admin_task_status == 'done' %}selected{% endif %}>Done</option>
               </select>
             </label>
+            <label class="field admin-tasks-filter-field">
+              <span class="field-label">Priority</span>
+              <select id="priority-filter" class="admin-tasks-filter-select" aria-label="Priority">
+                <option value="">All</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label class="field admin-tasks-filter-field">
+              <span class="field-label">Requested by</span>
+              <select id="requested-by-filter" class="admin-tasks-filter-select" aria-label="Requested by">
+                <option value="">Anyone</option>
+              </select>
+            </label>
+            <label class="field admin-tasks-filter-field">
+              <span class="field-label">Assigned to</span>
+              <select id="assigned-to-filter" class="admin-tasks-filter-select" aria-label="Assigned to">
+                <option value="">Anyone</option>
+              </select>
+            </label>
+            <label class="field admin-tasks-filter-field admin-tasks-filter-field--date">
+              <span class="field-label">Due from</span>
+              <input type="date" id="due-from-filter" class="admin-tasks-filter-select">
+            </label>
+            <label class="field admin-tasks-filter-field admin-tasks-filter-field--date">
+              <span class="field-label">Due to</span>
+              <input type="date" id="due-to-filter" class="admin-tasks-filter-select">
+            </label>
+            <label class="admin-tasks-filter-field admin-tasks-filter-toggle">
+              <span class="field-label">Completed</span>
+              <input type="checkbox" id="include-completed-filter" class="admin-tasks-filter-toggle__input" checked>
+              <span class="admin-tasks-filter-toggle__btn">Show completed</span>
+            </label>
             <label class="field admin-tasks-filter-field admin-tasks-filter-field--search">
               <span class="field-label">Search</span>
               <input
                 type="search"
                 id="search-input"
                 class="admin-tasks-filter-search"
-                placeholder="Project or user…"
+                placeholder="Search title, scope, project, people, editing item…"
                 autocomplete="off"
                 value="{{ request.args.get('search','') }}"
-                aria-label="Search by project or user">
+                aria-label="Search tasks">
             </label>
           </div>
         </section>
 
         <section class="panel admin-card admin-tasks-sortbar">
           <div class="admin-tasks-sortbar-row">
-            <span class="muted admin-tasks-sortbar-label">Sort:</span>
+            <span class="admin-tasks-sortbar-label">Sort:</span>
+            <button type="button" class="sort-btn" data-field="id" data-direction="" aria-pressed="false">ID <span class="arrow" aria-hidden="true"></span></button>
             <button type="button" class="sort-btn" data-field="task" data-direction="" aria-pressed="false">Task <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="scope" data-direction="" aria-pressed="false">Scope <span class="arrow" aria-hidden="true"></span></button>
             <button type="button" class="sort-btn" data-field="project" data-direction="" aria-pressed="false">Project <span class="arrow" aria-hidden="true"></span></button>
-            <button type="button" class="sort-btn" data-field="user" data-direction="" aria-pressed="false">User <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="editing_item" data-direction="" aria-pressed="false">Editing item <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="requested_by" data-direction="" aria-pressed="false">Requested by <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="assigned_to" data-direction="" aria-pressed="false">Assigned to <span class="arrow" aria-hidden="true"></span></button>
             <button type="button" class="sort-btn" data-field="status" data-direction="" aria-pressed="false">Status <span class="arrow" aria-hidden="true"></span></button>
             <button type="button" class="sort-btn" data-field="priority" data-direction="" aria-pressed="false">Priority <span class="arrow" aria-hidden="true"></span></button>
+            <button type="button" class="sort-btn" data-field="due_date" data-direction="" aria-pressed="false">Due date <span class="arrow" aria-hidden="true"></span></button>
           </div>
         </section>
 
         <section class="admin-tasks-list" id="admin-tasks-list" aria-live="polite">
+          <div class="admin-tasks-table-head" aria-hidden="true">
+            <div class="task-col task-id">ID</div>
+            <div class="task-col task-name">Task</div>
+            <div class="task-col">Scope</div>
+            <div class="task-col">Project</div>
+            <div class="task-col">Editing item</div>
+            <div class="task-col">Requested by</div>
+            <div class="task-col">Assigned to</div>
+            <div class="task-col">Status</div>
+            <div class="task-col">Result</div>
+            <div class="task-col">Priority</div>
+            <div class="task-col">Due date</div>
+            <div class="task-col actions">Actions</div>
+          </div>
           <div id="admin-tasks-message" class="admin-tasks-message" hidden></div>
           <div id="admin-tasks-rows" class="admin-tasks-rows"></div>
         </section>
@@ -299,9 +255,9 @@
         </dialog>
 
       </div>
+
       {% endif %}
     </div>
-  </div>
 </div>
 {% endblock %}
 
@@ -311,5 +267,4 @@
 <script src="{{ url_for('static', filename='js/components/tasks.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/components/filters.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/control-panel.js') }}" defer></script>
-<script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
 {% endblock %}
