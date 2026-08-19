@@ -76,6 +76,10 @@ Register a type on `ENEMY_TYPES` in `js/enemy.js`, then spawn it from a level’
 
 Weapon fields: `id`, `name`, `damage`, `fireRate`, `projectileSpeed`, `ammo`, `maxAmmo`, `spread`, `projectileType`. The `Weapon` class owns firing; the player does not compute shots.
 
+## Audio
+
+Registry: `js/audio-catalog.js`. Mixer: `js/audio.js`. Place OGG (MP3 fallback) under `static/producer_hunt/assets/audio/` as listed in `assets/audio/REQUIRED.txt`. Missing files stay silent after one warning. Volumes are `master × category × sound`.
+
 ## Levels
 
 Add `js/levels/level-02.js` with the same shape as `LEVEL_01`, then load it from `game.js` `beginLevel`. Fields: `worldWidth`, `worldHeight`, `platforms`, `playerSpawn`, `enemySpawns`, `pickups`, `checkpoints`, `levelEnd`, `zones`.

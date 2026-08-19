@@ -4,6 +4,7 @@ import { applyGravity } from "./physics.js";
 import { makeEnemySpriteConfig } from "./sprite-spec.js";
 import { COMBAT, enemyWeaponDef } from "./combat.js";
 import { Weapon } from "./weapon.js";
+import { WEAPON_SOUND_ID } from "./audio-catalog.js";
 
 const STATE_TO_ANIM = {
   idle: "idle",
@@ -275,6 +276,10 @@ export class Enemy {
     this._firedClip = true;
     if (!shot) return;
     shot.sheet = game.assets?.sheet("projectiles") || null;
+    game.audio.play(WEAPON_SOUND_ID[this.weapon.id] || "post_producer_attack", {
+      x: muzzle.x,
+      camera: game.camera,
+    });
     projectiles.push(shot);
   }
 

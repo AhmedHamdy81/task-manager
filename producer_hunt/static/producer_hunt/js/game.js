@@ -55,7 +55,7 @@ export class Game {
     this.allowDebug = Boolean(options.allowDebug);
     this.debug = this.allowDebug && (Boolean(options.debug) || DEBUG_ASSETS);
     this.assets = new AssetLoader(options.assetBase || "", { cacheKey: options.cacheKey || "" });
-    this.audio = new AudioManager();
+    this.audio = new AudioManager({ loader: this.assets });
     this.input = new Input();
     this.camera = new Camera();
     this.hud = new HUD();
@@ -116,7 +116,12 @@ export class Game {
     document.addEventListener("fullscreenchange", this._onFullscreen);
     window.addEventListener("keydown", this._onPreventScroll, { passive: false });
     this.canvas.addEventListener("click", this._onClick);
+    this.audio.attachUnlock(window);
     this._listenersOn = true;
+  }
+
+  sfx(id, extra = {}) {
+    return this.audio.playSound(id, { camera: this.camera, ...extra });
   }
 
   async start() {
@@ -128,9 +133,17 @@ export class Game {
         this._bootStarted = true;
         await this.preload();
         this.state.set(GameState.START_SCREEN);
+        this.audio.playMusic("menu_theme");
       }
       if (this.running) return;
       this.running = true;
+      if (this.state.is(GameState.START_SCREEN, GameState.CHARACTER_SELECT)) {
+        this.audio.playMusic("menu_theme");
+      } else if (this.state.is(GameState.PLAYING, GameState.RESPAWNING, GameState.PLAYER_DEAD)) {
+        this.audio.playMusic("studio_01_theme");
+      } else if (this.state.is(GameState.LEVEL_COMPLETE)) {
+        this.audio.playMusic("level_complete_music");
+      }
       this._raf = requestAnimationFrame(this._loop);
     } catch (err) {
       console.error("Producer Hunt failed to initialize", err);
@@ -142,6 +155,7 @@ export class Game {
       await Promise.all(CHARACTERS.map((ch) => this.assets.loadCharacterKit(ch.sprite)));
       await this.assets.loadEnemyKit(ENEMY_TYPES.post_producer.sprite);
       await this.assets.loadCatalog(WORLD_SHEETS);
+      await this.audio.preload();
     } catch (err) {
       console.error("[Producer Hunt Asset Error]\n\nPreload failed. Continuing with placeholders.", err);
     }
@@ -158,6 +172,7 @@ export class Game {
     document.removeEventListener("fullscreenchange", this._onFullscreen);
     this.canvas.removeEventListener("click", this._onClick);
     window.removeEventListener("keydown", this._onPreventScroll);
+    this.audio.dispose();
     this._listenersOn = false;
   }
 
@@ -198,6 +213,7 @@ export class Game {
   }
 
   onClick(e) {
+    this.audio.unlock();
     const p = this.canvasPoint(e);
     const st = this.state.get();
     if (this.overlay === "confirm") {
@@ -212,7 +228,10 @@ export class Game {
         const y = 210 + i * 88;
         if (p.x >= x && p.x <= x + 760 && p.y >= y && p.y <= y + 72) {
           this.menuIndex = i;
-          if (row.kind === "action") this.closeSettings();
+          if (row.kind === "action") {
+            this.sfx("ui_back");
+            this.closeSettings();
+          }
           else if (row.kind === "toggle") this.adjustSetting(row, 1);
           else if (row.kind === "slider") {
             const t = (p.x - (x + 400)) / 280;
@@ -227,13 +246,21 @@ export class Game {
       const hit = hitMenu(buttons, p.x, p.y);
       if (!hit) return;
       this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.sfx("ui_confirm");
       this.handleStart(hit.id);
       return;
     }
     if (st === GameState.CHARACTER_SELECT) {
       const act = this.select.handleClick(p.x, p.y);
-      if (act === "confirm") this.confirmCharacter();
-      if (act === "back") this.goMainMenu({ dispose: true });
+      if (act === "focus") this.sfx("ui_move");
+      if (act === "confirm") {
+        this.sfx("ui_confirm");
+        this.confirmCharacter();
+      }
+      if (act === "back") {
+        this.sfx("ui_back");
+        this.goMainMenu({ dispose: true });
+      }
       return;
     }
     if (st === GameState.PAUSED) {
@@ -241,6 +268,7 @@ export class Game {
       const hit = hitMenu(buttons, p.x, p.y);
       if (!hit) return;
       this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.sfx("ui_confirm");
       this.handlePause(hit.id);
       return;
     }
@@ -249,6 +277,7 @@ export class Game {
       const hit = hitMenu(buttons, p.x, p.y);
       if (!hit) return;
       this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.sfx("ui_confirm");
       this.handleDeath(hit.id);
       return;
     }
@@ -257,6 +286,7 @@ export class Game {
       const hit = hitMenu(buttons, p.x, p.y);
       if (!hit) return;
       this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.sfx("ui_confirm");
       this.handleComplete(hit.id);
     }
   }
@@ -301,6 +331,7 @@ export class Game {
   }
 
   exit() {
+    this.stop();
     window.location.href = this.exitUrl;
   }
 
@@ -314,13 +345,16 @@ export class Game {
   }
 
   updateMenuNav(buttons, onConfirm) {
+    const prev = this.menuIndex;
     if (this.input.consume("jump") || this.input.consume("moveLeft")) {
       this.menuIndex = moveMenuIndex(this.menuIndex, -1, buttons.length);
     }
     if (this.input.consume("crouch") || this.input.consume("moveRight")) {
       this.menuIndex = moveMenuIndex(this.menuIndex, 1, buttons.length);
     }
+    if (this.menuIndex !== prev) this.sfx("ui_move");
     if (this.input.consume("confirm") && buttons[this.menuIndex]) {
+      this.sfx("ui_confirm");
       onConfirm(buttons[this.menuIndex].id);
     }
   }
@@ -333,6 +367,8 @@ export class Game {
     this.menuIndex = 0;
     this.inputLocked = true;
     this.input.clearTransient();
+    this.audio.setGameplayMuted(true);
+    this.audio.pauseMusic();
     this.state.set(GameState.PAUSED);
   }
 
@@ -344,6 +380,8 @@ export class Game {
     this._autoPaused = false;
     this.inputLocked = false;
     this.input.clearTransient();
+    this.audio.setGameplayMuted(false);
+    this.audio.resumeMusic();
     this.state.set(GameState.PLAYING);
   }
 
@@ -355,6 +393,8 @@ export class Game {
     this.menuIndex = 0;
     this.inputLocked = true;
     this.input.clearTransient();
+    this.audio.setGameplayMuted(true);
+    this.sfx("player_death", { force: true });
     this.state.set(GameState.PLAYER_DEAD);
   }
 
@@ -396,10 +436,12 @@ export class Game {
 
   handleConfirm(id) {
     if (id === "CANCEL") {
+      this.sfx("ui_back");
       this.overlay = null;
       this.menuIndex = 0;
       return;
     }
+    this.sfx("ui_confirm");
     const kind = this.confirmKind;
     this.overlay = null;
     this.confirmKind = null;
@@ -412,9 +454,11 @@ export class Game {
       this.handleConfirm("CANCEL");
       return;
     }
+    const prev = this.menuIndex;
     if (this.input.consume("moveLeft") || this.input.consume("jump")) this.menuIndex = 0;
     if (this.input.consume("moveRight") || this.input.consume("crouch")) this.menuIndex = 1;
     this.menuIndex = this.menuIndex ? 1 : 0;
+    if (this.menuIndex !== prev) this.sfx("ui_move");
     if (this.input.consume("confirm")) this.handleConfirm(this.menuIndex === 0 ? "CONFIRM" : "CANCEL");
   }
 
@@ -431,18 +475,23 @@ export class Game {
   updateSettingsInput() {
     const rows = settingsRows();
     if (this.input.consume("pause")) {
+      this.sfx("ui_back");
       this.closeSettings();
       return;
     }
+    const prev = this.menuIndex;
     if (this.input.consume("jump")) this.menuIndex = moveMenuIndex(this.menuIndex, -1, rows.length);
     if (this.input.consume("crouch")) this.menuIndex = moveMenuIndex(this.menuIndex, 1, rows.length);
+    if (this.menuIndex !== prev) this.sfx("ui_move");
     const row = rows[this.menuIndex];
     if (!row) return;
     if (this.input.consume("moveLeft")) this.adjustSetting(row, -1);
     if (this.input.consume("moveRight")) this.adjustSetting(row, 1);
     if (this.input.consume("confirm")) {
-      if (row.kind === "action") this.closeSettings();
-      else if (row.kind === "toggle") this.adjustSetting(row, 1);
+      if (row.kind === "action") {
+        this.sfx("ui_back");
+        this.closeSettings();
+      } else if (row.kind === "toggle") this.adjustSetting(row, 1);
     }
   }
 
@@ -513,23 +562,29 @@ export class Game {
     this.disposeLevel();
     this.menuIndex = 0;
     this.showControls = false;
+    this.audio.setGameplayMuted(false);
+    this.audio.playMusic("menu_theme");
     this.state.set(GameState.START_SCREEN);
   }
 
   goCharacterSelect() {
     this.disposeLevel();
     this.menuIndex = 0;
+    this.audio.playMusic("menu_theme");
     this.state.set(GameState.CHARACTER_SELECT);
   }
 
   onVisibility() {
     if (document.hidden) {
       this.input.clearTransient();
+      this.audio.stopGameplayVoices();
       if (this.state.get() === GameState.PLAYING) {
         this._autoPaused = true;
         this.overlay = null;
         this.menuIndex = 0;
         this.inputLocked = true;
+        this.audio.setGameplayMuted(true);
+        this.audio.pauseMusic();
         this.state.set(GameState.PAUSED);
       }
       return;
@@ -539,6 +594,7 @@ export class Game {
 
   onWindowBlur() {
     this.input.clearTransient();
+    this.audio.stopGameplayVoices();
   }
 
   drawComplete(ctx) {
@@ -609,6 +665,8 @@ export class Game {
     }
     this.hud.invalidate();
     this.camera.snap(this.player.footX - this.camera.w * 0.38, this.player.footY - this.camera.h * 0.7, this.world);
+    this.audio.setGameplayMuted(false);
+    this.audio.playMusic("studio_01_theme", { restart: true });
     this.state.set(GameState.PLAYING);
   }
 
@@ -643,7 +701,7 @@ export class Game {
     };
     this.spawn = { x: safe.x, y: safe.y };
     if (!opts.silent) {
-      this.audio.play("ui", "checkpoint");
+      this.sfx("checkpoint_activate", { x: safe.x });
       this.hud.invalidate();
     }
   }
@@ -736,13 +794,23 @@ export class Game {
       return;
     }
     if (st === GameState.CHARACTER_SELECT) {
-      if (this.input.consume("moveLeft")) this.select.move(-1);
-      if (this.input.consume("moveRight")) this.select.move(1);
+      if (this.input.consume("moveLeft")) {
+        this.select.move(-1);
+        this.sfx("ui_move");
+      }
+      if (this.input.consume("moveRight")) {
+        this.select.move(1);
+        this.sfx("ui_move");
+      }
       if (this.input.consume("pause")) {
+        this.sfx("ui_back");
         this.goMainMenu({ dispose: true });
         return;
       }
-      if (this.input.consume("confirm")) this.confirmCharacter();
+      if (this.input.consume("confirm")) {
+        this.sfx("ui_confirm");
+        this.confirmCharacter();
+      }
       return;
     }
     if (st === GameState.PAUSED) {
@@ -803,7 +871,7 @@ export class Game {
       if (this.shakeEnabled()) this.camera.addShake(0.45);
       h.cool = h.cooldown;
       this.hud.invalidate();
-      this.audio.play("player", "hit");
+      this.audio.play("player_hit");
       this.spawnFx({
         sheetKey: "effects",
         frame: 5,
@@ -850,6 +918,7 @@ export class Game {
       doorRequirementsMet(exit, this.player, this.world)
     ) {
       if (tryOpenDoor(exit, this.player, this.world)) {
+        this.sfx("door_open", { x: exit.x });
         this.hud.invalidate();
       }
     }
@@ -858,7 +927,7 @@ export class Game {
       if (!aabb(bounds, door.trigger || door)) continue;
       if (tryOpenDoor(door, this.player, this.world)) {
         syncDoorSolids(this.world);
-        this.audio.play("ui", "door");
+        this.sfx("door_open", { x: door.x });
         this.hud.invalidate();
       }
     }
@@ -884,6 +953,9 @@ export class Game {
       this.settings = saveSettings({ completedLevels: [...done, this.world.id] });
     }
     this.hud.invalidate();
+    this.audio.setGameplayMuted(true);
+    this.sfx("level_complete", { force: true });
+    this.audio.playMusic("level_complete_music");
     this.state.set(GameState.LEVEL_COMPLETE);
   }
 
@@ -1025,6 +1097,7 @@ export class Game {
   spawnImpact(shot) {
     const fx = shot.impactFx || COMBAT.player.impactFx;
     const c = shot.center ? shot.center() : { x: shot.x + shot.w / 2, y: shot.y + shot.h / 2 };
+    this.sfx("projectile_impact", { x: c.x });
     this.spawnFx({
       sheetKey: fx.sheetKey,
       frame: fx.frame || 0,
@@ -1057,6 +1130,7 @@ export class Game {
           if (!enemy.alive) continue;
           if (!aabb(shot.bounds(), enemy.bounds())) continue;
           this.score += enemy.takeDamage(shot.damage);
+          this.sfx("enemy_hit", { x: enemy.footX });
           if (!enemy.alive) this.stats.kills += 1;
           this.spawnImpact(shot);
           shot.disable();
@@ -1065,7 +1139,10 @@ export class Game {
       } else if (shot.owner === "enemy") {
         if (this.player.alive && aabb(shot.bounds(), this.player.bounds())) {
           const dealt = this.player.takeDamage(shot.damage);
-          if (dealt && this.shakeEnabled()) this.camera.addShake(0.55);
+          if (dealt) {
+            this.sfx("player_hit");
+            if (this.shakeEnabled()) this.camera.addShake(0.55);
+          }
           this.spawnImpact(shot);
           shot.disable();
         }
@@ -1085,7 +1162,7 @@ export class Game {
       if (!aabb(this.player.bounds(), pickup)) continue;
       if (!applyPickup(pickup, this.player, this)) continue;
       if (pickup.kind === "production_token" || pickup.kind === "bonus") this.stats.tokens += 1;
-      this.audio.play("ui", "pickup");
+      this.sfx("pickup_collect", { x: pickup.x });
       this.hud.invalidate();
       this.spawnFx({
         sheetKey: PICKUP_COLLECT_FX.sheetKey,

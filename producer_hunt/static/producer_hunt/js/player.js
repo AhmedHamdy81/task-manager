@@ -7,6 +7,7 @@ import { SpecialAbility } from "./abilities.js";
 import { DEFAULT_BODY } from "./sprite-spec.js";
 import { COMBAT } from "./combat.js";
 import { drawSheetFrame } from "./asset-catalog.js";
+import { WEAPON_SOUND_ID } from "./audio-catalog.js";
 
 export class Player {
   constructor(character, spawn, spriteKit = null) {
@@ -169,7 +170,7 @@ export class Player {
     this._firedClip = true;
     if (!shot) return;
     shot.sheet = ctx.assets?.sheet("projectiles") || null;
-    ctx.audio.play("weapon", this.weapon.id);
+    ctx.audio.play(WEAPON_SOUND_ID[this.weapon.id] || "editor_shoot", { x: muzzle.x, camera: ctx.camera });
     const fx = this.weapon.muzzleFx || COMBAT.player.muzzleFx;
     ctx.spawnFx?.({
       sheetKey: fx.sheetKey,

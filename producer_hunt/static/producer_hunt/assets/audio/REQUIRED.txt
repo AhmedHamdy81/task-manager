@@ -1,0 +1,23 @@
+# Audio files (optional until supplied)
+
+Place production OGG (primary) here, with MP3 fallbacks if needed:
+
+music/menu_theme.ogg
+music/studio_01_theme.ogg
+music/level_complete.ogg
+sfx/ui_move.ogg
+sfx/ui_confirm.ogg
+sfx/ui_back.ogg
+sfx/editor_shoot.ogg
+sfx/assistant_shoot.ogg
+sfx/vfx_supervisor_shoot.ogg
+sfx/colorist_shoot.ogg
+sfx/post_producer_attack.ogg
+sfx/player_hit.ogg
+sfx/enemy_hit.ogg
+sfx/projectile_impact.ogg
+sfx/pickup_collect.ogg
+sfx/checkpoint_activate.ogg
+sfx/door_open.ogg
+sfx/player_death.ogg
+sfx/level_complete.ogg

@@ -26,6 +26,7 @@ const HANDLERS = {
       ctx.player.renderBurst = 0.3;
       for (const e of nearbyEnemies(ctx, 180)) {
         ctx.score += e.takeDamage(ctx.player.weapon.damage * 2.2);
+        ctx.audio?.playSound?.("enemy_hit", { x: e.footX, camera: ctx.camera });
       }
     },
   },

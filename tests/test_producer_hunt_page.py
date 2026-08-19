@@ -128,6 +128,12 @@ class ProducerHuntPageTests(unittest.TestCase):
         ui = self.client.get("/producer-hunt/static/js/ui.js").get_data(as_text=True)
         self.assertIn("drawSettings", ui)
         self.assertIn("drawConfirm", ui)
+        r = self.client.get("/producer-hunt/static/js/audio.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("playMusic", r.get_data(as_text=True))
+        r = self.client.get("/producer-hunt/static/js/audio-catalog.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("SOUND_DEFS", r.get_data(as_text=True))
 
     def test_placeholder_idle_strip_served(self):
         with self.client.session_transaction() as sess:

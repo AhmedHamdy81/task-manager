@@ -153,7 +153,7 @@ export function drawSettings(ctx, settings, focus, extras = {}) {
   ctx.textAlign = "center";
   ctx.fillStyle = "#64748b";
   ctx.font = "16px sans-serif";
-  ctx.fillText("Audio mixer is live. Music and SFX samples are not wired yet.", DESIGN_W / 2, 860);
+  ctx.fillText("Volumes apply immediately and persist in Producer Hunt settings.", DESIGN_W / 2, 860);
 }
 
 function drawMeter(ctx, x, y, w, h, value, focused) {
