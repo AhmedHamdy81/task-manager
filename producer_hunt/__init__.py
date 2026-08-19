@@ -1,1 +1,3 @@
-"""Isolated Producer Hunt 2.0 package. Not part of BigBangAdmin production modules."""
+"""Isolated Producer Hunt package. Gated by the existing producer_hunt permission."""
+
+ASSET_VERSION = "ph-20260819-prod"

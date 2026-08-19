@@ -12,7 +12,7 @@ export const t = (n) => n * TILE;
 
 export class LevelDataError extends Error {
   constructor(messages) {
-    super(`[Producer Hunt] Level failed to start.\n${(messages || []).join("\n")}`);
+    super(`[Producer Hunt] Required level data is invalid.\n${(messages || []).join("\n")}`);
     this.messages = messages || [];
     this.name = "LevelDataError";
   }

@@ -16,6 +16,16 @@ export class AudioManager {
     this.enabled = true;
   }
 
+  applyMix(settings) {
+    const master = settings?.masterVolume ?? 1;
+    const music = (settings?.musicVolume ?? 0.8) * master;
+    const fx = (settings?.effectsVolume ?? 1) * master;
+    this.setVolume("music", music);
+    for (const cat of ["weapon", "player", "enemy", "environment", "ui"]) {
+      this.setVolume(cat, fx);
+    }
+  }
+
   setVolume(category, value) {
     if (this.volumes[category] == null) return;
     this.volumes[category] = Math.max(0, Math.min(1, value));

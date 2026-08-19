@@ -53,6 +53,17 @@ export function hitsSolid(box, solids) {
   return Boolean(solids && solids.some((s) => aabb(box, s)));
 }
 
+/** Expand the box over this frame's travel so fast shots cannot skip thin solids. */
+export function sweptHitsSolid(box, dx, dy, solids) {
+  const moved = {
+    x: dx >= 0 ? box.x : box.x + dx,
+    y: dy >= 0 ? box.y : box.y + dy,
+    w: box.w + Math.abs(dx),
+    h: box.h + Math.abs(dy),
+  };
+  return hitsSolid(moved, solids);
+}
+
 export function lineBlocked(x0, y0, x1, y1, solids, samples = 10) {
   for (let i = 1; i < samples; i += 1) {
     const t = i / samples;

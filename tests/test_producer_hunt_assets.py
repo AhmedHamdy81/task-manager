@@ -70,7 +70,8 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("BACK", select)
         self.assertIn("drawContainedImage", select)
         settings = (js_root / "settings.js").read_text()
-        self.assertIn("producerHunt.settings", settings)
+        self.assertIn("bigbangadmin.producer_hunt", settings)
+        self.assertIn("LEGACY_SETTINGS_KEY", settings)
         player = (js_root / "player.js").read_text()
         self.assertIn("_canStand", player)
         game = (js_root / "game.js").read_text()
@@ -389,3 +390,50 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
             self.assertTrue(path.is_file(), str(path))
             with Image.open(path) as img:
                 self.assertEqual(img.size, size, msg=rel)
+
+    def test_pause_death_completion_and_settings(self):
+        js_root = Path(__file__).resolve().parents[1] / "producer_hunt" / "static" / "producer_hunt" / "js"
+        settings = (js_root / "settings.js").read_text()
+        self.assertIn("SETTINGS_DEFAULTS", settings)
+        self.assertIn("masterVolume: 1", settings)
+        self.assertIn("musicVolume: 0.8", settings)
+        self.assertIn("effectsVolume: 1", settings)
+        self.assertIn("screenShake: true", settings)
+        self.assertIn("reducedMotion: false", settings)
+        self.assertIn("bigbangadmin.producer_hunt", settings)
+        self.assertIn("LEGACY_SETTINGS_KEY", settings)
+        self.assertIn("normalizeSettings", settings)
+
+        ui = (js_root / "ui.js").read_text()
+        self.assertIn("drawSettings", ui)
+        self.assertIn("drawConfirm", ui)
+        self.assertIn("▸", ui)
+
+        game = (js_root / "game.js").read_text()
+        self.assertIn("RESTART FROM CHECKPOINT", game)
+        self.assertIn("RETURN TO MAIN MENU", game)
+        self.assertIn("RESUME FROM CHECKPOINT", game)
+        self.assertIn("REPLAY LEVEL", game)
+        self.assertIn("CHARACTER SELECTION", game)
+        self.assertIn("openPause", game)
+        self.assertIn("disposeLevel", game)
+        self.assertIn("_deathOverlay", game)
+        self.assertIn("onVisibility", game)
+        self.assertIn("clearTransient", game)
+        self.assertIn("toggleFullscreen", game)
+        self.assertIn("LEVEL COMPLETE", game)
+        self.assertIn("The Post Suite", game)
+        self.assertNotIn("NEXT LEVEL", game)
+        self.assertNotIn("assistant_producer/", game)
+
+        audio = (js_root / "audio.js").read_text()
+        self.assertIn("applyMix", audio)
+
+        title = ROOT / "ui" / "menu" / "title_background.png"
+        logo = ROOT / "ui" / "menu" / "logo.png"
+        self.assertTrue(title.is_file())
+        self.assertTrue(logo.is_file())
+        with Image.open(title) as img:
+            self.assertEqual(img.size, (1920, 1080))
+        with Image.open(logo) as img:
+            self.assertEqual(img.size, (1200, 500))

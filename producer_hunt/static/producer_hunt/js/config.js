@@ -17,10 +17,10 @@ export const CAMERA = {
   focusX: 0.38,
   focusY: 0.7,
 };
-/** Sprite frame / collision / muzzle overlay. Also enabled via ?debug=1 or F1. */
+/** Sprite frame / collision / muzzle overlay. Disabled in production. */
 export const DEBUG_QUERY = "debug";
 export const DEBUG_ASSETS = false;
-export const ASSET_CACHE_KEY = "ph-20260819-studio-01";
+export const ASSET_CACHE_KEY = "ph-20260819-prod";
 
 export const DEFAULT_KEYMAP = {
   moveLeft: ["KeyA", "ArrowLeft"],

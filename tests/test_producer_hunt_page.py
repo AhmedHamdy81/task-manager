@@ -115,9 +115,52 @@ class ProducerHuntPageTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertGreater(len(r.data), 100)
 
+    def test_menu_modules_served(self):
+        with self.client.session_transaction() as sess:
+            sess["account_id"] = self.user.id
+        for path in (
+            "/producer-hunt/static/js/ui.js",
+            "/producer-hunt/static/js/settings.js",
+            "/producer-hunt/static/js/audio.js",
+        ):
+            r = self.client.get(path)
+            self.assertEqual(r.status_code, 200, path)
+        ui = self.client.get("/producer-hunt/static/js/ui.js").get_data(as_text=True)
+        self.assertIn("drawSettings", ui)
+        self.assertIn("drawConfirm", ui)
+
     def test_placeholder_idle_strip_served(self):
         with self.client.session_transaction() as sess:
             sess["account_id"] = self.user.id
         r = self.client.get("/producer-hunt/static/assets/characters/editor/sprites/editor_idle.png")
         self.assertEqual(r.status_code, 200)
         self.assertGreater(len(r.data), 100)
+
+    def test_static_requires_login(self):
+        r = self.client.get("/producer-hunt/static/js/main.js")
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/login", r.headers.get("Location", ""))
+
+    def test_debug_flag_off_when_production(self):
+        from unittest.mock import patch
+
+        import producer_hunt.routes as ph_routes
+
+        with self.client.session_transaction() as sess:
+            sess["account_id"] = self.user.id
+        with patch.object(ph_routes, "is_production_env", return_value=True):
+            r = self.client.get("/producer-hunt")
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        self.assertIn('data-allow-debug="0"', html)
+        self.assertIn("ph-20260819-prod", html)
+
+    def test_machine_room_role_cannot_open_game(self):
+        self.user.role = "machine_room"
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["account_id"] = self.user.id
+        r = self.client.get("/producer-hunt")
+        self.assertIn(r.status_code, (302, 403))
+        if r.status_code == 302:
+            self.assertNotIn("/producer-hunt", r.headers.get("Location", ""))

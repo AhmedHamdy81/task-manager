@@ -151,6 +151,16 @@ export class Enemy {
     }
 
     if (!this.activated) {
+      const far = Math.abs(player.footX - this.footX) > 1400;
+      if (far) {
+        if (!this.onGround) {
+          applyGravity(this, dt);
+          resolveSolids(this, world.solids, dt);
+          keepInWorld(this, world);
+          this._syncFeet();
+        }
+        return;
+      }
       const near =
         !this.encounterBound &&
         player.alive &&

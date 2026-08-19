@@ -21,16 +21,23 @@ export function formatAssetValidation(label, spec, actualW, actualH) {
   return lines.join("\n");
 }
 
+const _assetWarnings = new Set();
+
+function warnAsset(message) {
+  if (_assetWarnings.has(message)) return;
+  _assetWarnings.add(message);
+  console.warn(message);
+}
+
 export function validateImageSize(img, spec, label) {
   const expectedW = spec.width;
   const expectedH = spec.height;
   if (!img) {
-    console.warn(formatAssetValidation(label, spec, null, null));
-    console.warn(`Waiting for production asset:\n${label}`);
+    warnAsset(formatAssetValidation(label, spec, null, null));
     return false;
   }
   if (img.width !== expectedW || img.height !== expectedH) {
-    console.warn(formatAssetValidation(label, spec, img.width, img.height));
+    warnAsset(formatAssetValidation(label, spec, img.width, img.height));
     return false;
   }
   return true;
@@ -43,15 +50,14 @@ export function validateSpriteStrip(img, spec, label) {
   const expectedW = frameWidth * frames;
   const expectedH = frameHeight;
   if (!img) {
-    console.warn(formatAssetValidation(label, spec, null, null));
-    console.warn(`Waiting for production asset:\n${label}`);
+    warnAsset(formatAssetValidation(label, spec, null, null));
     return false;
   }
   const frameGuess = frameWidth ? img.width / frameWidth : 0;
   const sizeOk = img.width === expectedW && img.height === expectedH;
   const framesOk = frameGuess === frames;
   if (!sizeOk || !framesOk) {
-    console.warn(formatAssetValidation(label, spec, img.width, img.height));
+    warnAsset(formatAssetValidation(label, spec, img.width, img.height));
     return false;
   }
   return true;
@@ -65,15 +71,35 @@ export class AssetLoader {
     this.sheets = new Map();
     this.characterKits = new Map();
     this.enemyKits = new Map();
+    this._inflight = new Map();
+    this._warned = new Set();
+    this.loadTimeoutMs = options.loadTimeoutMs || 12000;
+  }
+
+  _warnOnce(message) {
+    if (this._warned.has(message)) return;
+    this._warned.add(message);
+    console.warn(message);
+  }
+
+  _safeRel(rel) {
+    const raw = String(rel || "").trim();
+    if (!raw) return false;
+    if (raw.includes("..") || raw.includes("\\") || raw.includes("\0")) return false;
+    if (/^[a-zA-Z]:/.test(raw) || raw.startsWith("file:") || raw.startsWith("//")) return false;
+    if (/^https?:/i.test(raw)) return false;
+    if (raw.startsWith("/")) return raw.startsWith("/producer-hunt/static/");
+    return true;
   }
 
   url(rel) {
-    if (!rel) return "";
+    if (!this._safeRel(rel)) {
+      this._warnOnce("Required static asset failed to load: path was rejected.");
+      return "";
+    }
     let src = rel;
-    if (!(/^https?:\/\//.test(rel) || rel.startsWith("/"))) {
+    if (!rel.startsWith("/")) {
       src = `${this.baseUrl}/${rel.replace(/^\//, "")}`;
-    } else {
-      src = rel;
     }
     if (this.cacheKey) {
       src += (src.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(this.cacheKey);
@@ -83,22 +109,40 @@ export class AssetLoader {
 
   async loadImage(key, rel) {
     if (this.images.has(key)) return this.images.get(key);
+    if (this._inflight.has(key)) return this._inflight.get(key);
     const src = this.url(rel);
     if (!src) {
       this.images.set(key, null);
       return null;
     }
-    const img = await new Promise((resolve) => {
+    const pending = new Promise((resolve) => {
       const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => resolve(null);
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(null), this.loadTimeoutMs);
+      el.onload = () => {
+        clearTimeout(timer);
+        finish(el);
+      };
+      el.onerror = () => {
+        clearTimeout(timer);
+        finish(null);
+      };
       el.src = src;
+    }).then((img) => {
+      if (!img) {
+        warnAsset(`Required static asset failed to load: ${rel || key}`);
+      }
+      this.images.set(key, img);
+      this._inflight.delete(key);
+      return img;
     });
-    if (!img) {
-      console.warn(`[Producer Hunt Asset Validation]\n\nAsset:\n${rel || key}\n\nWaiting for production asset:\n${rel || key}\n\nUsing placeholder fallback.`);
-    }
-    this.images.set(key, img);
-    return img;
+    this._inflight.set(key, pending);
+    return pending;
   }
 
   get(key) {
@@ -156,6 +200,7 @@ export class AssetLoader {
   }
 
   async loadCharacterKit(config) {
+    if (this.characterKits.has(config.id)) return this.characterKits.get(config.id);
     const kit = await this._hydrateAnims(config);
     kit.portraitImage = null;
     if (config.portrait) {
@@ -172,6 +217,7 @@ export class AssetLoader {
   }
 
   async loadEnemyKit(config) {
+    if (this.enemyKits.has(config.id)) return this.enemyKits.get(config.id);
     const kit = await this._hydrateAnims(config);
     this.enemyKits.set(config.id, kit);
     return kit;

@@ -206,6 +206,8 @@ export class Player {
 
   takeDamage(amount, opts = {}) {
     if (!this.alive || this.invuln > 0) return 0;
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) return 0;
     const before = this.health;
     this.health = Math.max(0, this.health - amount);
     this.invuln = 0.85;
@@ -226,8 +228,10 @@ export class Player {
 
   heal(amount) {
     if (!this.alive) return 0;
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) return 0;
     const before = this.health;
-    this.health = Math.min(this.maxHealth, this.health + Math.max(0, amount));
+    this.health = Math.min(this.maxHealth, this.health + amt);
     return this.health - before;
   }
 

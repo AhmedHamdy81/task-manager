@@ -10,16 +10,17 @@ Signed-in users: sidebar **Entertainment → Producer Hunt**, or `/producer-hunt
 
 Internal resolution: **1920 × 1080** (letterboxed in the browser). Physics uses this coordinate system, not CSS pixels.
 
-Debug overlays: `/producer-hunt?debug=1` or **F1**.
+Debug overlays (`?debug=1` or **F1**) work only when `APP_ENV` is not production.
 
 ## Game flow
 
 ```text
-BOOT → START SCREEN → CHARACTER SELECT → LEVEL 1 (PLAYING)
-PLAYING → PAUSED | PLAYER_DEAD → GAME OVER | LEVEL COMPLETE
+BOOT → START_SCREEN → CHARACTER_SELECT → PLAYING
+PLAYING → PAUSED | PLAYER_DEAD → RESPAWNING → PLAYING
+PLAYING → LEVEL_COMPLETE
 ```
 
-Restart resets the level in memory. It does not reload BigBangAdmin.
+Pause freezes gameplay simulation (including decorative world motion). Death waits for the death animation, then offers checkpoint respawn. Restart Level and Return to Main Menu ask for confirmation. Settings persist in `localStorage` under `bigbangadmin.producer_hunt` only (legacy `producerHunt.settings` is migrated once). Restart disposes the in-memory level; it does not reload BigBangAdmin.
 
 ## Controls
 
@@ -58,7 +59,7 @@ Keys are remappable in `js/input.js` (`Input.remap`).
 
 ## Characters
 
-Characters live in `js/characters.js`. Shared movement, jump, health, damage, and collision apply to all four. Select one after the title screen; the id is stored in `localStorage` (`producerHunt.settings`). Unknown saved ids fall back to **The Editor**.
+Characters live in `js/characters.js`. Shared movement, jump, health, damage, and collision apply to all four. Select one after the title screen; the id is stored in `localStorage` (`bigbangadmin.producer_hunt`). Unknown saved ids fall back to **The Editor**.
 
 | Id | Name | Special |
 |---|---|---|

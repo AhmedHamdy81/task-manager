@@ -4,24 +4,32 @@ import { Game } from "./game.js";
 const canvas = document.getElementById("ph-canvas");
 const body = document.body;
 
-function preventScroll(e) {
-  const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"];
-  if (keys.includes(e.code)) e.preventDefault();
-}
-
-window.addEventListener("keydown", preventScroll, { passive: false });
-
+const allowDebug = body.dataset.allowDebug === "1";
 const params = new URLSearchParams(window.location.search);
 const debug =
-  DEBUG_ASSETS ||
-  params.get(DEBUG_QUERY) === "1" ||
-  params.get(DEBUG_QUERY) === "true";
+  allowDebug &&
+  (DEBUG_ASSETS || params.get(DEBUG_QUERY) === "1" || params.get(DEBUG_QUERY) === "true");
 
-const game = new Game(canvas, {
-  exitUrl: body.dataset.exitUrl || "/",
-  assetBase: body.dataset.assetBase || "",
-  cacheKey: body.dataset.assetVersion || ASSET_CACHE_KEY,
-  debug,
+let game = null;
+
+try {
+  if (!canvas) throw new Error("Missing #ph-canvas");
+  game = new Game(canvas, {
+    exitUrl: body.dataset.exitUrl || "/",
+    assetBase: body.dataset.assetBase || "",
+    cacheKey: body.dataset.assetVersion || ASSET_CACHE_KEY,
+    debug,
+    allowDebug,
+  });
+  game.start();
+  if (allowDebug) window.__producerHunt = game;
+} catch (err) {
+  console.error("Producer Hunt failed to initialize", err);
+}
+
+window.addEventListener("pagehide", () => {
+  if (game) game.stop();
 });
-game.start();
-window.__producerHunt = game;
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted && game) game.start();
+});

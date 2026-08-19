@@ -8,6 +8,26 @@ export class Camera {
     this.w = DESIGN_W;
     this.h = DESIGN_H;
     this.look = 0;
+    this.shakeX = 0;
+    this.shakeY = 0;
+    this.trauma = 0;
+  }
+
+  addShake(amount) {
+    this.trauma = Math.min(1, this.trauma + Math.max(0, amount));
+  }
+
+  updateShake(dt, enabled) {
+    if (!enabled || this.trauma <= 0) {
+      this.trauma = 0;
+      this.shakeX = 0;
+      this.shakeY = 0;
+      return;
+    }
+    this.trauma = Math.max(0, this.trauma - dt * 2.4);
+    const mag = this.trauma * this.trauma * 14;
+    this.shakeX = (Math.random() * 2 - 1) * mag;
+    this.shakeY = (Math.random() * 2 - 1) * mag;
   }
 
   follow(target, world, dt) {
@@ -33,6 +53,6 @@ export class Camera {
   }
 
   worldToScreen(wx, wy) {
-    return { x: wx - this.x, y: wy - this.y };
+    return { x: wx - this.x + this.shakeX, y: wy - this.y + this.shakeY };
   }
 }

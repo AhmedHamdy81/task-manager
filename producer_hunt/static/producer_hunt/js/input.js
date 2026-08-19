@@ -90,4 +90,11 @@ export class Input {
   endFrame() {
     this.pressed.clear();
   }
+
+  clearTransient() {
+    this.held.clear();
+    this.pressed.clear();
+    this._keys.clear();
+    this._gp.clear();
+  }
 }

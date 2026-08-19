@@ -12,7 +12,7 @@ import { AssetLoader } from "./asset-loader.js";
 import { WORLD_SHEETS, drawCoverImage, drawSheetFrame } from "./asset-catalog.js";
 import { COMBAT } from "./combat.js";
 import { AudioManager } from "./audio.js";
-import { drawButtons, drawMenu, hitMenu, menuButtons } from "./ui.js";
+import { drawButtons, drawConfirm, drawMenu, drawSettings, hitMenu, menuButtons, moveMenuIndex, settingsRows, confirmButtons } from "./ui.js";
 import { CHARACTERS, characterById } from "./characters.js";
 import { applyPickup, PICKUP_COLLECT_FX } from "./pickups.js";
 import {
@@ -24,7 +24,7 @@ import {
   tryOpenDoor,
   updateDoors,
 } from "./progression.js";
-import { saveSettings } from "./settings.js";
+import { loadSettings, saveSettings } from "./settings.js";
 import { FxSprite } from "./fx.js";
 import {
   drawDecorSheet,
@@ -36,12 +36,24 @@ import {
   drawTiledPlatforms,
 } from "./world-render.js";
 
+function emptyStats() {
+  return { tokens: 0, kills: 0, deaths: 0, time: 0 };
+}
+
+function formatClock(seconds) {
+  const s = Math.max(0, Math.floor(seconds || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
 export class Game {
   constructor(canvas, options = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
     this.exitUrl = options.exitUrl || "/";
-    this.debug = Boolean(options.debug) || DEBUG_ASSETS;
+    this.allowDebug = Boolean(options.allowDebug);
+    this.debug = this.allowDebug && (Boolean(options.debug) || DEBUG_ASSETS);
     this.assets = new AssetLoader(options.assetBase || "", { cacheKey: options.cacheKey || "" });
     this.audio = new AudioManager();
     this.input = new Input();
@@ -69,20 +81,60 @@ export class Game {
     this._frames = 0;
     this._fpsT = 0;
     this.showControls = false;
+    this.overlay = null;
+    this.confirmKind = null;
+    this.menuIndex = 0;
+    this._userPaused = false;
+    this._autoPaused = false;
+    this._deathOverlay = false;
+    this._respawnLock = false;
+    this._worldTime = 0;
+    this._playTime = 0;
+    this.stats = emptyStats();
+    this.settings = loadSettings();
     this._loop = (t) => this.frame(t);
     this._onResize = () => this.fitCanvas();
     this._onClick = (e) => this.onClick(e);
+    this._onVisibility = () => this.onVisibility();
+    this._onBlur = () => this.onWindowBlur();
+    this._onFullscreen = () => this.hud.invalidate();
+    this._raf = 0;
+    this._bootStarted = false;
+    this._listenersOn = false;
+    this._onPreventScroll = (e) => {
+      const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"];
+      if (keys.includes(e.code)) e.preventDefault();
+    };
+  }
+
+  _bindShell() {
+    if (this._listenersOn) return;
+    this.input.attach();
+    window.addEventListener("resize", this._onResize);
+    document.addEventListener("visibilitychange", this._onVisibility);
+    window.addEventListener("blur", this._onBlur);
+    document.addEventListener("fullscreenchange", this._onFullscreen);
+    window.addEventListener("keydown", this._onPreventScroll, { passive: false });
+    this.canvas.addEventListener("click", this._onClick);
+    this._listenersOn = true;
   }
 
   async start() {
-    this.input.attach();
-    window.addEventListener("resize", this._onResize);
-    this.canvas.addEventListener("click", this._onClick);
-    this.fitCanvas();
-    await this.preload();
-    this.state.set(GameState.START_SCREEN);
-    this.running = true;
-    requestAnimationFrame(this._loop);
+    try {
+      this._bindShell();
+      this.fitCanvas();
+      this.applySettings();
+      if (!this._bootStarted) {
+        this._bootStarted = true;
+        await this.preload();
+        this.state.set(GameState.START_SCREEN);
+      }
+      if (this.running) return;
+      this.running = true;
+      this._raf = requestAnimationFrame(this._loop);
+    } catch (err) {
+      console.error("Producer Hunt failed to initialize", err);
+    }
   }
 
   async preload() {
@@ -97,9 +149,16 @@ export class Game {
 
   stop() {
     this.running = false;
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = 0;
     this.input.detach();
     window.removeEventListener("resize", this._onResize);
+    document.removeEventListener("visibilitychange", this._onVisibility);
+    window.removeEventListener("blur", this._onBlur);
+    document.removeEventListener("fullscreenchange", this._onFullscreen);
     this.canvas.removeEventListener("click", this._onClick);
+    window.removeEventListener("keydown", this._onPreventScroll);
+    this._listenersOn = false;
   }
 
   fitCanvas() {
@@ -119,55 +178,385 @@ export class Game {
   }
 
   startButtons() {
-    return menuButtons(["START GAME", "CONTROLS", "EXIT"], 560);
+    return menuButtons(["START GAME", "SETTINGS", "CONTROLS", "EXIT"], 520, { gap: 64 });
   }
 
   pauseButtons() {
-    return menuButtons(["RESUME", "RESTART LEVEL", "CHARACTER SELECT", "EXIT GAME"], 360);
+    return menuButtons(
+      ["RESUME", "RESTART FROM CHECKPOINT", "RESTART LEVEL", "SETTINGS", "RETURN TO MAIN MENU"],
+      280,
+      { gap: 64 }
+    );
   }
 
-  overButtons() {
-    return menuButtons(["RESTART LEVEL", "SELECT CHARACTER", "EXIT GAME"], 400);
+  deathButtons() {
+    return menuButtons(["RESUME FROM CHECKPOINT", "RESTART LEVEL", "MAIN MENU"], 400, { gap: 66 });
   }
 
   completeButtons() {
-    return menuButtons(["RESTART", "CHARACTER SELECT", "EXIT GAME"], 430);
+    return menuButtons(["REPLAY LEVEL", "CHARACTER SELECTION", "MAIN MENU"], 620, { gap: 64 });
   }
 
   onClick(e) {
     const p = this.canvasPoint(e);
     const st = this.state.get();
+    if (this.overlay === "confirm") {
+      const hit = hitMenu(confirmButtons(), p.x, p.y);
+      if (hit) this.handleConfirm(hit.id);
+      return;
+    }
+    if (this.overlay === "settings") {
+      const rows = settingsRows();
+      const x = DESIGN_W / 2 - 380;
+      rows.forEach((row, i) => {
+        const y = 210 + i * 88;
+        if (p.x >= x && p.x <= x + 760 && p.y >= y && p.y <= y + 72) {
+          this.menuIndex = i;
+          if (row.kind === "action") this.closeSettings();
+          else if (row.kind === "toggle") this.adjustSetting(row, 1);
+          else if (row.kind === "slider") {
+            const t = (p.x - (x + 400)) / 280;
+            this.setSlider(row.id, t);
+          }
+        }
+      });
+      return;
+    }
     if (st === GameState.START_SCREEN) {
-      const hit = hitMenu(this.startButtons(), p.x, p.y);
+      const buttons = this.startButtons();
+      const hit = hitMenu(buttons, p.x, p.y);
       if (!hit) return;
-      if (hit.id === "START GAME") this.state.set(GameState.CHARACTER_SELECT);
-      if (hit.id === "CONTROLS") this.showControls = !this.showControls;
-      if (hit.id === "EXIT") this.exit();
+      this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.handleStart(hit.id);
       return;
     }
     if (st === GameState.CHARACTER_SELECT) {
       const act = this.select.handleClick(p.x, p.y);
       if (act === "confirm") this.confirmCharacter();
-      if (act === "back") this.state.set(GameState.START_SCREEN);
+      if (act === "back") this.goMainMenu({ dispose: true });
       return;
     }
-    if (st === GameState.PAUSED) this.handleMenu(hitMenu(this.pauseButtons(), p.x, p.y));
-    if (st === GameState.GAME_OVER) this.handleMenu(hitMenu(this.overButtons(), p.x, p.y));
-    if (st === GameState.LEVEL_COMPLETE) this.handleMenu(hitMenu(this.completeButtons(), p.x, p.y));
+    if (st === GameState.PAUSED) {
+      const buttons = this.pauseButtons();
+      const hit = hitMenu(buttons, p.x, p.y);
+      if (!hit) return;
+      this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.handlePause(hit.id);
+      return;
+    }
+    if (st === GameState.PLAYER_DEAD && this._deathOverlay) {
+      const buttons = this.deathButtons();
+      const hit = hitMenu(buttons, p.x, p.y);
+      if (!hit) return;
+      this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.handleDeath(hit.id);
+      return;
+    }
+    if (st === GameState.LEVEL_COMPLETE) {
+      const buttons = this.completeButtons();
+      const hit = hitMenu(buttons, p.x, p.y);
+      if (!hit) return;
+      this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
+      this.handleComplete(hit.id);
+    }
+  }
+
+  handleStart(id) {
+    if (id === "START GAME") {
+      this.overlay = null;
+      this.state.set(GameState.CHARACTER_SELECT);
+    }
+    if (id === "SETTINGS") this.openSettings();
+    if (id === "CONTROLS") this.showControls = !this.showControls;
+    if (id === "EXIT") this.exit();
+  }
+
+  handlePause(id) {
+    if (id === "RESUME") this.resumePlay();
+    if (id === "RESTART FROM CHECKPOINT") this.requestRespawn();
+    if (id === "RESTART LEVEL") this.askConfirm("restart");
+    if (id === "SETTINGS") this.openSettings();
+    if (id === "RETURN TO MAIN MENU") this.askConfirm("menu");
+  }
+
+  handleDeath(id) {
+    if (id === "RESUME FROM CHECKPOINT") this.requestRespawn();
+    if (id === "RESTART LEVEL") this.askConfirm("restart");
+    if (id === "MAIN MENU") this.askConfirm("menu");
+  }
+
+  handleComplete(id) {
+    if (id === "REPLAY LEVEL") this.restartLevel();
+    if (id === "CHARACTER SELECTION") this.goCharacterSelect();
+    if (id === "MAIN MENU") this.goMainMenu({ dispose: true });
   }
 
   handleMenu(hit) {
     if (!hit) return;
-    if (hit.id === "RESUME") this.state.set(GameState.PLAYING);
-    if (hit.id === "RESTART LEVEL" || hit.id === "RESTART") this.restartLevel();
-    if (hit.id === "CHARACTER SELECT" || hit.id === "SELECT CHARACTER") {
-      this.state.set(GameState.CHARACTER_SELECT);
-    }
-    if (hit.id === "EXIT GAME" || hit.id === "EXIT") this.exit();
+    const st = this.state.get();
+    if (st === GameState.PAUSED) this.handlePause(hit.id);
+    else if (st === GameState.PLAYER_DEAD) this.handleDeath(hit.id);
+    else if (st === GameState.LEVEL_COMPLETE) this.handleComplete(hit.id);
+    else if (st === GameState.START_SCREEN) this.handleStart(hit.id);
   }
 
   exit() {
     window.location.href = this.exitUrl;
+  }
+
+  currentButtons() {
+    const st = this.state.get();
+    if (st === GameState.START_SCREEN) return this.startButtons();
+    if (st === GameState.PAUSED) return this.pauseButtons();
+    if (st === GameState.PLAYER_DEAD) return this.deathButtons();
+    if (st === GameState.LEVEL_COMPLETE) return this.completeButtons();
+    return [];
+  }
+
+  updateMenuNav(buttons, onConfirm) {
+    if (this.input.consume("jump") || this.input.consume("moveLeft")) {
+      this.menuIndex = moveMenuIndex(this.menuIndex, -1, buttons.length);
+    }
+    if (this.input.consume("crouch") || this.input.consume("moveRight")) {
+      this.menuIndex = moveMenuIndex(this.menuIndex, 1, buttons.length);
+    }
+    if (this.input.consume("confirm") && buttons[this.menuIndex]) {
+      onConfirm(buttons[this.menuIndex].id);
+    }
+  }
+
+  openPause() {
+    if (this.state.get() !== GameState.PLAYING) return;
+    this._userPaused = true;
+    this._autoPaused = false;
+    this.overlay = null;
+    this.menuIndex = 0;
+    this.inputLocked = true;
+    this.input.clearTransient();
+    this.state.set(GameState.PAUSED);
+  }
+
+  resumePlay() {
+    if (this.state.get() !== GameState.PAUSED) return;
+    if (this.overlay) return;
+    this.overlay = null;
+    this._userPaused = false;
+    this._autoPaused = false;
+    this.inputLocked = false;
+    this.input.clearTransient();
+    this.state.set(GameState.PLAYING);
+  }
+
+  onPlayerDied() {
+    if (this.state.get() === GameState.PLAYER_DEAD) return;
+    this.stats.deaths += 1;
+    this._deathOverlay = false;
+    this.overlay = null;
+    this.menuIndex = 0;
+    this.inputLocked = true;
+    this.input.clearTransient();
+    this.state.set(GameState.PLAYER_DEAD);
+  }
+
+  updateDeath(dt) {
+    if (!this.player) return;
+    this.player.update(dt, this.input, this.world, this.projectiles, this);
+    this.updateEffects(dt);
+    const animDone = this.player.anim?.name === "death" && this.player.anim.finished;
+    if (!this._deathOverlay && (animDone || this.player.deadTimer > 0.95)) {
+      this._deathOverlay = true;
+      this.menuIndex = 0;
+      for (const shot of this.projectiles) {
+        if (shot.owner === "enemy") shot.disable();
+      }
+      this.projectiles = this.projectiles.filter((p) => p.alive);
+    }
+    if (this._deathOverlay) {
+      this.updateMenuNav(this.deathButtons(), (id) => this.handleDeath(id));
+    }
+  }
+
+  requestRespawn() {
+    if (this._respawnLock || this.state.is(GameState.RESPAWNING)) return;
+    this.beginRespawn();
+  }
+
+  askConfirm(kind) {
+    this.confirmKind = kind;
+    this.overlay = "confirm";
+    this.menuIndex = 1;
+  }
+
+  confirmCopy() {
+    if (this.confirmKind === "menu") {
+      return "Return to the main menu? Unsaved progress since the last checkpoint will be lost.";
+    }
+    return "Restart the level? Progress since the last checkpoint will be lost.";
+  }
+
+  handleConfirm(id) {
+    if (id === "CANCEL") {
+      this.overlay = null;
+      this.menuIndex = 0;
+      return;
+    }
+    const kind = this.confirmKind;
+    this.overlay = null;
+    this.confirmKind = null;
+    if (kind === "restart") this.restartLevel();
+    if (kind === "menu") this.goMainMenu({ dispose: true });
+  }
+
+  updateConfirmInput() {
+    if (this.input.consume("pause")) {
+      this.handleConfirm("CANCEL");
+      return;
+    }
+    if (this.input.consume("moveLeft") || this.input.consume("jump")) this.menuIndex = 0;
+    if (this.input.consume("moveRight") || this.input.consume("crouch")) this.menuIndex = 1;
+    this.menuIndex = this.menuIndex ? 1 : 0;
+    if (this.input.consume("confirm")) this.handleConfirm(this.menuIndex === 0 ? "CONFIRM" : "CANCEL");
+  }
+
+  openSettings() {
+    this.overlay = "settings";
+    this.menuIndex = 0;
+  }
+
+  closeSettings() {
+    this.overlay = null;
+    this.menuIndex = 0;
+  }
+
+  updateSettingsInput() {
+    const rows = settingsRows();
+    if (this.input.consume("pause")) {
+      this.closeSettings();
+      return;
+    }
+    if (this.input.consume("jump")) this.menuIndex = moveMenuIndex(this.menuIndex, -1, rows.length);
+    if (this.input.consume("crouch")) this.menuIndex = moveMenuIndex(this.menuIndex, 1, rows.length);
+    const row = rows[this.menuIndex];
+    if (!row) return;
+    if (this.input.consume("moveLeft")) this.adjustSetting(row, -1);
+    if (this.input.consume("moveRight")) this.adjustSetting(row, 1);
+    if (this.input.consume("confirm")) {
+      if (row.kind === "action") this.closeSettings();
+      else if (row.kind === "toggle") this.adjustSetting(row, 1);
+    }
+  }
+
+  adjustSetting(row, dir) {
+    if (row.kind === "slider") {
+      this.setSlider(row.id, (this.settings[row.id] ?? 0) + dir * 0.05);
+      return;
+    }
+    if (row.id === "fullscreen") {
+      this.toggleFullscreen();
+      return;
+    }
+    if (row.kind === "toggle") {
+      this.settings = saveSettings({ [row.id]: !this.settings[row.id] });
+      this.applySettings();
+    }
+  }
+
+  setSlider(id, value) {
+    const n = Math.max(0, Math.min(1, value));
+    this.settings = saveSettings({ [id]: n });
+    this.applySettings();
+  }
+
+  applySettings() {
+    this.settings = { ...this.settings, ...loadSettings() };
+    this.audio.applyMix(this.settings);
+  }
+
+  shakeEnabled() {
+    return this.settings.screenShake !== false && !this.settings.reducedMotion;
+  }
+
+  isFullscreen() {
+    return Boolean(document.fullscreenElement);
+  }
+
+  async toggleFullscreen() {
+    try {
+      if (this.isFullscreen()) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch (err) {
+      console.warn("[Producer Hunt] Fullscreen request was rejected.", err);
+    }
+  }
+
+  disposeLevel() {
+    this.world = null;
+    this.player = null;
+    this.enemies = [];
+    this.projectiles = [];
+    this.effects = [];
+    this.checkpoint = null;
+    this.completed = false;
+    this.inputLocked = false;
+    this._deathOverlay = false;
+    this._respawnLock = false;
+    this.overlay = null;
+    this.confirmKind = null;
+    this._userPaused = false;
+    this._autoPaused = false;
+    this.fade = 0;
+    this.score = 0;
+    this.input.clearTransient();
+  }
+
+  goMainMenu() {
+    this.disposeLevel();
+    this.menuIndex = 0;
+    this.showControls = false;
+    this.state.set(GameState.START_SCREEN);
+  }
+
+  goCharacterSelect() {
+    this.disposeLevel();
+    this.menuIndex = 0;
+    this.state.set(GameState.CHARACTER_SELECT);
+  }
+
+  onVisibility() {
+    if (document.hidden) {
+      this.input.clearTransient();
+      if (this.state.get() === GameState.PLAYING) {
+        this._autoPaused = true;
+        this.overlay = null;
+        this.menuIndex = 0;
+        this.inputLocked = true;
+        this.state.set(GameState.PAUSED);
+      }
+      return;
+    }
+    this.input.clearTransient();
+  }
+
+  onWindowBlur() {
+    this.input.clearTransient();
+  }
+
+  drawComplete(ctx) {
+    const name = this.world?.name || "The Post Suite";
+    const ch = this.character?.displayName || this.character?.name || "—";
+    const time = formatClock(this.stats.time || this._playTime);
+    const lines = [
+      `Time  ${time}`,
+      `Production tokens  ${this.stats.tokens}`,
+      `Enemies defeated  ${this.stats.kills}`,
+      `Character  ${ch}`,
+      `Deaths  ${this.stats.deaths}`,
+    ];
+    drawMenu(ctx, "LEVEL COMPLETE", name, this.completeButtons(), { focus: this.menuIndex, titleY: 140 });
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "22px sans-serif";
+    lines.forEach((line, i) => ctx.fillText(line, DESIGN_W / 2, 250 + i * 36));
   }
 
   confirmCharacter() {
@@ -180,7 +569,7 @@ export class Game {
     try {
       this.world = buildWorld(STUDIO_01);
     } catch (err) {
-      const msg = err instanceof LevelDataError ? err.message : `[Producer Hunt] Level failed to start.\n${err}`;
+      const msg = err instanceof LevelDataError ? err.message : `[Producer Hunt] Required level data is invalid.\n${err}`;
       console.error(msg);
       this.levelError = msg;
       this.world = null;
@@ -203,6 +592,15 @@ export class Game {
     this.inputLocked = false;
     this.completed = false;
     this._respawnTimer = 0;
+    this._deathOverlay = false;
+    this._respawnLock = false;
+    this.overlay = null;
+    this.confirmKind = null;
+    this._userPaused = false;
+    this._autoPaused = false;
+    this._playTime = 0;
+    this._worldTime = 0;
+    this.stats = emptyStats();
     if (this.checkpoint) {
       this.applySnapshot(this.checkpoint);
     } else {
@@ -241,6 +639,7 @@ export class Game {
       doors: Object.fromEntries((this.world.doors || []).map((d) => [d.id, d.state])),
       checkpoints: Object.fromEntries((this.world.checkpoints || []).map((c) => [c.id, c.activated])),
       defeated: (this.enemies || []).filter((e) => !e.alive && e.persistent).map((e) => e.spawnId),
+      stats: { ...this.stats, time: this._playTime },
     };
     this.spawn = { x: safe.x, y: safe.y };
     if (!opts.silent) {
@@ -251,13 +650,24 @@ export class Game {
 
   applySnapshot(snap) {
     if (!snap || !this.player) return;
-    this.player.health = Math.max(0, Math.min(this.player.maxHealth, snap.health));
+    this.player.health = Number.isFinite(snap.health)
+      ? Math.max(0, Math.min(this.player.maxHealth, snap.health))
+      : this.player.maxHealth;
     this.player.alive = this.player.health > 0;
     this.player.deadTimer = 0;
     this.player.invuln = 0.4;
-    this.player.weapon.ammo = snap.ammo;
-    this.player.keys = snap.keys || 0;
-    this.score = snap.score || 0;
+    this.player.weapon.ammo = Number.isFinite(snap.ammo) ? snap.ammo : this.player.weapon.ammo;
+    this.player.keys = Number.isFinite(snap.keys) ? snap.keys : 0;
+    this.score = Number.isFinite(snap.score) ? snap.score : 0;
+    if (snap.stats && typeof snap.stats === "object") {
+      this.stats = {
+        tokens: Number(snap.stats.tokens) || 0,
+        kills: Number(snap.stats.kills) || 0,
+        deaths: Number(snap.stats.deaths) || 0,
+        time: Number(snap.stats.time) || 0,
+      };
+      this._playTime = this.stats.time;
+    }
     const safe = findSafeSpawn(this.world, snap.x, snap.y, this.enemies.filter((e) => e.alive).map((e) => e.bounds()));
     this.player.footX = safe.x;
     this.player.footY = safe.y;
@@ -300,72 +710,85 @@ export class Game {
       this._fpsT = 0;
     }
     this.input.pollGamepad();
-    if (this.input.consume("debug")) this.debug = !this.debug;
+    if (this.allowDebug && this.input.consume("debug")) this.debug = !this.debug;
+    else this.input.consume("debug");
     this.update(dt);
     this.render();
     this.input.endFrame();
-    requestAnimationFrame(this._loop);
+    this._raf = requestAnimationFrame(this._loop);
   }
 
   update(dt) {
     const st = this.state.get();
+    this.camera.updateShake(st === GameState.PLAYING ? dt : 0, this.shakeEnabled());
+
+    if (this.overlay === "confirm") {
+      this.updateConfirmInput();
+      return;
+    }
+    if (this.overlay === "settings") {
+      this.updateSettingsInput();
+      return;
+    }
+
     if (st === GameState.START_SCREEN) {
-      if (this.input.consume("confirm")) this.state.set(GameState.CHARACTER_SELECT);
+      this.updateMenuNav(this.startButtons(), (id) => this.handleStart(id));
       return;
     }
     if (st === GameState.CHARACTER_SELECT) {
       if (this.input.consume("moveLeft")) this.select.move(-1);
       if (this.input.consume("moveRight")) this.select.move(1);
       if (this.input.consume("pause")) {
-        this.state.set(GameState.START_SCREEN);
+        this.goMainMenu({ dispose: true });
         return;
       }
       if (this.input.consume("confirm")) this.confirmCharacter();
       return;
     }
     if (st === GameState.PAUSED) {
-      if (this.input.consume("pause") || this.input.consume("confirm")) this.state.set(GameState.PLAYING);
+      if (this.input.consume("pause")) {
+        this.resumePlay();
+        return;
+      }
+      this.updateMenuNav(this.pauseButtons(), (id) => this.handlePause(id));
       return;
     }
-    if (st === GameState.GAME_OVER || st === GameState.LEVEL_COMPLETE) {
-      if (this.input.consume("confirm")) this.restartLevel();
+    if (st === GameState.LEVEL_COMPLETE) {
+      this.updateMenuNav(this.completeButtons(), (id) => this.handleComplete(id));
       return;
     }
     if (st === GameState.RESPAWNING) {
       this._updateRespawn(dt);
       return;
     }
-    if (!this.state.is(GameState.PLAYING, GameState.PLAYER_DEAD)) return;
-
-    if (st === GameState.PLAYING && this.input.consume("pause")) {
-      this.state.set(GameState.PAUSED);
-      return;
-    }
-
-    const ctx = this;
-    if (st === GameState.PLAYING) {
-      this.player.update(dt, this.input, this.world, this.projectiles, ctx);
-      this.updateEncounters();
-      this.camera.follow(this.player, this.world, dt);
-      for (const enemy of this.enemies) {
-        enemy.update(dt, this.player, this.world, this.projectiles, this);
-      }
-      this.updateProjectiles(dt);
-      this.updateEffects(dt);
-      this.updatePickups();
-      this.updateHazards(dt);
-      updateDoors(this.world, dt);
-      this.updateDoorsAndExit();
-      this.updateCheckpoints();
-      if (!this.player.alive) this.state.set(GameState.PLAYER_DEAD);
-      return;
-    }
-
     if (st === GameState.PLAYER_DEAD) {
-      this.player.update(dt, this.input, this.world, this.projectiles, ctx);
-      this.updateEffects(dt);
-      if (this.player.deadTimer > 0.85) this.beginRespawn();
+      this.updateDeath(dt);
+      return;
     }
+    if (st !== GameState.PLAYING) return;
+
+    if (this.input.consume("pause")) {
+      this.openPause();
+      return;
+    }
+
+    this._playTime += dt;
+    this._worldTime += dt;
+    this.inputLocked = false;
+    this.player.update(dt, this.input, this.world, this.projectiles, this);
+    this.updateEncounters();
+    this.camera.follow(this.player, this.world, dt);
+    for (const enemy of this.enemies) {
+      enemy.update(dt, this.player, this.world, this.projectiles, this);
+    }
+    this.updateProjectiles(dt);
+    this.updateEffects(dt);
+    this.updatePickups();
+    this.updateHazards(dt);
+    updateDoors(this.world, dt);
+    this.updateDoorsAndExit();
+    this.updateCheckpoints();
+    if (!this.player.alive) this.onPlayerDied();
   }
 
   updateHazards(dt) {
@@ -377,6 +800,7 @@ export class Game {
       const dir = Math.sign(this.player.footX - (h.x + h.w / 2)) || -1;
       const dealt = this.player.takeDamage(h.damage, { knockbackX: dir * 280 });
       if (!dealt) continue;
+      if (this.shakeEnabled()) this.camera.addShake(0.45);
       h.cool = h.cooldown;
       this.hud.invalidate();
       this.audio.play("player", "hit");
@@ -444,24 +868,33 @@ export class Game {
   }
 
   completeLevel() {
-    if (this.completed) return;
+    if (this.completed || this.state.get() !== GameState.PLAYING) return;
     this.completed = true;
     this.inputLocked = true;
+    this.stats.time = this._playTime;
+    this.overlay = null;
+    this.menuIndex = 0;
+    this.input.clearTransient();
     for (const shot of this.projectiles) {
       if (shot.owner === "enemy") shot.disable();
     }
     this.projectiles = this.projectiles.filter((p) => p.alive);
-    const done = saveSettings({}).completedLevels || [];
-    if (!done.includes(this.world.id)) {
-      saveSettings({ completedLevels: [...done, this.world.id] });
+    const done = loadSettings().completedLevels || [];
+    if (this.world?.id && !done.includes(this.world.id)) {
+      this.settings = saveSettings({ completedLevels: [...done, this.world.id] });
     }
     this.hud.invalidate();
     this.state.set(GameState.LEVEL_COMPLETE);
   }
 
   beginRespawn() {
-    this.state.set(GameState.RESPAWNING);
+    if (this._respawnLock || this.state.get() === GameState.RESPAWNING) return;
+    this._respawnLock = true;
+    this._deathOverlay = false;
+    this.overlay = null;
     this.inputLocked = true;
+    this.input.clearTransient();
+    this.state.set(GameState.RESPAWNING);
     this._respawnTimer = 0;
     this._restored = false;
     this.fade = 0;
@@ -482,6 +915,8 @@ export class Game {
     if (this._respawnTimer >= 0.32) {
       this.fade = 0;
       this.inputLocked = false;
+      this._respawnLock = false;
+      this._userPaused = false;
       this.state.set(GameState.PLAYING);
     }
   }
@@ -491,7 +926,7 @@ export class Game {
     try {
       this.world = buildWorld(STUDIO_01);
     } catch (err) {
-      const msg = err instanceof LevelDataError ? err.message : `[Producer Hunt] Level failed to start.\n${err}`;
+      const msg = err instanceof LevelDataError ? err.message : `[Producer Hunt] Required level data is invalid.\n${err}`;
       console.error(msg);
       this.levelError = msg;
       this.world = null;
@@ -509,6 +944,8 @@ export class Game {
     else this.captureCheckpoint(this.world.checkpoints.find((c) => c.isStart), { silent: true });
     this.player.alive = true;
     this.player.health = Math.max(1, this.player.health);
+    this.inputLocked = false;
+    this._deathOverlay = false;
     this.hud.invalidate();
   }
 
@@ -609,7 +1046,8 @@ export class Game {
         shot.disable();
         continue;
       }
-      if (hitsSolid(shot.bounds(), this.world.solids)) {
+      const travel = typeof shot.travelBounds === "function" ? shot.travelBounds() : shot.bounds();
+      if (hitsSolid(travel, this.world.solids)) {
         this.spawnImpact(shot);
         shot.disable();
         continue;
@@ -619,13 +1057,15 @@ export class Game {
           if (!enemy.alive) continue;
           if (!aabb(shot.bounds(), enemy.bounds())) continue;
           this.score += enemy.takeDamage(shot.damage);
+          if (!enemy.alive) this.stats.kills += 1;
           this.spawnImpact(shot);
           shot.disable();
           break;
         }
       } else if (shot.owner === "enemy") {
         if (this.player.alive && aabb(shot.bounds(), this.player.bounds())) {
-          this.player.takeDamage(shot.damage);
+          const dealt = this.player.takeDamage(shot.damage);
+          if (dealt && this.shakeEnabled()) this.camera.addShake(0.55);
           this.spawnImpact(shot);
           shot.disable();
         }
@@ -644,6 +1084,7 @@ export class Game {
       if (pickup.taken || pickup.reserved) continue;
       if (!aabb(this.player.bounds(), pickup)) continue;
       if (!applyPickup(pickup, this.player, this)) continue;
+      if (pickup.kind === "production_token" || pickup.kind === "bonus") this.stats.tokens += 1;
       this.audio.play("ui", "pickup");
       this.hud.invalidate();
       this.spawnFx({
@@ -664,6 +1105,10 @@ export class Game {
 
     if (st === GameState.START_SCREEN) {
       this.drawStart(ctx);
+      if (this.overlay === "settings") {
+        drawSettings(ctx, this.settings, this.menuIndex, { fullscreen: this.isFullscreen() });
+      }
+      if (this.debug) this.drawDebug(ctx);
       return;
     }
     if (st === GameState.CHARACTER_SELECT) {
@@ -688,7 +1133,7 @@ export class Game {
       ctx.fillStyle = `rgba(5, 7, 12, ${this.fade})`;
       ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
     }
-    if (this.player && this.state.is(GameState.PLAYING, GameState.PAUSED, GameState.PLAYER_DEAD, GameState.RESPAWNING)) {
+    if (this.player && this.state.is(GameState.PLAYING, GameState.RESPAWNING)) {
       this.hud.draw(ctx, {
         player: this.player,
         score: this.score,
@@ -698,10 +1143,20 @@ export class Game {
     }
     if (this.debug) this.drawDebug(ctx);
 
-    if (st === GameState.PAUSED) drawMenu(ctx, "PAUSED", "", this.pauseButtons());
-    if (st === GameState.GAME_OVER) drawMenu(ctx, "GAME OVER", `SCORE ${this.score}`, this.overButtons());
+    if (st === GameState.PAUSED && this.overlay !== "settings" && this.overlay !== "confirm") {
+      drawMenu(ctx, "PAUSED", this.world?.name || "", this.pauseButtons(), { focus: this.menuIndex, titleY: 150 });
+    }
+    if (st === GameState.PLAYER_DEAD && this._deathOverlay && this.overlay !== "confirm") {
+      drawMenu(ctx, "DEFEATED", "The deadline held.", this.deathButtons(), { focus: this.menuIndex, titleY: 200 });
+    }
     if (st === GameState.LEVEL_COMPLETE) {
-      drawMenu(ctx, "LEVEL COMPLETE", `SCORE: ${this.score}`, this.completeButtons());
+      this.drawComplete(ctx);
+    }
+    if (this.overlay === "settings") {
+      drawSettings(ctx, this.settings, this.menuIndex, { fullscreen: this.isFullscreen() });
+    }
+    if (this.overlay === "confirm") {
+      drawConfirm(ctx, "CONFIRM", this.confirmCopy(), this.menuIndex);
     }
   }
 
@@ -715,33 +1170,35 @@ export class Game {
     }
     const logo = this.assets.sheet("logo")?.image;
     if (logo) {
-      const maxW = 920;
-      const maxH = 360;
+      const maxW = 840;
+      const maxH = 280;
       const scale = Math.min(maxW / logo.width, maxH / logo.height);
       const dw = logo.width * scale;
       const dh = logo.height * scale;
-      ctx.drawImage(logo, (DESIGN_W - dw) / 2, 48, dw, dh);
+      ctx.drawImage(logo, (DESIGN_W - dw) / 2, 36, dw, dh);
     } else {
       ctx.fillStyle = "#e8b84a";
       ctx.font = "bold 86px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("PRODUCER HUNT", DESIGN_W / 2, 280);
+      ctx.fillText("PRODUCER HUNT", DESIGN_W / 2, 220);
     }
     ctx.fillStyle = "#94a3b8";
     ctx.font = "22px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("BigBang Studios  ·  run-and-gun", DESIGN_W / 2, 430);
+    ctx.fillText("BigBang Studios  ·  run-and-gun", DESIGN_W / 2, 360);
     if (this.levelError) {
       ctx.fillStyle = "#f87171";
       ctx.font = "16px sans-serif";
       ctx.textAlign = "center";
       const lines = String(this.levelError).split("\n");
-      lines.forEach((line, i) => ctx.fillText(line, DESIGN_W / 2, 470 + i * 22));
+      lines.forEach((line, i) => ctx.fillText(line, DESIGN_W / 2, 400 + i * 22));
     }
-    drawButtons(ctx, this.startButtons());
-    if (this.showControls) {
+    if (this.overlay !== "settings") {
+      drawButtons(ctx, this.startButtons(), { focus: this.menuIndex });
+    }
+    if (this.showControls && this.overlay !== "settings") {
       ctx.fillStyle = "rgba(5,7,12,0.88)";
-      ctx.fillRect(560, 200, 800, 420);
+      ctx.fillRect(560, 160, 800, 420);
       ctx.fillStyle = "#f4f1ea";
       ctx.font = "20px sans-serif";
       ctx.textAlign = "left";
@@ -797,7 +1254,7 @@ export class Game {
     }
 
     drawProgression(ctx, this.assets, this.world, cam);
-    drawPickups(ctx, this.assets, this.world.pickups, cam, this.lastTime);
+    drawPickups(ctx, this.assets, this.world.pickups, cam, this._worldTime * 1000);
     drawHazards(ctx, this.assets, this.world.hazards, cam);
   }
 

@@ -53,9 +53,20 @@ export class Projectile {
 
   update(dt) {
     if (!this.alive) return;
+    this.prevX = this.x;
+    this.prevY = this.y;
     this.x += this.vx * dt;
+    this.y += this.vy * dt;
     this.age += dt;
     if (this.age >= this.lifetime) this.disable();
+  }
+
+  travelBounds() {
+    const x = this.prevX == null ? this.x : Math.min(this.prevX, this.x);
+    const y = this.prevY == null ? this.y : Math.min(this.prevY, this.y);
+    const w = this.w + Math.abs((this.x - (this.prevX ?? this.x)));
+    const h = this.h + Math.abs((this.y - (this.prevY ?? this.y)));
+    return { x, y, w, h };
   }
 
   draw(ctx, camera) {
