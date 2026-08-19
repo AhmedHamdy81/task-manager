@@ -50,6 +50,7 @@ from script_pdf_analyzer import analyze_script_pdf
 from reportlab.pdfgen import canvas
 
 from booking import booking_bp
+from producer_hunt.routes import producer_hunt_bp
 from permissions import (
     PermissionService,
     build_require_permission,
@@ -10582,6 +10583,7 @@ def create_app() -> Flask:
         "account_can_access_project": account_can_access_project,
     }
     app.register_blueprint(booking_bp)
+    app.register_blueprint(producer_hunt_bp)
 
     import project_activity_service as project_activity_service_mod
 
@@ -31902,22 +31904,10 @@ def create_app() -> Flask:
             "projects": [{"id": int(p.id), "name": p.name or ""} for p in projects],
         }
 
-    @app.route("/producer-hunt")
-    def producer_hunt_page():
-        """Producer Hunt — slingshot arcade mini-game (client-side canvas).
-
-        Logged-in only; high score in localStorage (DB leaderboard later).
-        """
-        actor = account_from_session()
-        if actor is None:
-            flash("Sign in to play Producer Hunt.", "error")
-            return redirect(url_for("login"))
-        return render_template("producer_hunt.html")
-
     @app.route("/hunt-the-producer")
     def hunt_the_producer_page():
         """Legacy URL → Producer Hunt."""
-        return redirect(url_for("producer_hunt_page"))
+        return redirect(url_for("producer_hunt.page"))
 
     @app.route("/updates")
     def updates_page():

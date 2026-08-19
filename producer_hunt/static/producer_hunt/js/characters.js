@@ -1,0 +1,133 @@
+import { Weapon } from "./weapon.js";
+import { makeCharacterSpriteConfig } from "./sprite-spec.js";
+
+export const CHARACTERS = [
+  {
+    id: "editor",
+    name: "THE EDITOR",
+    role: "Balanced",
+    health: 100,
+    speed: 320,
+    jumpStrength: 700,
+    color: "#4ade80",
+    accent: "#166534",
+    initials: "ED",
+    damageLabel: "Medium",
+    weapon: {
+      id: "marker_gun",
+      name: "Marker Gun",
+      damage: 18,
+      projectileSpeed: 920,
+      fireRate: 7,
+      ammo: 120,
+      maxAmmo: 120,
+      spread: 0,
+      projectileType: "marker",
+    },
+    specialAbility: {
+      id: "cut",
+      name: "CUT!",
+      duration: 2.2,
+      cooldown: 8,
+    },
+    sprite: makeCharacterSpriteConfig("editor"),
+  },
+  {
+    id: "assistant",
+    name: "THE ASSISTANT",
+    role: "Fast / agile",
+    health: 75,
+    speed: 400,
+    jumpStrength: 760,
+    color: "#38bdf8",
+    accent: "#075985",
+    initials: "AE",
+    damageLabel: "Light",
+    weapon: {
+      id: "proxy_blaster",
+      name: "Proxy Blaster",
+      damage: 10,
+      projectileSpeed: 1040,
+      fireRate: 11,
+      ammo: 160,
+      maxAmmo: 160,
+      spread: 0,
+      projectileType: "proxy",
+    },
+    specialAbility: {
+      id: "turbo_sync",
+      name: "Turbo Sync",
+      duration: 2.4,
+      cooldown: 7,
+    },
+    sprite: makeCharacterSpriteConfig("assistant"),
+  },
+  {
+    id: "vfx_supervisor",
+    name: "VFX SUPERVISOR",
+    role: "Heavy / powerful",
+    health: 150,
+    speed: 260,
+    jumpStrength: 620,
+    color: "#c084fc",
+    accent: "#6b21a8",
+    initials: "FX",
+    damageLabel: "Heavy",
+    weapon: {
+      id: "render_cannon",
+      name: "Render Cannon",
+      damage: 40,
+      projectileSpeed: 700,
+      fireRate: 3.2,
+      ammo: 48,
+      maxAmmo: 48,
+      spread: 0,
+      projectileType: "render",
+    },
+    specialAbility: {
+      id: "final_render",
+      name: "FINAL RENDER",
+      duration: 0.35,
+      cooldown: 9,
+    },
+    sprite: makeCharacterSpriteConfig("vfx_supervisor"),
+  },
+  {
+    id: "colorist",
+    name: "THE COLORIST",
+    role: "Precision",
+    health: 90,
+    speed: 310,
+    jumpStrength: 700,
+    color: "#fb7185",
+    accent: "#9f1239",
+    initials: "CL",
+    damageLabel: "Medium/High",
+    weapon: {
+      id: "rgb_rifle",
+      name: "RGB Rifle",
+      damage: 26,
+      projectileSpeed: 1100,
+      fireRate: 5.5,
+      ammo: 90,
+      maxAmmo: 90,
+      spread: 0,
+      projectileType: "rgb",
+    },
+    specialAbility: {
+      id: "grade_shift",
+      name: "GRADE SHIFT",
+      duration: 3,
+      cooldown: 8,
+    },
+    sprite: makeCharacterSpriteConfig("colorist"),
+  },
+];
+
+export function characterById(id) {
+  return CHARACTERS.find((c) => c.id === id) || CHARACTERS[0];
+}
+
+export function makeWeapon(character) {
+  return new Weapon(character.weapon);
+}

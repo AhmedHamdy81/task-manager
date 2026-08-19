@@ -1,0 +1,47 @@
+html,
+body.ph-body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #05070c;
+  color: #f4f1ea;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  touch-action: none;
+}
+
+.ph-stage {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#ph-canvas {
+  display: block;
+  background: #0b1018;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.ph-exit {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 20;
+  padding: 7px 12px;
+  border: 1px solid rgba(244, 241, 234, 0.32);
+  background: rgba(5, 7, 12, 0.72);
+  color: #f4f1ea;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+}
+
+.ph-exit:hover,
+.ph-exit:focus-visible {
+  border-color: #e8b84a;
+  color: #e8b84a;
+}

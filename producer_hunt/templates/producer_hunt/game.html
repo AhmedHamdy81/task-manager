@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Producer Hunt · {{ app_name }}</title>
+  <link rel="icon" href="{{ url_for('static', filename='icons/logo.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('producer_hunt.static', filename='css/game.css') }}">
+</head>
+<body
+  class="ph-body"
+  data-exit-url="{{ url_for('index') }}"
+  data-asset-base="{{ url_for('producer_hunt.static', filename='assets') }}"
+>
+  <a class="ph-exit" href="{{ url_for('index') }}">EXIT GAME</a>
+  <div class="ph-stage" id="ph-stage">
+    <canvas id="ph-canvas" width="1920" height="1080" aria-label="Producer Hunt"></canvas>
+  </div>
+  <script type="module" src="{{ url_for('producer_hunt.static', filename='js/main.js') }}"></script>
+</body>
+</html>
