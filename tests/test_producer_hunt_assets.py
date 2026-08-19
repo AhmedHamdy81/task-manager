@@ -248,6 +248,8 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("crouch_shoot", player)
         self.assertIn("_trySpawnShot", player)
         self.assertIn("COMBAT.player.muzzle", player)
+        self.assertIn("renderWeaponOverlay", player)
+        self.assertIn("muzzleByAnim", player)
         self.assertNotIn("if (this.character.id", player)
 
         projectile = (js_root / "projectile.js").read_text()
@@ -426,7 +428,8 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("toggleFullscreen", game)
         self.assertIn("LEVEL COMPLETE", game)
         self.assertIn("The Post Suite", game)
-        self.assertNotIn("NEXT LEVEL", game)
+        self.assertIn("NEXT LEVEL", game)
+        self.assertIn("nextPlayableLevel", game)
         self.assertNotIn("assistant_producer/", game)
 
         audio = (js_root / "audio.js").read_text()

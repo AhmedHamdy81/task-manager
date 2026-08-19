@@ -50,17 +50,28 @@ export function validateLevel(level) {
       errors.push(`Objective "${step.id}" references missing checkpoint "${step.checkpointId}".`);
     }
   }
+  const ALLOWED_ENEMIES = new Set(["post_producer", "client"]);
   const spawnIds = new Set();
+  const width = level.worldWidth || 0;
+  const height = level.worldHeight || 1080;
   for (const spawn of level.enemySpawns || []) {
     if (String(spawn.type || "").trim() === "assistant_producer") {
       errors.push("Assistant Producer must not spawn.");
     }
     const type = migrateEnemyType(spawn.type);
-    if (!ENEMY_TYPES[type]) warnings.push(`Unknown enemy type "${spawn.type}".`);
+    if (!ENEMY_TYPES[type] || !ALLOWED_ENEMIES.has(type)) {
+      errors.push(`Invalid enemy type "${spawn.type}" on spawn "${spawn.id || "?"}".`);
+    }
     if (spawn.id) {
       if (spawnIds.has(spawn.id)) errors.push(`Duplicate enemy spawn id "${spawn.id}".`);
       spawnIds.add(spawn.id);
     }
+    if (width && (spawn.x < 0 || spawn.x > width || spawn.y < 0 || spawn.y > height)) {
+      errors.push(`Enemy "${spawn.id || type}" spawn is outside level bounds.`);
+    }
+    const ebox = { x: spawn.x - 40, y: spawn.y - 160, w: 80, h: 160 };
+    const buried = (level.platforms || []).find((p) => p.y + 8 < spawn.y - 8 && overlaps(ebox, p));
+    if (buried) errors.push(`Enemy "${spawn.id || type}" spawn overlaps solid collision.`);
   }
   const encounterIds = new Set();
   for (const enc of level.encounters || []) {
@@ -69,6 +80,11 @@ export function validateLevel(level) {
     else encounterIds.add(enc.id);
     for (const id of enc.enemyIds || []) {
       if (!spawnIds.has(id)) errors.push(`Encounter "${enc.id}" references missing enemy "${id}".`);
+    }
+  }
+  for (const step of level.objectives || []) {
+    if (step.encounterId && !encounterIds.has(step.encounterId)) {
+      errors.push(`Objective "${step.id}" references missing encounter "${step.encounterId}".`);
     }
   }
   for (const door of level.doors || []) {
@@ -82,6 +98,9 @@ export function validateLevel(level) {
 
   const spawn = level.playerSpawn;
   if (spawn) {
+    if (width && (spawn.x < 0 || spawn.x > width || spawn.y < 0 || spawn.y > height)) {
+      errors.push("Player spawn is outside level bounds.");
+    }
     const box = { x: spawn.x - 40, y: spawn.y - 170, w: 80, h: 170 };
     const hit = (level.platforms || []).find((p) => p.y + 8 < spawn.y - 8 && overlaps(box, p));
     if (hit) warnings.push("Player spawn overlaps a solid.");
@@ -104,6 +123,7 @@ export function buildWorld(level) {
   const world = {
     id: level.id,
     name: level.name,
+    music: level.music || "studio_01_theme",
     width: level.worldWidth,
     height: level.worldHeight,
     background: level.background,

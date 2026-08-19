@@ -177,24 +177,36 @@ export class AssetLoader {
       animations: {},
     };
     for (const [name, clip] of Object.entries(config.animations || {})) {
-      const image = await this.loadImage(clip.src, clip.src);
-      const ok = validateSpriteStrip(
-        image,
-        {
+      try {
+        const image = await this.loadImage(clip.src, clip.src);
+        const ok = validateSpriteStrip(
+          image,
+          {
+            frameWidth: config.frameWidth,
+            frameHeight: config.frameHeight,
+            frames: clip.frames,
+          },
+          clip.src
+        );
+        kit.animations[name] = {
+          ...clip,
+          image: ok ? image : null,
           frameWidth: config.frameWidth,
           frameHeight: config.frameHeight,
-          frames: clip.frames,
-        },
-        clip.src
-      );
-      kit.animations[name] = {
-        ...clip,
-        image: ok ? image : null,
-        frameWidth: config.frameWidth,
-        frameHeight: config.frameHeight,
-        renderWidth: config.renderWidth || config.frameWidth,
-        renderHeight: config.renderHeight || config.frameHeight,
-      };
+          renderWidth: config.renderWidth || config.frameWidth,
+          renderHeight: config.renderHeight || config.frameHeight,
+        };
+      } catch (err) {
+        console.warn(`[Producer Hunt] Sprite clip failed (${config.id}/${name}). Kit continues.`, err);
+        kit.animations[name] = {
+          ...clip,
+          image: null,
+          frameWidth: config.frameWidth,
+          frameHeight: config.frameHeight,
+          renderWidth: config.renderWidth || config.frameWidth,
+          renderHeight: config.renderHeight || config.frameHeight,
+        };
+      }
     }
     return kit;
   }

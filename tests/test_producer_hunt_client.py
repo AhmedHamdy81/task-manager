@@ -1,4 +1,4 @@
-"""The Client enemy is a second type; studio_01 still only spawns Post Producer."""
+"""The Client enemy is a second type; studio_01 stays Post Producer only."""
 
 from __future__ import annotations
 
@@ -58,22 +58,31 @@ class ProducerHuntClientTests(unittest.TestCase):
         self.assertNotIn("assistant_producer/", enemy)
         self.assertNotIn("enemies/assistant_producer", catalog)
 
-    def test_studio_01_unchanged_studio_02_mixed(self):
+    def test_studio_01_client_test_and_studio_02_mixed(self):
         s1 = (JS / "levels" / "studio-01.js").read_text()
         s2 = (JS / "levels" / "studio-02.js").read_text()
         index = (JS / "levels" / "level-01.js").read_text()
         game = (JS / "game.js").read_text()
-        self.assertNotIn('type: "client"', s1)
-        self.assertIn('type: "post_producer"', s1)
+        self.assertIn('id: "studio_01_client_test_01"', s1)
+        self.assertIn('type: "client"', s1)
+        self.assertIn("enc_client_test", s1)
+        self.assertEqual(s1.count('type: "post_producer"'), 5)
         self.assertIn('id: "studio_02"', s2)
+        self.assertIn('name: "Client Review"', s2)
         self.assertIn('type: "client"', s2)
         self.assertIn('type: "post_producer"', s2)
-        self.assertIn("enc_mixed", s2)
+        self.assertIn("enc_intro_client", s2)
+        self.assertIn("enc_mixed_early", s2)
+        self.assertIn("enc_final", s2)
         self.assertIn("STUDIO_02", index)
+        self.assertIn("nextLevelId", index)
         self.assertIn("resolveLevel", game)
         self.assertIn("loadEnemyKit(ENEMY_TYPES.client.sprite)", game)
-        self.assertIn("updateEnemyContact", game)
+        self.assertIn("advanceToNextLevel", game)
         self.assertIn("ENEMY_TYPES.post_producer", game)
+        self.assertIn("[Producer Hunt] Spawned enemy:", game)
+        self.assertNotIn("the_client", (JS / "enemy.js").read_text())
+        self.assertNotIn("client_enemy", (JS / "enemy.js").read_text())
 
 
 if __name__ == "__main__":

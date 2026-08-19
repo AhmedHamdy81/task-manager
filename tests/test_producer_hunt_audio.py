@@ -88,7 +88,7 @@ class ProducerHuntAudioTests(unittest.TestCase):
         player = (JS / "player.js").read_text()
         enemy = (JS / "enemy.js").read_text()
         self.assertIn('playMusic("menu_theme")', game)
-        self.assertIn('playMusic("studio_01_theme", { restart: true })', game)
+        self.assertIn('playMusic(this.world.music || "studio_01_theme", { restart: true })', game)
         self.assertIn('playMusic("level_complete_music")', game)
         self.assertIn('sfx("ui_move")', game)
         self.assertIn('sfx("ui_confirm")', game)

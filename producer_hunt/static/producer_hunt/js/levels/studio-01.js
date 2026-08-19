@@ -7,6 +7,7 @@ const W = t(118);
 export const STUDIO_01 = {
   id: "studio_01",
   name: "The Post Suite",
+  music: "studio_01_theme",
   worldWidth: W,
   worldHeight: 1080,
   background: {
@@ -54,6 +55,7 @@ export const STUDIO_01 = {
     encountersCleared: ["enc_final"],
   },
   encounters: [
+    { id: "enc_client_test", activateX: t(11), enemyIds: ["studio_01_client_test_01"] },
     { id: "enc_intro", activateX: t(44), enemyIds: ["pp_intro"] },
     { id: "enc_mid", activateX: t(66), enemyIds: ["pp_mid_a", "pp_mid_b"] },
     { id: "enc_final", activateX: t(98), enemyIds: ["pp_final_a", "pp_final_b"] },
@@ -102,6 +104,15 @@ export const STUDIO_01 = {
     { frame: 4, x: t(106), y: G - 128, w: 128, h: 128, layer: "front" },
   ],
   enemySpawns: [
+    {
+      id: "studio_01_client_test_01",
+      type: "client",
+      x: t(13),
+      y: G,
+      patrolMin: t(11),
+      patrolMax: t(16),
+      activateRange: 640,
+    },
     { id: "pp_intro", type: "post_producer", x: t(50), y: G, patrolMin: t(47), patrolMax: t(55), activateRange: 560 },
     { id: "pp_mid_a", type: "post_producer", x: t(70), y: G, patrolMin: t(67), patrolMax: t(74), activateRange: 520 },
     { id: "pp_mid_b", type: "post_producer", x: t(76), y: G - t(4), patrolMin: t(74), patrolMax: t(77), activateRange: 520 },

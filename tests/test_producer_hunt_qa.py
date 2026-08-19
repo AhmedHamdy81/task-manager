@@ -148,7 +148,8 @@ class ProducerHuntReleaseQaTests(unittest.TestCase):
         self.assertIn("_safeRel", loader)
         self.assertIn("loadTimeoutMs", loader)
         self.assertIn("if (this.characterKits.has(config.id))", loader)
-        self.assertNotIn("NEXT LEVEL", game)
+        self.assertIn("nextPlayableLevel", game)
+        self.assertIn("NEXT LEVEL", game)
         self.assertIn("openPause", game)
         self.assertIn("_deathOverlay", game)
         main = (JS_ROOT / "main.js").read_text()
@@ -204,14 +205,14 @@ class ProducerHuntProductionStaticTests(unittest.TestCase):
         self._auth()
         r = self.client.get("/producer-hunt")
         html = r.get_data(as_text=True)
-        self.assertIn("ph-20260819-prod", html)
+        self.assertIn("ph-20260819-clientvis", html)
         self.assertIn('data-allow-debug="1"', html)
         r = self.client.get(
-            "/producer-hunt/static/assets/environment/studio/backgrounds/studio_background_far.png?v=ph-20260819-prod"
+            "/producer-hunt/static/assets/environment/studio/backgrounds/studio_background_far.png?v=ph-20260819-clientvis"
         )
         self.assertEqual(r.status_code, 200)
         self.assertGreater(len(r.data), 100)
-        r = self.client.get("/producer-hunt/static/js/levels/studio-01.js?v=ph-20260819-prod")
+        r = self.client.get("/producer-hunt/static/js/levels/studio-01.js?v=ph-20260819-clientvis")
         self.assertEqual(r.status_code, 200)
         self.assertIn('id: "studio_01"', r.get_data(as_text=True))
 

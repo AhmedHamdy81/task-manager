@@ -14,6 +14,7 @@ export const SETTINGS_DEFAULTS = {
   reducedMotion: false,
   characterId: "",
   completedLevels: [],
+  phase2Complete: false,
 };
 
 let _saveWarn = false;
@@ -51,6 +52,7 @@ export function normalizeSettings(raw) {
     reducedMotion: src.reducedMotion === true,
     characterId,
     completedLevels: completed,
+    phase2Complete: src.phase2Complete === true || completed.includes("studio_02"),
   };
 }
 

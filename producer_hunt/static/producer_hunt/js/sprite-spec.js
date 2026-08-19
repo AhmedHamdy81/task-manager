@@ -32,6 +32,8 @@ export const DEFAULT_BODY = {
   collisionHeight: 170,
   collisionOffsetX: 0,
   collisionOffsetY: 0,
+  anchorX: 0.5,
+  anchorY: 1.0,
   muzzleOffset: { x: 42, y: -104 },
 };
 

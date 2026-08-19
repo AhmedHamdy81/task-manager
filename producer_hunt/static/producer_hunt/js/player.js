@@ -74,11 +74,33 @@ export class Player {
     return { x: this.footX, y: this.footY };
   }
 
+  /** Dest size / source frame size. Identity (1) when render size matches the strip. */
+  renderScale() {
+    const fw = this.anim?.frameWidth || this.sprite.frameWidth || 256;
+    const fh = this.anim?.frameHeight || this.sprite.frameHeight || 256;
+    const rw = this.anim?.renderWidth || this.sprite.renderWidth || fw;
+    const rh = this.anim?.renderHeight || this.sprite.renderHeight || fh;
+    return { x: rw / fw, y: rh / fh };
+  }
+
+  _muzzleOffset() {
+    const map = this.character.muzzleByAnim || {};
+    const anim = this.anim?.name;
+    if (anim && map[anim]) return map[anim];
+    if (anim === "crouch_shoot" || anim === "crouch" || this.crouching) {
+      return map.crouch_shoot || COMBAT.player.muzzle.crouch;
+    }
+    return map.shoot || COMBAT.player.muzzle.stand;
+  }
+
   muzzleWorld() {
-    const off = this.crouching ? COMBAT.player.muzzle.crouch : COMBAT.player.muzzle.stand;
+    const off = this._muzzleOffset();
+    const scale = this.renderScale();
+    const sx = (off.x || 0) * scale.x;
+    const sy = (off.y || 0) * scale.y;
     return {
-      x: this.footX + this.facing * off.x,
-      y: this.footY + off.y,
+      x: this.footX + this.facing * sx,
+      y: this.footY + sy,
     };
   }
 
@@ -88,6 +110,7 @@ export class Player {
 
   _drawWeapon(ctx, camera, assets) {
     if (!this.alive || !assets) return;
+    if (!this.character.renderWeaponOverlay) return;
     const muzzle = this.muzzleWorld();
     const s = camera.worldToScreen(muzzle.x, muzzle.y);
     const size = 72;
@@ -157,7 +180,9 @@ export class Player {
     if (!this.alive || this._firedClip) return;
     const clip = this.anim.name;
     if (clip !== "shoot" && clip !== "crouch_shoot") return;
-    if (this.anim.frame < (this.weapon.spawnFrame ?? COMBAT.player.spawnFrame)) return;
+    const release =
+      this.character.fireFrameByAnim?.[clip] ?? this.weapon.spawnFrame ?? COMBAT.player.spawnFrame;
+    if (this.anim.frame < release) return;
     if (!this.weapon.canFire()) return;
     const muzzle = this.muzzleWorld();
     const shot = this.weapon.tryFire({
@@ -290,8 +315,13 @@ export class Player {
     }
     const muzzle = this.muzzleWorld();
     const mz = camera.worldToScreen(muzzle.x, muzzle.y);
-    ctx.fillStyle = "#f97316";
-    ctx.fillRect(mz.x - 3, mz.y - 3, 6, 6);
+    ctx.fillStyle = "#facc15";
+    ctx.strokeStyle = "#fb7185";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(mz.x, mz.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
     ctx.fillStyle = "#86efac";
     ctx.font = "13px monospace";
     ctx.textAlign = "left";

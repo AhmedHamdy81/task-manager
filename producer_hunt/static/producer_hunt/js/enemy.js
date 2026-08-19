@@ -111,7 +111,7 @@ export class Enemy {
     this.footX = spawn.x;
     this.footY = spawn.y;
     this._syncBox();
-    this.vx = spec.speed;
+    this.vx = spec.behavior === "cautious_ranged" ? 0 : spec.speed;
     this.vy = 0;
     this.direction = spec.artFacing || 1;
     this.onGround = false;
@@ -128,6 +128,8 @@ export class Enemy {
     this.patrolMin = spawn.patrolMin ?? spawn.x - 120;
     this.patrolMax = spawn.patrolMax ?? spawn.x + 120;
     this.anim = new SpriteAnimator(spriteKit || spec.sprite);
+    this.anim.play("idle", { restart: true });
+    this._applyFacingFlip();
     this.weapon = new Weapon(enemyWeaponDef(spec.id));
     this.activated = Boolean(spawn.activated);
     this.activateRange = spawn.activateRange || 640;

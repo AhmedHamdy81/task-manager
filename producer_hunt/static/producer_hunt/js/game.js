@@ -3,11 +3,11 @@ import { GameState, GameStateManager } from "./game-state.js";
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
 import { Player } from "./player.js";
-import { ENEMY_TYPES, Enemy } from "./enemy.js";
+import { ENEMY_TYPES, Enemy, migrateEnemyType } from "./enemy.js";
 import { HUD } from "./hud.js";
 import { CharacterSelect } from "./character-select.js";
 import { aabb, hitsSolid } from "./collision.js";
-import { LEVELS, STUDIO_01, buildWorld, LevelDataError, resolveLevel } from "./levels/level-01.js";
+import { LEVELS, STUDIO_01, buildWorld, LevelDataError, resolveLevel, nextLevelId, levelDataLoads } from "./levels/level-01.js";
 import { AssetLoader } from "./asset-loader.js";
 import { WORLD_SHEETS, drawCoverImage, drawSheetFrame } from "./asset-catalog.js";
 import { COMBAT } from "./combat.js";
@@ -45,6 +45,29 @@ function formatClock(seconds) {
   const m = Math.floor(s / 60);
   const r = s % 60;
   return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+function enemySpawnSafetyIssues(world, enemy) {
+  const issues = [];
+  if (!world) return ["missing world"];
+  if (!(enemy.health > 0) || !enemy.alive || enemy.state === "death") {
+    issues.push("starts dead or with zero health");
+  }
+  const width = world.width || 0;
+  const height = world.height || DESIGN_H;
+  if (enemy.footX < 0 || enemy.footX > width) issues.push("outside level bounds");
+  if (enemy.footY > height + 8) issues.push("below death boundary");
+  const solids = world.solids || [];
+  const box = { x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h };
+  const buried = solids.some((s) => s.y + 8 < enemy.footY - 8 && aabb(box, s));
+  if (buried) issues.push("overlaps solid collision");
+  const onSupport = solids.some((s) => {
+    const over = enemy.footX >= s.x && enemy.footX <= s.x + s.w;
+    const onTop = Math.abs(enemy.footY - s.y) <= 12;
+    return over && onTop;
+  });
+  if (!onSupport) issues.push("not on a valid platform");
+  return issues;
 }
 
 export class Game {
@@ -156,7 +179,11 @@ export class Game {
       await Promise.all(CHARACTERS.map((ch) => this.assets.loadCharacterKit(ch.sprite)));
       await this.assets.loadEnemyKit(ENEMY_TYPES.post_producer.sprite);
       await this.assets.loadEnemyKit(ENEMY_TYPES.client.sprite);
-      await this.assets.loadCatalog(WORLD_SHEETS);
+      try {
+        await this.assets.loadCatalog(WORLD_SHEETS);
+      } catch (err) {
+        console.warn("[Producer Hunt] Optional world sheet failed. Enemies still spawn.", err);
+      }
       await this.audio.preload();
     } catch (err) {
       console.error("[Producer Hunt Asset Error]\n\nPreload failed. Continuing with placeholders.", err);
@@ -211,7 +238,18 @@ export class Game {
   }
 
   completeButtons() {
-    return menuButtons(["REPLAY LEVEL", "CHARACTER SELECTION", "MAIN MENU"], 620, { gap: 64 });
+    const labels = [];
+    if (this.nextPlayableLevel()) labels.push("NEXT LEVEL");
+    labels.push("REPLAY LEVEL", "CHARACTER SELECTION", "MAIN MENU");
+    const y0 = labels.length > 3 ? 540 : 620;
+    return menuButtons(labels, y0, { gap: labels.length > 3 ? 58 : 64 });
+  }
+
+  nextPlayableLevel() {
+    const nid = nextLevelId(this.world?.id || this.levelId);
+    if (!nid) return null;
+    if (!levelDataLoads(nid)) return null;
+    return nid;
   }
 
   onClick(e) {
@@ -318,9 +356,22 @@ export class Game {
   }
 
   handleComplete(id) {
+    if (id === "NEXT LEVEL") this.advanceToNextLevel();
     if (id === "REPLAY LEVEL") this.restartLevel();
     if (id === "CHARACTER SELECTION") this.goCharacterSelect();
     if (id === "MAIN MENU") this.goMainMenu({ dispose: true });
+  }
+
+  advanceToNextLevel() {
+    const nid = this.nextPlayableLevel();
+    if (!nid) return;
+    const character = this.character;
+    this.levelId = nid;
+    this.checkpoint = null;
+    this.projectiles = [];
+    this.effects = [];
+    this.completed = false;
+    this.beginLevel(character);
   }
 
   handleMenu(hit) {
@@ -562,6 +613,7 @@ export class Game {
 
   goMainMenu() {
     this.disposeLevel();
+    this.levelId = STUDIO_01.id;
     this.menuIndex = 0;
     this.showControls = false;
     this.audio.setGameplayMuted(false);
@@ -603,6 +655,7 @@ export class Game {
     const name = this.world?.name || "The Post Suite";
     const ch = this.character?.displayName || this.character?.name || "—";
     const time = formatClock(this.stats.time || this._playTime);
+    const title = this.world?.id === "studio_02" ? "PHASE 2 COMPLETE" : "LEVEL COMPLETE";
     const lines = [
       `Time  ${time}`,
       `Production tokens  ${this.stats.tokens}`,
@@ -610,7 +663,7 @@ export class Game {
       `Character  ${ch}`,
       `Deaths  ${this.stats.deaths}`,
     ];
-    drawMenu(ctx, "LEVEL COMPLETE", name, this.completeButtons(), { focus: this.menuIndex, titleY: 140 });
+    drawMenu(ctx, title, name, this.completeButtons(), { focus: this.menuIndex, titleY: 140 });
     ctx.textAlign = "center";
     ctx.fillStyle = "#cbd5e1";
     ctx.font = "22px sans-serif";
@@ -668,7 +721,7 @@ export class Game {
     this.hud.invalidate();
     this.camera.snap(this.player.footX - this.camera.w * 0.38, this.player.footY - this.camera.h * 0.7, this.world);
     this.audio.setGameplayMuted(false);
-    this.audio.playMusic("studio_01_theme", { restart: true });
+    this.audio.playMusic(this.world.music || "studio_01_theme", { restart: true });
     this.state.set(GameState.PLAYING);
   }
 
@@ -695,10 +748,16 @@ export class Game {
       ammo: this.player.weapon.ammo,
       score: this.score,
       keys: this.player.keys,
+      abilityCool: this.player.ability?.cool || 0,
       pickups: Object.fromEntries(this.world.pickups.map((p) => [p.id, p.taken])),
       doors: Object.fromEntries((this.world.doors || []).map((d) => [d.id, d.state])),
       checkpoints: Object.fromEntries((this.world.checkpoints || []).map((c) => [c.id, c.activated])),
-      defeated: (this.enemies || []).filter((e) => !e.alive && e.persistent).map((e) => e.spawnId),
+      encounters: Object.fromEntries(
+        (this.world.encounters || []).map((e) => [e.id, { activated: e.activated, cleared: e.cleared }])
+      ),
+      defeated: (this.enemies || [])
+        .filter((e) => !e.alive && (e.persistent || e.encounterBound))
+        .map((e) => e.spawnId),
       stats: { ...this.stats, time: this._playTime },
     };
     this.spawn = { x: safe.x, y: safe.y };
@@ -718,6 +777,12 @@ export class Game {
     this.player.invuln = 0.4;
     this.player.weapon.ammo = Number.isFinite(snap.ammo) ? snap.ammo : this.player.weapon.ammo;
     this.player.keys = Number.isFinite(snap.keys) ? snap.keys : 0;
+    if (this.player.ability) {
+      this.player.ability.cool = Number.isFinite(snap.abilityCool) ? snap.abilityCool : 0;
+      this.player.ability.active = 0;
+    }
+    this.player.speedMul = 1;
+    this.player.damageMul = 1;
     this.score = Number.isFinite(snap.score) ? snap.score : 0;
     if (snap.stats && typeof snap.stats === "object") {
       this.stats = {
@@ -755,7 +820,32 @@ export class Game {
       cp.activated = Boolean(snap.checkpoints && snap.checkpoints[cp.id]);
       cp.inside = false;
     }
+    this.applyEncounterSnapshot(snap);
     this.hud.invalidate();
+  }
+
+  applyEncounterSnapshot(snap) {
+    if (!this.world) return;
+    const saved = snap?.encounters || {};
+    for (const enc of this.world.encounters || []) {
+      const rec = saved[enc.id];
+      if (rec) {
+        enc.activated = Boolean(rec.activated);
+        enc.cleared = Boolean(rec.cleared);
+      }
+      for (const enemy of this.enemies) {
+        if (!(enc.enemyIds || []).includes(enemy.spawnId)) continue;
+        if (enc.cleared) {
+          enemy.alive = false;
+          enemy.health = 0;
+          enemy.state = "death";
+          enemy.deadTimer = 99;
+          enemy.activated = true;
+        } else if (enc.activated) {
+          enemy.activated = true;
+        }
+      }
+    }
   }
 
   frame(time) {
@@ -969,9 +1059,12 @@ export class Game {
     }
     this.projectiles = this.projectiles.filter((p) => p.alive);
     const done = loadSettings().completedLevels || [];
+    const patch = {};
     if (this.world?.id && !done.includes(this.world.id)) {
-      this.settings = saveSettings({ completedLevels: [...done, this.world.id] });
+      patch.completedLevels = [...done, this.world.id];
     }
+    if (this.world?.id === "studio_02") patch.phase2Complete = true;
+    if (Object.keys(patch).length) this.settings = saveSettings(patch);
     this.hud.invalidate();
     this.audio.setGameplayMuted(true);
     this.sfx("level_complete", { force: true });
@@ -1043,37 +1136,65 @@ export class Game {
 
   spawnEnemies() {
     const defeated = new Set(this.checkpoint?.defeated || []);
-    this.enemies = this.world.enemySpawns.map((s, i) => {
+    this.enemies = [];
+    (this.world.enemySpawns || []).forEach((s, i) => {
       const spawnId = s.id || `${s.type}_${i}`;
+      const typeId = migrateEnemyType(s.type);
+      if (!ENEMY_TYPES[typeId]) {
+        console.error(`[Producer Hunt] Enemy creation failed: unknown type "${s.type}" id=${spawnId}`);
+        return;
+      }
       const bound = (this.world.encounters || []).some((enc) => (enc.enemyIds || []).includes(spawnId));
-      const enemy = new Enemy(
-        s.type,
-        {
-          x: s.x,
-          y: s.y,
-          patrolMin: s.patrolMin,
-          patrolMax: s.patrolMax,
-          activateRange: s.activateRange,
-          activated: !bound,
-        },
-        this.assets.enemyKit(s.type)
-      );
+      let enemy;
+      try {
+        const kit = this.assets.enemyKit(typeId) || ENEMY_TYPES[typeId].sprite;
+        enemy = new Enemy(
+          typeId,
+          {
+            id: spawnId,
+            x: s.x,
+            y: s.y,
+            patrolMin: s.patrolMin,
+            patrolMax: s.patrolMax,
+            activateRange: s.activateRange,
+            activated: !bound,
+          },
+          kit
+        );
+      } catch (err) {
+        console.error(`[Producer Hunt] Enemy creation failed: type=${typeId} id=${spawnId} reason=${err}`);
+        return;
+      }
       enemy.spawnId = spawnId;
       enemy.encounterBound = bound;
-      enemy.persistent = Boolean(s.persistent);
+      enemy.persistent = Boolean(s.persistent) || bound;
       if (enemy.persistent && defeated.has(spawnId)) {
         enemy.alive = false;
         enemy.health = 0;
         enemy.state = "death";
         enemy.deadTimer = 99;
+      } else {
+        const issues = enemySpawnSafetyIssues(this.world, enemy);
+        if (issues.length) {
+          console.warn(
+            `[Producer Hunt] Unsafe enemy spawn: type=${enemy.type} id=${spawnId} ${issues.join("; ")}`
+          );
+        }
+        if (this.allowDebug) {
+          console.info(
+            `[Producer Hunt] Spawned enemy:\ntype=${enemy.type}\nid=${spawnId}\nposition=${enemy.footX},${enemy.footY}\nlevel=${this.world.id || this.levelId}`
+          );
+        }
       }
-      return enemy;
+      this.enemies.push(enemy);
     });
+    this.applyEncounterSnapshot(this.checkpoint);
   }
 
   updateEncounters() {
     const px = this.player?.footX ?? 0;
     for (const enc of this.world.encounters || []) {
+      const wasCleared = Boolean(enc.cleared);
       if (!enc.activated && px >= enc.activateX) enc.activated = true;
       if (enc.activated) {
         for (const enemy of this.enemies) {
@@ -1082,8 +1203,15 @@ export class Game {
       }
       enc.cleared = (enc.enemyIds || []).every((id) => {
         const enemy = this.enemies.find((e) => e.spawnId === id);
-        return !enemy || !enemy.alive;
+        if (!enemy) return true;
+        return !enemy.alive && (enemy.anim?.finished || enemy.deadTimer > 0.85);
       });
+      if (!wasCleared && enc.cleared) {
+        for (const shot of this.projectiles) {
+          if (shot.owner === "enemy") shot.disable();
+        }
+        this.projectiles = this.projectiles.filter((p) => p.alive);
+      }
     }
   }
 
@@ -1391,5 +1519,16 @@ export class Game {
       drawBox(d.trigger, "rgba(96,165,250,0.7)");
     }
     for (const cp of this.world?.checkpoints || []) drawBox(cp, "rgba(45,212,191,0.9)");
+    for (const enc of this.world?.encounters || []) {
+      const s = this.camera.worldToScreen(enc.activateX, 0);
+      ctx.strokeStyle = enc.activated ? "rgba(74,222,128,0.85)" : "rgba(251,113,133,0.9)";
+      ctx.beginPath();
+      ctx.moveTo(s.x, 80);
+      ctx.lineTo(s.x, DESIGN_H - 40);
+      ctx.stroke();
+      ctx.fillStyle = enc.activated ? "#86efac" : "#fb7185";
+      ctx.font = "12px monospace";
+      ctx.fillText(enc.id, s.x + 6, 96);
+    }
   }
 }
