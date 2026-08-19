@@ -58,18 +58,18 @@ Keys are remappable in `js/input.js` (`Input.remap`).
 
 ## Characters
 
-Add a character by appending an object in `js/characters.js` (stats, weapon, special, asset paths). No engine branching per id except ability handlers in `js/abilities.js`.
+Characters live in `js/characters.js`. Shared movement, jump, health, damage, and collision apply to all four. Select one after the title screen; the id is stored in `localStorage` (`producerHunt.settings`). Unknown saved ids fall back to **The Editor**.
 
 | Id | Name | Special |
 |---|---|---|
-| `editor` | THE EDITOR | CUT! — freeze nearby enemies |
-| `assistant` | THE ASSISTANT | Turbo Sync — speed boost |
-| `vfx_supervisor` | VFX SUPERVISOR | FINAL RENDER — short-range burst |
-| `colorist` | THE COLORIST | GRADE SHIFT — damage boost |
+| `editor` | The Editor | CUT! — freeze nearby enemies |
+| `assistant` | The Assistant | Turbo Sync — speed boost |
+| `vfx_supervisor` | The VFX Supervisor | FINAL RENDER — short-range burst |
+| `colorist` | The Colorist | GRADE SHIFT — damage boost |
 
 ## Enemies
 
-Register a type on `ENEMY_TYPES` in `js/enemy.js`, then spawn it from a level’s `enemySpawns`. Only **Assistant Producer** is implemented.
+Register a type on `ENEMY_TYPES` in `js/enemy.js`, then spawn it from a level’s `enemySpawns`. Level 1 spawns **Post Producer** (`post_producer`). Legacy `assistant_producer` ids are migrated to Post Producer.
 
 ## Weapons
 

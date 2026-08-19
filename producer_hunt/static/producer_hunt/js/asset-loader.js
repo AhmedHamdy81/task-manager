@@ -1,6 +1,8 @@
 /**
  * Load / validate sprite strips. Missing or invalid art never crashes gameplay.
  */
+import { PORTRAIT_HEIGHT, PORTRAIT_WIDTH } from "./sprite-spec.js";
+
 export function formatAssetValidation(label, spec, actualW, actualH) {
   const expectedW = spec.frames ? spec.frameWidth * spec.frames : spec.width;
   const expectedH = spec.frames ? spec.frameHeight : spec.height;
@@ -56,8 +58,9 @@ export function validateSpriteStrip(img, spec, label) {
 }
 
 export class AssetLoader {
-  constructor(baseUrl = "") {
+  constructor(baseUrl = "", options = {}) {
     this.baseUrl = String(baseUrl || "").replace(/\/$/, "");
+    this.cacheKey = options.cacheKey || "";
     this.images = new Map();
     this.sheets = new Map();
     this.characterKits = new Map();
@@ -66,8 +69,16 @@ export class AssetLoader {
 
   url(rel) {
     if (!rel) return "";
-    if (/^https?:\/\//.test(rel) || rel.startsWith("/")) return rel;
-    return `${this.baseUrl}/${rel.replace(/^\//, "")}`;
+    let src = rel;
+    if (!(/^https?:\/\//.test(rel) || rel.startsWith("/"))) {
+      src = `${this.baseUrl}/${rel.replace(/^\//, "")}`;
+    } else {
+      src = rel;
+    }
+    if (this.cacheKey) {
+      src += (src.includes("?") ? "&" : "?") + "v=" + encodeURIComponent(this.cacheKey);
+    }
+    return src;
   }
 
   async loadImage(key, rel) {
@@ -146,9 +157,16 @@ export class AssetLoader {
 
   async loadCharacterKit(config) {
     const kit = await this._hydrateAnims(config);
-    kit.portraitImage = config.portrait
-      ? await this.loadImage(config.portrait, config.portrait)
-      : null;
+    kit.portraitImage = null;
+    if (config.portrait) {
+      const portrait = await this.loadImage(`portrait:${config.id}`, config.portrait);
+      const ok = validateImageSize(
+        portrait,
+        { width: PORTRAIT_WIDTH, height: PORTRAIT_HEIGHT },
+        config.portrait
+      );
+      kit.portraitImage = ok ? portrait : null;
+    }
     this.characterKits.set(config.id, kit);
     return kit;
   }

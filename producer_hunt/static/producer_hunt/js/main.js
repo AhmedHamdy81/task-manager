@@ -1,4 +1,4 @@
-import { DEBUG_ASSETS, DEBUG_QUERY } from "./config.js";
+import { ASSET_CACHE_KEY, DEBUG_ASSETS, DEBUG_QUERY } from "./config.js";
 import { Game } from "./game.js";
 
 const canvas = document.getElementById("ph-canvas");
@@ -20,6 +20,7 @@ const debug =
 const game = new Game(canvas, {
   exitUrl: body.dataset.exitUrl || "/",
   assetBase: body.dataset.assetBase || "",
+  cacheKey: body.dataset.assetVersion || ASSET_CACHE_KEY,
   debug,
 });
 game.start();

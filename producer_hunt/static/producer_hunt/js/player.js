@@ -1,10 +1,12 @@
 import { JUMP_SCALE, MOVE_ACCEL, MOVE_DECEL } from "./config.js";
 import { SpriteAnimator } from "./animation.js";
-import { keepInWorld, resolveSolids } from "./collision.js";
+import { aabb, keepInWorld, resolveSolids } from "./collision.js";
 import { applyGravity, arcadeAxis } from "./physics.js";
 import { makeWeapon } from "./characters.js";
 import { SpecialAbility } from "./abilities.js";
 import { DEFAULT_BODY } from "./sprite-spec.js";
+import { COMBAT } from "./combat.js";
+import { drawSheetFrame } from "./asset-catalog.js";
 
 export class Player {
   constructor(character, spawn, spriteKit = null) {
@@ -16,7 +18,6 @@ export class Player {
     this.crouchH = Math.round(body.collisionHeight * 0.62);
     this.collisionOffsetX = body.collisionOffsetX || 0;
     this.collisionOffsetY = body.collisionOffsetY || 0;
-    this.muzzleOffset = { ...(body.muzzleOffset || DEFAULT_BODY.muzzleOffset) };
     this.w = this.collisionWidth;
     this.h = this.standH;
     this.footX = spawn.x;
@@ -29,6 +30,7 @@ export class Player {
     this.crouching = false;
     this.health = character.health;
     this.maxHealth = character.health;
+    this.keys = 0;
     this.invuln = 0;
     this.alive = true;
     this.deadTimer = 0;
@@ -40,6 +42,21 @@ export class Player {
     this.ability = new SpecialAbility(character.specialAbility);
     this.anim = new SpriteAnimator(spriteKit || character.sprite);
     this.shooting = false;
+    this._firedClip = false;
+  }
+
+  _standingBox() {
+    return {
+      x: this.footX - this.w / 2 + this.collisionOffsetX,
+      y: this.footY - this.standH + this.collisionOffsetY,
+      w: this.w,
+      h: this.standH,
+    };
+  }
+
+  _canStand(world) {
+    const box = this._standingBox();
+    return !world.solids.some((s) => s.y + 4 < this.footY && aabb(box, s));
   }
 
   _syncBox() {
@@ -57,14 +74,32 @@ export class Player {
   }
 
   muzzleWorld() {
+    const off = this.crouching ? COMBAT.player.muzzle.crouch : COMBAT.player.muzzle.stand;
     return {
-      x: this.footX + this.facing * this.muzzleOffset.x,
-      y: this.footY + this.muzzleOffset.y,
+      x: this.footX + this.facing * off.x,
+      y: this.footY + off.y,
     };
   }
 
   bounds() {
     return { x: this.x, y: this.y, w: this.w, h: this.h };
+  }
+
+  _drawWeapon(ctx, camera, assets) {
+    if (!this.alive || !assets) return;
+    const muzzle = this.muzzleWorld();
+    const s = camera.worldToScreen(muzzle.x, muzzle.y);
+    const size = 72;
+    drawSheetFrame(
+      ctx,
+      assets.sheet("player_weapons"),
+      this.weapon.weaponFrame ?? 0,
+      s.x - size / 2,
+      s.y - size / 2,
+      size,
+      size,
+      this.facing < 0
+    );
   }
 
   update(dt, input, world, projectiles, ctx) {
@@ -82,19 +117,22 @@ export class Player {
     this.weapon.update(dt);
     this.ability.update(dt, ctx);
 
-    this.crouching = input.isDown("crouch") && this.onGround;
+    const locked = Boolean(ctx?.inputLocked);
+    const wantCrouch = !locked && input.isDown("crouch") && this.onGround;
+    if (wantCrouch) this.crouching = true;
+    else if (this.crouching && this._canStand(world)) this.crouching = false;
     this.h = this.crouching ? this.crouchH : this.standH;
     this._syncBox();
 
     let wish = 0;
-    if (input.isDown("moveLeft")) wish -= 1;
-    if (input.isDown("moveRight")) wish += 1;
+    if (!locked && input.isDown("moveLeft")) wish -= 1;
+    if (!locked && input.isDown("moveRight")) wish += 1;
     if (wish !== 0) this.facing = wish;
 
     const maxSpeed = this.character.speed * this.speedMul * (this.crouching ? 0.42 : 1);
     arcadeAxis(this, wish, dt, { accel: MOVE_ACCEL, decel: MOVE_DECEL, maxSpeed });
 
-    if (input.consume("jump") && this.onGround && !this.crouching) {
+    if (!locked && input.consume("jump") && this.onGround && !this.crouching) {
       this.vy = -this.character.jumpStrength * JUMP_SCALE;
       this.onGround = false;
     }
@@ -104,36 +142,45 @@ export class Player {
     keepInWorld(this, world);
     this._syncFeet();
 
-    this.shooting = input.isDown("shoot");
-    if (this.shooting) {
-      const muzzle = this.muzzleWorld();
-      const shot = this.weapon.tryFire({
-        x: muzzle.x,
-        y: muzzle.y,
-        facing: this.facing,
-        damageMul: this.damageMul,
-      });
-      if (shot) {
-        shot.sheet = ctx.assets?.sheet("projectiles") || null;
-        ctx.audio.play("weapon", this.weapon.id);
-        ctx.spawnFx?.({
-          sheetKey: "projectiles",
-          frame: 5,
-          x: muzzle.x,
-          y: muzzle.y,
-          size: 48,
-          life: 0.08,
-          flipX: this.facing < 0,
-        });
-        projectiles.push(shot);
-      }
-    }
+    this.shooting = !locked && input.isDown("shoot");
+    if (!locked && input.consume("special")) this.ability.activate(ctx);
 
-    if (input.consume("special")) this.ability.activate(ctx);
-
-    this._animState();
+    const started = this._animState();
+    if (started) this._firedClip = false;
     this.anim.flip = this.facing < 0;
     this.anim.update(dt);
+    this._trySpawnShot(projectiles, ctx);
+  }
+
+  _trySpawnShot(projectiles, ctx) {
+    if (!this.alive || this._firedClip) return;
+    const clip = this.anim.name;
+    if (clip !== "shoot" && clip !== "crouch_shoot") return;
+    if (this.anim.frame < (this.weapon.spawnFrame ?? COMBAT.player.spawnFrame)) return;
+    if (!this.weapon.canFire()) return;
+    const muzzle = this.muzzleWorld();
+    const shot = this.weapon.tryFire({
+      x: muzzle.x,
+      y: muzzle.y,
+      facing: this.facing,
+      damageMul: this.damageMul,
+      owner: "player",
+    });
+    this._firedClip = true;
+    if (!shot) return;
+    shot.sheet = ctx.assets?.sheet("projectiles") || null;
+    ctx.audio.play("weapon", this.weapon.id);
+    const fx = this.weapon.muzzleFx || COMBAT.player.muzzleFx;
+    ctx.spawnFx?.({
+      sheetKey: fx.sheetKey,
+      frame: fx.frame,
+      x: muzzle.x,
+      y: muzzle.y,
+      size: fx.size,
+      life: fx.life,
+      flipX: this.facing < 0,
+    });
+    projectiles.push(shot);
   }
 
   _desiredAnim() {
@@ -153,23 +200,42 @@ export class Player {
     const locked = (cur === "death" && !this.anim.finished) || (cur === "hit" && !this.anim.finished && desired !== "death");
     if (locked) return;
     const restartOnce = (desired === "shoot" || desired === "crouch_shoot") && this.anim.finished;
-    this.anim.play(desired, { restart: restartOnce });
+    const started = this.anim.play(desired, { restart: restartOnce });
+    return started || restartOnce;
   }
 
-  takeDamage(amount) {
-    if (!this.alive || this.invuln > 0) return;
+  takeDamage(amount, opts = {}) {
+    if (!this.alive || this.invuln > 0) return 0;
+    const before = this.health;
     this.health = Math.max(0, this.health - amount);
     this.invuln = 0.85;
     this.hitFlash = 0.18;
     this.anim.play("hit", { restart: true });
+    if (opts.knockbackX != null && this.health > 0) {
+      this.vx = opts.knockbackX;
+      this.vy = Math.min(this.vy, -180);
+    }
     if (this.health <= 0) {
       this.alive = false;
+      this.health = 0;
       this.vx = 0;
       this.anim.play("death", { restart: true });
     }
+    return before - this.health;
   }
 
-  draw(ctx, camera) {
+  heal(amount) {
+    if (!this.alive) return 0;
+    const before = this.health;
+    this.health = Math.min(this.maxHealth, this.health + Math.max(0, amount));
+    return this.health - before;
+  }
+
+  isHealthFull() {
+    return this.health >= this.maxHealth;
+  }
+
+  draw(ctx, camera, assets = null) {
     const origin = camera.worldToScreen(this.footX, this.footY);
     const color = this.character.color;
     const initials = this.character.initials;
@@ -183,6 +249,7 @@ export class Player {
       g.fillText(initials, 0, -fh * 0.45);
     });
     ctx.globalAlpha = 1;
+    this._drawWeapon(ctx, camera, assets);
     if (this.renderBurst > 0) {
       ctx.save();
       ctx.strokeStyle = "rgba(192,132,252,0.85)";

@@ -1,5 +1,7 @@
 /** Shared sprite-sheet contract. Gameplay reads this; art is drop-in PNG strips. */
 
+export const PORTRAIT_WIDTH = 512;
+export const PORTRAIT_HEIGHT = 512;
 export const SPRITE_FRAME_WIDTH = 256;
 export const SPRITE_FRAME_HEIGHT = 256;
 
@@ -18,10 +20,9 @@ export const PLAYER_ANIMATIONS = {
 export const ENEMY_ANIMATIONS = {
   idle: { frames: 6, fps: 8, loop: true },
   walk: { frames: 8, fps: 10, loop: true },
-  run: { frames: 8, fps: 14, loop: true },
-  attack: { frames: 6, fps: 12, loop: false },
+  attack: { frames: 4, fps: 12, loop: false },
   hit: { frames: 3, fps: 14, loop: false },
-  death: { frames: 8, fps: 10, loop: false },
+  death: { frames: 6, fps: 10, loop: false },
 };
 
 export const DEFAULT_BODY = {
@@ -31,7 +32,7 @@ export const DEFAULT_BODY = {
   collisionHeight: 170,
   collisionOffsetX: 0,
   collisionOffsetY: 0,
-  muzzleOffset: { x: 78, y: -105 },
+  muzzleOffset: { x: 42, y: -104 },
 };
 
 export function characterSpriteDir(id) {
@@ -47,6 +48,11 @@ export function characterPortraitSrc(id) {
 }
 
 export function enemySpriteSrc(id, animName) {
+  return `enemies/${id}/sprites/${id}_${animName}.png`;
+}
+
+/** Legacy Assistant Producer path (inactive). Kept so old references remain resolvable. */
+export function enemySpriteSrcLegacy(id, animName) {
   return `enemies/${id}/${id}_${animName}.png`;
 }
 
@@ -76,6 +82,8 @@ export function makeCharacterSpriteConfig(id, extras = {}) {
 }
 
 export function makeEnemySpriteConfig(id, extras = {}) {
+  const { animationMap, srcFn, ...rest } = extras;
+  const anims = animationMap || ENEMY_ANIMATIONS;
   return {
     id,
     frameWidth: SPRITE_FRAME_WIDTH,
@@ -86,7 +94,7 @@ export function makeEnemySpriteConfig(id, extras = {}) {
     collisionHeight: 170,
     collisionOffsetX: 0,
     collisionOffsetY: 0,
-    ...extras,
-    animations: buildAnimMap((anim) => enemySpriteSrc(id, anim), ENEMY_ANIMATIONS),
+    ...rest,
+    animations: buildAnimMap((anim) => (srcFn ? srcFn(anim) : enemySpriteSrc(id, anim)), anims),
   };
 }

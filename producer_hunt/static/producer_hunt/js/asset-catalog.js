@@ -90,26 +90,54 @@ export const WORLD_SHEETS = {
     width: 1200,
     height: 500,
   },
+  player_weapons: {
+    src: "weapons/player_weapons.png",
+    width: 1024,
+    height: 256,
+    frameWidth: 256,
+    frameHeight: 256,
+    frames: 4,
+  },
+  post_producer_impact: {
+    src: "enemies/post_producer/effects/post_producer_attack_impact.png",
+    width: 512,
+    height: 128,
+    frameWidth: 128,
+    frameHeight: 128,
+    frames: 4,
+  },
 };
 
 export const PARALLAX = [
-  { key: "bg_far", factor: 0.12 },
-  { key: "bg_mid", factor: 0.38 },
-  { key: "bg_near", factor: 0.72 },
+  { key: "bg_far", factor: 0.1 },
+  { key: "bg_mid", factor: 0.3 },
+  { key: "bg_near", factor: 0.55 },
 ];
 
 export const PICKUP_FRAMES = {
   health: 0,
+  energy: 1,
   ammo: 1,
+  production_token: 2,
   reserved_film: 2,
+  data_card: 3,
   reserved_drive: 3,
+  access_key: 4,
   reserved_card: 4,
+  ability_charge: 5,
   reserved_crystal: 5,
+  headset: 6,
   reserved_shield: 6,
+  bonus: 7,
   reserved_score: 7,
 };
 
 export const PROJECTILE_FRAMES = {
+  editor_pulse: 0,
+  assistant_scan_bolt: 1,
+  vfx_orb: 2,
+  colorist_chroma_bolt: 3,
+  deadline_projectile: 4,
   marker: 0,
   proxy: 1,
   render: 2,
@@ -118,6 +146,24 @@ export const PROJECTILE_FRAMES = {
   muzzle: 5,
   impact: 6,
   chroma_charged: 7,
+};
+
+export const PROGRESSION_FRAMES = {
+  door_closed: 0,
+  door_open: 1,
+  checkpoint: 2,
+  checkpoint_active: 3,
+  exit_locked: 4,
+  exit_open: 5,
+};
+
+export const HAZARD_FRAMES = {
+  live_cable: 0,
+  electrical_panel: 1,
+  hot_light: 2,
+  falling_cases: 3,
+  cable_coil: 4,
+  cracked_monitor: 5,
 };
 
 export const HUD_FRAMES = {

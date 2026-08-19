@@ -26,10 +26,18 @@ PLAYER_ANIMS = {
 ENEMY_ANIMS = {
     "idle": 6,
     "walk": 8,
-    "run": 8,
-    "attack": 6,
+    "attack": 4,
     "hit": 3,
-    "death": 8,
+    "death": 6,
+}
+
+ENEMIES = {
+    "post_producer": ("POST PROD", (192, 132, 252), (107, 33, 168)),
+}
+
+# Inactive generator id. Do not load or spawn in-game.
+LEGACY_ENEMIES = {
+    "assistant_producer": ("A. PROD", (245, 158, 11), (120, 53, 15)),
 }
 
 CHARACTERS = {
@@ -37,10 +45,6 @@ CHARACTERS = {
     "assistant": ("ASSISTANT", (56, 189, 248), (7, 89, 133)),
     "vfx_supervisor": ("VFX SUP", (192, 132, 252), (107, 33, 168)),
     "colorist": ("COLORIST", (251, 113, 133), (159, 18, 57)),
-}
-
-ENEMIES = {
-    "assistant_producer": ("A. PROD", (245, 158, 11), (120, 53, 15)),
 }
 
 
@@ -113,7 +117,7 @@ def main() -> None:
     for eid, (label, fill, accent) in ENEMIES.items():
         for anim, frames in ENEMY_ANIMS.items():
             write_strip(
-                ROOT / "enemies" / eid / f"{eid}_{anim}.png",
+                ROOT / "enemies" / eid / "sprites" / f"{eid}_{anim}.png",
                 label,
                 anim,
                 frames,

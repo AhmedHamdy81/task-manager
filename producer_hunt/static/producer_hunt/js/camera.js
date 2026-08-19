@@ -1,4 +1,4 @@
-import { DESIGN_H, DESIGN_W } from "./config.js";
+import { CAMERA, DESIGN_H, DESIGN_W } from "./config.js";
 import { clamp } from "./collision.js";
 
 export class Camera {
@@ -11,14 +11,25 @@ export class Camera {
   }
 
   follow(target, world, dt) {
-    const wishLook = target.facing * 140;
-    this.look += (wishLook - this.look) * Math.min(1, dt * 4);
-    const focusX = target.footX - this.w * 0.38 + this.look;
-    const nextX = clamp(focusX, 0, Math.max(0, world.width - this.w));
-    this.x += (nextX - this.x) * Math.min(1, dt * 10);
-    this.x = clamp(this.x, 0, Math.max(0, world.width - this.w));
-    const focusY = target.footY - this.h * 0.72;
-    this.y = clamp(focusY, 0, Math.max(0, world.height - this.h));
+    const wishLook = target.facing * CAMERA.look;
+    this.look += (wishLook - this.look) * Math.min(1, dt * CAMERA.lookLerp);
+    const maxX = Math.max(0, world.width - this.w);
+    const maxY = Math.max(0, world.height - this.h);
+    const focusX = target.footX - this.w * CAMERA.focusX + this.look;
+    const focusY = target.footY - this.h * CAMERA.focusY;
+    const nextX = clamp(focusX, 0, maxX);
+    const nextY = clamp(focusY, 0, maxY);
+    this.x += (nextX - this.x) * Math.min(1, dt * CAMERA.followX);
+    this.y += (nextY - this.y) * Math.min(1, dt * CAMERA.followY);
+    this.x = clamp(this.x, 0, maxX);
+    this.y = clamp(this.y, 0, maxY);
+  }
+
+  snap(x, y, world) {
+    const maxX = Math.max(0, (world?.width || this.w) - this.w);
+    const maxY = Math.max(0, (world?.height || this.h) - this.h);
+    this.x = clamp(x, 0, maxX);
+    this.y = clamp(y, 0, maxY);
   }
 
   worldToScreen(wx, wy) {

@@ -50,5 +50,14 @@ export function keepInWorld(actor, world) {
 }
 
 export function hitsSolid(box, solids) {
-  return solids.some((s) => aabb(box, s));
+  return Boolean(solids && solids.some((s) => aabb(box, s)));
+}
+
+export function lineBlocked(x0, y0, x1, y1, solids, samples = 10) {
+  for (let i = 1; i < samples; i += 1) {
+    const t = i / samples;
+    const probe = { x: x0 + (x1 - x0) * t - 3, y: y0 + (y1 - y0) * t - 3, w: 6, h: 6 };
+    if (solids.some((s) => aabb(probe, s))) return true;
+  }
+  return false;
 }

@@ -82,7 +82,15 @@ class ProducerHuntPageTests(unittest.TestCase):
         self.assertIn("CHARACTER_SELECT", body)
         self.assertIn("LEVEL_COMPLETE", body)
 
-    def test_world_catalog_module_served(self):
+    def test_studio_level_module_served(self):
+        with self.client.session_transaction() as sess:
+            sess["account_id"] = self.user.id
+        r = self.client.get("/producer-hunt/static/js/levels/studio-01.js")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_data(as_text=True)
+        self.assertIn('id: "studio_01"', body)
+        self.assertIn("The Post Suite", body)
+        self.assertNotIn("assistant_producer", body)
         with self.client.session_transaction() as sess:
             sess["account_id"] = self.user.id
         r = self.client.get("/producer-hunt/static/js/asset-catalog.js")
@@ -94,6 +102,15 @@ class ProducerHuntPageTests(unittest.TestCase):
             sess["account_id"] = self.user.id
         r = self.client.get(
             "/producer-hunt/static/assets/environment/studio/backgrounds/studio_background_far.png"
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertGreater(len(r.data), 100)
+
+    def test_post_producer_idle_served(self):
+        with self.client.session_transaction() as sess:
+            sess["account_id"] = self.user.id
+        r = self.client.get(
+            "/producer-hunt/static/assets/enemies/post_producer/sprites/post_producer_idle.png"
         )
         self.assertEqual(r.status_code, 200)
         self.assertGreater(len(r.data), 100)

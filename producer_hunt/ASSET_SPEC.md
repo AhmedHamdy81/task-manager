@@ -113,10 +113,22 @@ Missing files log an error and the game continues with a fallback draw.
 Same 256×256 horizontal strips.
 
 ```text
-assets/enemies/assistant_producer/assistant_producer_{anim}.png
+assets/enemies/post_producer/sprites/post_producer_{anim}.png
+assets/enemies/post_producer/effects/post_producer_attack_impact.png
 ```
 
-Animations: idle (6), walk (8), run (8), attack (6), hit (3), death (8). Config: `ENEMY_ANIMATIONS` in `sprite-spec.js`.
+Active enemy: `post_producer` (Post Producer).
+
+| Animation | Frames | Size |
+|---|---:|---|
+| idle | 6 | 1536 × 256 |
+| walk | 8 | 2048 × 256 |
+| attack | 4 | 1024 × 256 |
+| hit | 3 | 768 × 256 |
+| death | 6 | 1536 × 256 |
+| attack impact | 4 × 128 | 512 × 128 |
+
+Config: `ENEMY_ANIMATIONS` in `sprite-spec.js`. Legacy spawn id `assistant_producer` is aliased to `post_producer` once at load.
 
 ## How to replace a sheet
 

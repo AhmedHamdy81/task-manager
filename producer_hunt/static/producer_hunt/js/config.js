@@ -9,9 +9,18 @@ export const MOVE_ACCEL = 2800;
 export const MOVE_DECEL = 3600;
 export const JUMP_SCALE = 1.75;
 
-export const DEBUG_QUERY = "debug";
+export const CAMERA = {
+  look: 140,
+  lookLerp: 3.6,
+  followX: 8,
+  followY: 5.2,
+  focusX: 0.38,
+  focusY: 0.7,
+};
 /** Sprite frame / collision / muzzle overlay. Also enabled via ?debug=1 or F1. */
+export const DEBUG_QUERY = "debug";
 export const DEBUG_ASSETS = false;
+export const ASSET_CACHE_KEY = "ph-20260819-studio-01";
 
 export const DEFAULT_KEYMAP = {
   moveLeft: ["KeyA", "ArrowLeft"],

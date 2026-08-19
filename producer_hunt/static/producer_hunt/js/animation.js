@@ -11,6 +11,7 @@ export class SpriteAnimator {
     this.finished = false;
     this.paused = false;
     this.flip = false;
+    this.enteredFrame = -1;
     this._onFinished = null;
     this._applyClip(this._clip("idle"));
   }
@@ -47,15 +48,17 @@ export class SpriteAnimator {
   }
 
   play(name, opts = {}) {
-    if (!name) return;
+    if (!name) return false;
     const restart = Boolean(opts.restart);
-    if (this.name === name && !restart) return;
+    if (this.name === name && !restart) return false;
     this.name = name;
     this.frame = 0;
     this.time = 0;
     this.finished = false;
+    this.enteredFrame = 0;
     this._applyClip(this._clip(name));
     if (typeof opts.onFinished === "function") this._onFinished = opts.onFinished;
+    return true;
   }
 
   get current() {
@@ -75,6 +78,7 @@ export class SpriteAnimator {
   }
 
   update(dt) {
+    this.enteredFrame = -1;
     if (this.paused || this.finished) return;
     const fps = Math.max(0.01, this.fps);
     this.time += dt;
@@ -82,9 +86,11 @@ export class SpriteAnimator {
     while (this.time >= step && !this.finished) {
       this.time -= step;
       this.frame += 1;
+      this.enteredFrame = this.frame;
       if (this.frame >= this.frames) {
         if (this.loop) {
           this.frame = 0;
+          this.enteredFrame = 0;
         } else {
           this.frame = this.frames - 1;
           this.finished = true;

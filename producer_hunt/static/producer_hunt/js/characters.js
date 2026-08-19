@@ -1,131 +1,85 @@
 import { Weapon } from "./weapon.js";
 import { makeCharacterSpriteConfig } from "./sprite-spec.js";
+import { weaponDefForCharacter } from "./combat.js";
+
+export const DEFAULT_CHARACTER_ID = "editor";
+
+/** Shared gameplay stats — no per-character balancing in this pass. */
+export const SHARED_PLAYER = {
+  health: 100,
+  speed: 320,
+  jumpStrength: 700,
+};
+
+function makeCharacter({ id, displayName, color, accent, initials, special }) {
+  const weapon = weaponDefForCharacter(id);
+  return {
+    id,
+    displayName,
+    name: displayName,
+    health: SHARED_PLAYER.health,
+    speed: SHARED_PLAYER.speed,
+    jumpStrength: SHARED_PLAYER.jumpStrength,
+    color,
+    accent,
+    initials,
+    spriteRoot: `characters/${id}`,
+    portrait: `characters/${id}/portrait.png`,
+    weapon,
+    specialAbility: special,
+    sprite: makeCharacterSpriteConfig(id),
+  };
+}
 
 export const CHARACTERS = [
-  {
+  makeCharacter({
     id: "editor",
-    name: "THE EDITOR",
-    role: "Balanced",
-    health: 100,
-    speed: 320,
-    jumpStrength: 700,
+    displayName: "The Editor",
     color: "#4ade80",
     accent: "#166534",
     initials: "ED",
-    damageLabel: "Medium",
-    weapon: {
-      id: "marker_gun",
-      name: "Marker Gun",
-      damage: 18,
-      projectileSpeed: 920,
-      fireRate: 7,
-      ammo: 120,
-      maxAmmo: 120,
-      spread: 0,
-      projectileType: "marker",
-    },
-    specialAbility: {
-      id: "cut",
-      name: "CUT!",
-      duration: 2.2,
-      cooldown: 8,
-    },
-    sprite: makeCharacterSpriteConfig("editor"),
-  },
-  {
+    special: { id: "cut", name: "CUT!", duration: 2.2, cooldown: 8 },
+  }),
+  makeCharacter({
     id: "assistant",
-    name: "THE ASSISTANT",
-    role: "Fast / agile",
-    health: 75,
-    speed: 400,
-    jumpStrength: 760,
+    displayName: "The Assistant",
     color: "#38bdf8",
     accent: "#075985",
     initials: "AE",
-    damageLabel: "Light",
-    weapon: {
-      id: "proxy_blaster",
-      name: "Proxy Blaster",
-      damage: 10,
-      projectileSpeed: 1040,
-      fireRate: 11,
-      ammo: 160,
-      maxAmmo: 160,
-      spread: 0,
-      projectileType: "proxy",
-    },
-    specialAbility: {
-      id: "turbo_sync",
-      name: "Turbo Sync",
-      duration: 2.4,
-      cooldown: 7,
-    },
-    sprite: makeCharacterSpriteConfig("assistant"),
-  },
-  {
+    special: { id: "turbo_sync", name: "Turbo Sync", duration: 2.4, cooldown: 7 },
+  }),
+  makeCharacter({
     id: "vfx_supervisor",
-    name: "VFX SUPERVISOR",
-    role: "Heavy / powerful",
-    health: 150,
-    speed: 260,
-    jumpStrength: 620,
+    displayName: "The VFX Supervisor",
     color: "#c084fc",
     accent: "#6b21a8",
     initials: "FX",
-    damageLabel: "Heavy",
-    weapon: {
-      id: "render_cannon",
-      name: "Render Cannon",
-      damage: 40,
-      projectileSpeed: 700,
-      fireRate: 3.2,
-      ammo: 48,
-      maxAmmo: 48,
-      spread: 0,
-      projectileType: "render",
-    },
-    specialAbility: {
-      id: "final_render",
-      name: "FINAL RENDER",
-      duration: 0.35,
-      cooldown: 9,
-    },
-    sprite: makeCharacterSpriteConfig("vfx_supervisor"),
-  },
-  {
+    special: { id: "final_render", name: "FINAL RENDER", duration: 0.35, cooldown: 9 },
+  }),
+  makeCharacter({
     id: "colorist",
-    name: "THE COLORIST",
-    role: "Precision",
-    health: 90,
-    speed: 310,
-    jumpStrength: 700,
+    displayName: "The Colorist",
     color: "#fb7185",
     accent: "#9f1239",
     initials: "CL",
-    damageLabel: "Medium/High",
-    weapon: {
-      id: "rgb_rifle",
-      name: "RGB Rifle",
-      damage: 26,
-      projectileSpeed: 1100,
-      fireRate: 5.5,
-      ammo: 90,
-      maxAmmo: 90,
-      spread: 0,
-      projectileType: "rgb",
-    },
-    specialAbility: {
-      id: "grade_shift",
-      name: "GRADE SHIFT",
-      duration: 3,
-      cooldown: 8,
-    },
-    sprite: makeCharacterSpriteConfig("colorist"),
-  },
+    special: { id: "grade_shift", name: "GRADE SHIFT", duration: 3, cooldown: 8 },
+  }),
 ];
 
+let _unknownCharacterWarned = false;
+
+export function isPlayableCharacterId(id) {
+  return CHARACTERS.some((c) => c.id === id);
+}
+
 export function characterById(id) {
-  return CHARACTERS.find((c) => c.id === id) || CHARACTERS[0];
+  const found = CHARACTERS.find((c) => c.id === id);
+  if (found) return found;
+  if (id && !_unknownCharacterWarned) {
+    console.warn(`[Producer Hunt] Unknown character "${id}". Falling back to "${DEFAULT_CHARACTER_ID}".`);
+    _unknownCharacterWarned = true;
+  }
+  return CHARACTERS.find((c) => c.id === DEFAULT_CHARACTER_ID) || CHARACTERS[0];
 }
 
 export function makeWeapon(character) {
