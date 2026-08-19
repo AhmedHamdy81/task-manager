@@ -97,6 +97,20 @@ class ProducerHuntPageTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("WORLD_SHEETS", r.get_data(as_text=True))
 
+    def test_studio_02_and_client_served(self):
+        with self.client.session_transaction() as sess:
+            sess["account_id"] = self.user.id
+        r = self.client.get("/producer-hunt/static/js/levels/studio-02.js")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_data(as_text=True)
+        self.assertIn('id: "studio_02"', body)
+        self.assertIn('type: "client"', body)
+        enemy = self.client.get("/producer-hunt/static/js/enemy.js").get_data(as_text=True)
+        self.assertIn("The Client", enemy)
+        r = self.client.get("/producer-hunt/static/assets/enemies/client/sprites/client_idle.png")
+        self.assertEqual(r.status_code, 200)
+        self.assertGreater(len(r.data), 100)
+
     def test_studio_background_served(self):
         with self.client.session_transaction() as sess:
             sess["account_id"] = self.user.id

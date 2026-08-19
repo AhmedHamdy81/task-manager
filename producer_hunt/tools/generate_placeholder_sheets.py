@@ -33,6 +33,7 @@ ENEMY_ANIMS = {
 
 ENEMIES = {
     "post_producer": ("POST PROD", (192, 132, 252), (107, 33, 168)),
+    "client": ("CLIENT", (251, 113, 133), (159, 18, 57)),
 }
 
 # Inactive generator id. Do not load or spawn in-game.
@@ -57,7 +58,7 @@ def _font(size: int):
     return ImageFont.load_default()
 
 
-def _draw_body(draw: ImageDraw.ImageDraw, fill, accent, crouch: bool, frame_i: int, frames: int):
+def _draw_body(draw: ImageDraw.ImageDraw, fill, accent, crouch: bool, frame_i: int, frames: int, face_left: bool = False):
     bob = int((frame_i % 3) - 1) * 2
     height = 96 if crouch else 160
     top = BASELINE - height - bob
@@ -68,20 +69,21 @@ def _draw_body(draw: ImageDraw.ImageDraw, fill, accent, crouch: bool, frame_i: i
     # head
     cx, cy = left + width // 2, top + 22
     draw.ellipse([cx - 22, cy - 22, cx + 22, cy + 22], fill=accent)
-    # right-facing cue
-    draw.polygon([(left + width, top + 70), (left + width + 28, top + 82), (left + width, top + 94)], fill=accent)
-    # baseline tick
+    if face_left:
+        draw.polygon([(left, top + 70), (left - 28, top + 82), (left, top + 94)], fill=accent)
+    else:
+        draw.polygon([(left + width, top + 70), (left + width + 28, top + 82), (left + width, top + 94)], fill=accent)
     draw.line([(40, BASELINE), (216, BASELINE)], fill=(255, 255, 255, 40), width=1)
 
 
-def write_strip(path: Path, label: str, anim: str, frames: int, fill, accent, crouch: bool):
+def write_strip(path: Path, label: str, anim: str, frames: int, fill, accent, crouch: bool, face_left: bool = False):
     img = Image.new("RGBA", (FRAME * frames, FRAME), (0, 0, 0, 0))
     font_s = _font(18)
     font_t = _font(14)
     for i in range(frames):
         frame = Image.new("RGBA", (FRAME, FRAME), (0, 0, 0, 0))
         d = ImageDraw.Draw(frame)
-        _draw_body(d, fill, accent, crouch, i, frames)
+        _draw_body(d, fill, accent, crouch, i, frames, face_left=face_left)
         d.text((16, 12), label, fill=(255, 255, 255, 220), font=font_s)
         d.text((16, 36), f"{anim.upper().replace('_', ' ')} {i + 1}", fill=(255, 255, 255, 180), font=font_t)
         img.paste(frame, (i * FRAME, 0), frame)
@@ -101,31 +103,60 @@ def write_portrait(path: Path, label: str, fill, accent):
     print("wrote", path, img.size)
 
 
-def main() -> None:
-    for cid, (label, fill, accent) in CHARACTERS.items():
-        write_portrait(ROOT / "characters" / cid / "portrait.png", label, fill, accent)
-        for anim, frames in PLAYER_ANIMS.items():
-            write_strip(
-                ROOT / "characters" / cid / "sprites" / f"{cid}_{anim}.png",
-                label,
-                anim,
-                frames,
-                fill,
-                accent,
-                crouch=anim.startswith("crouch"),
-            )
-    for eid, (label, fill, accent) in ENEMIES.items():
-        for anim, frames in ENEMY_ANIMS.items():
-            write_strip(
-                ROOT / "enemies" / eid / "sprites" / f"{eid}_{anim}.png",
-                label,
-                anim,
-                frames,
-                fill,
-                accent,
-                crouch=False,
-            )
+def write_impact(path: Path, fill, accent):
+    fw, fh, frames = 128, 128, 4
+    img = Image.new("RGBA", (fw * frames, fh), (0, 0, 0, 0))
+    for i in range(frames):
+        frame = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        d = ImageDraw.Draw(frame)
+        r = 18 + i * 8
+        d.ellipse([64 - r, 64 - r, 64 + r, 64 + r], outline=fill + (200,), width=4)
+        d.ellipse([60, 60, 68, 68], fill=accent + (220,))
+        img.paste(frame, (i * fw, 0), frame)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path)
+    print("wrote", path, img.size)
+
+
+def write_enemy(eid: str, label: str, fill, accent, face_left: bool = False):
+    for anim, frames in ENEMY_ANIMS.items():
+        write_strip(
+            ROOT / "enemies" / eid / "sprites" / f"{eid}_{anim}.png",
+            label,
+            anim,
+            frames,
+            fill,
+            accent,
+            crouch=False,
+            face_left=face_left,
+        )
+    write_impact(ROOT / "enemies" / eid / "effects" / f"{eid}_attack_impact.png", fill, accent)
+
+
+def main(only: str | None = None) -> None:
+    if only in (None, "characters"):
+        for cid, (label, fill, accent) in CHARACTERS.items():
+            write_portrait(ROOT / "characters" / cid / "portrait.png", label, fill, accent)
+            for anim, frames in PLAYER_ANIMS.items():
+                write_strip(
+                    ROOT / "characters" / cid / "sprites" / f"{cid}_{anim}.png",
+                    label,
+                    anim,
+                    frames,
+                    fill,
+                    accent,
+                    crouch=anim.startswith("crouch"),
+                )
+    enemies = ENEMIES if only in (None, "enemies") else ({only: ENEMIES[only]} if only in ENEMIES else {})
+    for eid, (label, fill, accent) in enemies.items():
+        write_enemy(eid, label, fill, accent, face_left=(eid == "client"))
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    only = arg[2:] if arg and arg.startswith("--") else arg
+    if only == "client-only":
+        only = "client"
+    main(only)

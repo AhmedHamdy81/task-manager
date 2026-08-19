@@ -4,7 +4,7 @@ export const SETTINGS_KEY = "bigbangadmin.producer_hunt";
 export const LEGACY_SETTINGS_KEY = "producerHunt.settings";
 
 const ALLOWED_CHARACTER_IDS = new Set(["editor", "assistant", "colorist", "vfx_supervisor"]);
-const ALLOWED_LEVEL_IDS = new Set(["studio_01"]);
+const ALLOWED_LEVEL_IDS = new Set(["studio_01", "studio_02"]);
 
 export const SETTINGS_DEFAULTS = {
   masterVolume: 1,

@@ -70,7 +70,7 @@ Characters live in `js/characters.js`. Shared movement, jump, health, damage, an
 
 ## Enemies
 
-Register a type on `ENEMY_TYPES` in `js/enemy.js`, then spawn it from a level’s `enemySpawns`. Level 1 spawns **Post Producer** (`post_producer`). Legacy `assistant_producer` ids are migrated to Post Producer.
+Register a type on `ENEMY_TYPES` in `js/enemy.js`, then spawn it from a level’s `enemySpawns`. `studio_01` spawns **Post Producer**. `studio_02` (`?level=studio_02`) adds **The Client** and a mixed encounter. Legacy `assistant_producer` ids are migrated to Post Producer.
 
 ## Weapons
 

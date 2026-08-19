@@ -117,7 +117,23 @@ assets/enemies/post_producer/sprites/post_producer_{anim}.png
 assets/enemies/post_producer/effects/post_producer_attack_impact.png
 ```
 
-Active enemy: `post_producer` (Post Producer).
+Active enemies: `post_producer` (Post Producer), `client` (The Client).
+
+```text
+assets/enemies/client/sprites/client_{anim}.png
+assets/enemies/client/effects/client_attack_impact.png
+```
+
+The Client artwork faces left by default; gameplay flips it when facing right.
+
+| Animation | Frames | Size |
+|---|---:|---|
+| idle | 6 | 1536 × 256 |
+| walk | 8 | 2048 × 256 |
+| attack | 4 | 1024 × 256 |
+| hit | 3 | 768 × 256 |
+| death | 6 | 1536 × 256 |
+| attack impact | 4 × 128 | 512 × 128 |
 
 | Animation | Frames | Size |
 |---|---:|---|

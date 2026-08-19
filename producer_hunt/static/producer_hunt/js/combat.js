@@ -25,6 +25,16 @@ export const COMBAT = {
     muzzle: { x: 40, y: -108 },
     impactFx: { sheetKey: "post_producer_impact", frames: 4, fps: 16, size: 96 },
   },
+  client: {
+    damage: 12,
+    cooldown: 1.5,
+    lifetime: 2.4,
+    speed: 420,
+    spawnFrame: 2,
+    attackRange: 520,
+    muzzle: { x: 36, y: -96 },
+    impactFx: { sheetKey: "client_impact", frames: 4, fps: 16, size: 96 },
+  },
 };
 
 export const PROJECTILE_DEFS = {
@@ -65,6 +75,14 @@ export const PROJECTILE_DEFS = {
     frame: 4,
     hitW: 34,
     hitH: 24,
+    vis: 52,
+    flip: true,
+  },
+  client_revision_pulse: {
+    id: "client_revision_pulse",
+    frame: 4,
+    hitW: 34,
+    hitH: 18,
     vis: 52,
     flip: true,
   },
@@ -110,6 +128,7 @@ export const CHARACTER_WEAPON_ID = {
 
 export const ENEMY_WEAPON_ID = {
   post_producer: "deadline_projectile",
+  client: "client_revision_pulse",
 };
 
 export function projectileDef(id) {
@@ -123,11 +142,12 @@ export function weaponDefForCharacter(characterId) {
 
 export function enemyWeaponDef(enemyId) {
   const projectileId = ENEMY_WEAPON_ID[enemyId] || ENEMY_WEAPON_ID.post_producer;
+  const combat = enemyId === "client" ? COMBAT.client : COMBAT.enemy;
   return {
     id: projectileId,
-    name: "Deadline",
+    name: enemyId === "client" ? "Revision Pulse" : "Deadline",
     projectileId,
-    ...COMBAT.enemy,
+    ...combat,
     ammo: -1,
     maxAmmo: -1,
     projectile: projectileDef(projectileId),

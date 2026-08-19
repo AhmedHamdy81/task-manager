@@ -41,6 +41,7 @@ WORLD_SHEETS = {
     "ui/menu/logo.png": (1200, 500),
     "weapons/player_weapons.png": (1024, 256),
     "enemies/post_producer/effects/post_producer_attack_impact.png": (512, 128),
+    "enemies/client/effects/client_attack_impact.png": (512, 128),
 }
 
 

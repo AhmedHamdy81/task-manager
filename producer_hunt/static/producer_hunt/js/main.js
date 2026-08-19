@@ -20,6 +20,7 @@ try {
     cacheKey: body.dataset.assetVersion || ASSET_CACHE_KEY,
     debug,
     allowDebug,
+    levelId: params.get("level") || "studio_01",
   });
   game.start();
   if (allowDebug) window.__producerHunt = game;

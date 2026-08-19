@@ -1,5 +1,5 @@
 import { SpriteAnimator } from "./animation.js";
-import { keepInWorld, lineBlocked, resolveSolids } from "./collision.js";
+import { aabb, keepInWorld, lineBlocked, resolveSolids } from "./collision.js";
 import { applyGravity } from "./physics.js";
 import { makeEnemySpriteConfig } from "./sprite-spec.js";
 import { COMBAT, enemyWeaponDef } from "./combat.js";
@@ -11,6 +11,7 @@ const STATE_TO_ANIM = {
   patrol: "walk",
   alert: "idle",
   chase: "walk",
+  walk: "walk",
   attack: "attack",
   hit: "hit",
   death: "death",
@@ -41,7 +42,8 @@ export function migrateEnemyType(typeId) {
 
 export function resolveEnemyType(typeId) {
   const id = migrateEnemyType(typeId);
-  return ENEMY_TYPES[id] || ENEMY_TYPES[DEFAULT_ENEMY_ID];
+  if (ENEMY_TYPES[id]) return ENEMY_TYPES[id];
+  return ENEMY_TYPES[DEFAULT_ENEMY_ID];
 }
 
 export const ENEMY_TYPES = {
@@ -50,17 +52,48 @@ export const ENEMY_TYPES = {
     type: "post_producer",
     name: "Post Producer",
     initials: "PP",
+    behavior: "aggressive",
+    artFacing: 1,
     health: 50,
     speed: 150,
     chaseSpeed: 210,
     damage: 10,
+    contactDamage: 0,
     scoreValue: 100,
     detectionRange: 520,
     attackRange: COMBAT.enemy.attackRange,
+    hitStun: 0.16,
     color: "#c084fc",
     accent: "#6b21a8",
     sprite: makeEnemySpriteConfig("post_producer"),
     impactSheet: "post_producer_impact",
+  },
+  client: {
+    id: "client",
+    type: "client",
+    name: "The Client",
+    initials: "CL",
+    behavior: "cautious_ranged",
+    artFacing: -1,
+    health: 50,
+    speed: 85,
+    chaseSpeed: 85,
+    damage: 12,
+    contactDamage: 8,
+    scoreValue: 120,
+    detectionRange: 620,
+    preferredRange: 380,
+    minRetreatRange: 190,
+    attackRange: 520,
+    rangeBand: 36,
+    hitStun: 0.18,
+    color: "#fb7185",
+    accent: "#9f1239",
+    sprite: makeEnemySpriteConfig("client", {
+      collisionWidth: 54,
+      collisionHeight: 152,
+    }),
+    impactSheet: "client_impact",
   },
 };
 
@@ -73,23 +106,24 @@ export class Enemy {
     const body = spriteKit || spec.sprite || {};
     this.collisionOffsetX = body.collisionOffsetX || 0;
     this.collisionOffsetY = body.collisionOffsetY || 0;
-    this.w = body.collisionWidth || 88;
-    this.h = body.collisionHeight || 170;
+    this.w = body.collisionWidth || spec.sprite?.collisionWidth || 88;
+    this.h = body.collisionHeight || spec.sprite?.collisionHeight || 170;
     this.footX = spawn.x;
     this.footY = spawn.y;
     this._syncBox();
     this.vx = spec.speed;
     this.vy = 0;
-    this.direction = 1;
+    this.direction = spec.artFacing || 1;
     this.onGround = false;
     this.health = spec.health;
     this.alive = true;
-    this.state = "patrol";
+    this.state = spec.behavior === "cautious_ranged" ? "idle" : "patrol";
     this.hitFlash = 0;
     this.frozen = 0;
     this.deadTimer = 0;
     this.attackCool = 0;
     this.alertTimer = 0;
+    this.contactCool = 0;
     this._firedClip = false;
     this.patrolMin = spawn.patrolMin ?? spawn.x - 120;
     this.patrolMax = spawn.patrolMax ?? spawn.x + 120;
@@ -111,6 +145,7 @@ export class Enemy {
   }
 
   bounds() {
+    if (!this.alive) return { x: this.x, y: this.y, w: 0, h: 0 };
     return { x: this.x, y: this.y, w: this.w, h: this.h };
   }
 
@@ -119,19 +154,46 @@ export class Enemy {
   }
 
   muzzleWorld() {
-    const off = COMBAT.enemy.muzzle;
+    const off = this.weapon.muzzle || COMBAT.enemy.muzzle;
     return {
       x: this.footX + this.direction * off.x,
       y: this.footY + off.y,
     };
   }
 
+  _applyFacingFlip() {
+    const art = this.spec.artFacing || 1;
+    this.anim.flip = this.direction !== art;
+  }
+
+  _canStep(world, dir) {
+    const look = 36;
+    const probe = {
+      x: this.footX + dir * look - 10,
+      y: this.footY + 4,
+      w: 20,
+      h: 28,
+    };
+    const grounded = (world.solids || []).some((s) => aabb(probe, s));
+    if (!grounded) return false;
+    const wall = {
+      x: this.footX + dir * 28 - 6,
+      y: this.footY - this.h + 12,
+      w: 12,
+      h: this.h - 20,
+    };
+    const blocked = (world.solids || []).some((s) => s.y + s.h < this.footY - 8 && aabb(wall, s));
+    return !blocked;
+  }
+
   update(dt, player, world, projectiles = null, game = null) {
+    if (this.contactCool > 0) this.contactCool -= dt;
     if (!this.alive) {
       this.deadTimer += dt;
       this.state = "death";
+      this.vx = 0;
       this.anim.play("death");
-      this.anim.flip = this.direction < 0;
+      this._applyFacingFlip();
       this.anim.update(dt);
       return;
     }
@@ -147,6 +209,7 @@ export class Enemy {
       keepInWorld(this, world);
       this._syncFeet();
       this._playAnim();
+      this._applyFacingFlip();
       this.anim.update(dt);
       return;
     }
@@ -176,16 +239,31 @@ export class Enemy {
         keepInWorld(this, world);
         this._syncFeet();
         this._playAnim();
+        this._applyFacingFlip();
         this.anim.update(dt);
         return;
       }
     }
 
+    if (this.spec.behavior === "cautious_ranged") this._updateCautiousRanged(player, world, dt);
+    else this._updateAggressive(player, dt);
+
+    applyGravity(this, dt);
+    resolveSolids(this, world.solids, dt);
+    keepInWorld(this, world);
+    this._syncFeet();
+    const started = this._playAnim();
+    if (started) this._firedClip = false;
+    this._applyFacingFlip();
+    this.anim.update(dt);
+    if (projectiles && game) this._trySpawnShot(player, world, projectiles, game);
+  }
+
+  _updateAggressive(player, dt) {
     const dx = player.footX - this.footX;
     const closeY = Math.abs(player.footY - this.footY) < 160;
     const distX = Math.abs(dx);
     const detected = player.alive && closeY && distX < this.spec.detectionRange;
-
     const releasingAttack = this.anim.name === "attack" && !this.anim.finished;
     if (this.hitFlash > 0) this.state = "hit";
     else if (detected && distX <= this.spec.attackRange && (this.weapon.cool <= 0 || releasingAttack)) {
@@ -215,16 +293,65 @@ export class Enemy {
     } else if (this.state === "hit") {
       this.vx = 0;
     }
+  }
 
-    applyGravity(this, dt);
-    resolveSolids(this, world.solids, dt);
-    keepInWorld(this, world);
-    this._syncFeet();
-    const started = this._playAnim();
-    if (started) this._firedClip = false;
-    this.anim.flip = this.direction < 0;
-    this.anim.update(dt);
-    if (projectiles && game) this._trySpawnShot(player, world, projectiles, game);
+  _updateCautiousRanged(player, world, dt) {
+    const dx = player.footX - this.footX;
+    const distX = Math.abs(dx);
+    const face = dx >= 0 ? 1 : -1;
+    this.direction = face;
+    const closeY = Math.abs(player.footY - this.footY) < 200;
+    const detected = player.alive && closeY && distX < this.spec.detectionRange;
+    const releasingAttack = this.anim.name === "attack" && !this.anim.finished;
+    const preferred = this.spec.preferredRange;
+    const minR = this.spec.minRetreatRange;
+    const atk = this.spec.attackRange;
+    const band = this.spec.rangeBand || 36;
+
+    if (this.hitFlash > 0) {
+      this.state = "hit";
+      this.vx = 0;
+      return;
+    }
+    if (!detected) {
+      this.state = "idle";
+      this.vx = 0;
+      this.alertTimer = 0;
+      return;
+    }
+    this.alertTimer += dt;
+
+    if (releasingAttack || (distX <= atk && this.weapon.cool <= 0)) {
+      this.state = "attack";
+      this.vx = 0;
+      return;
+    }
+
+    if (distX < minR) {
+      const back = -face;
+      if (this._canStep(world, back)) {
+        this.state = "walk";
+        this.vx = back * this.spec.speed;
+      } else {
+        this.vx = 0;
+        this.state = distX <= atk ? "attack" : "idle";
+      }
+      return;
+    }
+
+    if (distX > preferred + band) {
+      if (this._canStep(world, face)) {
+        this.state = "walk";
+        this.vx = face * this.spec.speed;
+      } else {
+        this.vx = 0;
+        this.state = distX <= atk ? "attack" : "idle";
+      }
+      return;
+    }
+
+    this.state = "idle";
+    this.vx = 0;
   }
 
   _playAnim() {
@@ -241,24 +368,29 @@ export class Enemy {
 
   takeDamage(amount) {
     if (!this.alive) return 0;
-    this.health -= amount;
-    this.hitFlash = 0.16;
-    this.state = "hit";
-    this.anim.play("hit", { restart: true });
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) return 0;
+    this.health -= amt;
+    this._firedClip = true;
     if (this.health <= 0) {
       this.alive = false;
+      this.health = 0;
       this.vx = 0;
       this.state = "death";
       this.anim.play("death", { restart: true });
       return this.spec.scoreValue;
     }
+    this.hitFlash = this.spec.hitStun ?? 0.16;
+    this.state = "hit";
+    this.anim.play("hit", { restart: true });
     return 0;
   }
 
   _trySpawnShot(player, world, projectiles, game) {
     if (!this.alive || !player.alive) return;
     if (this.anim.name !== "attack" || this._firedClip) return;
-    if (this.anim.frame < (this.weapon.spawnFrame ?? COMBAT.enemy.spawnFrame)) return;
+    const release = this.weapon.spawnFrame ?? COMBAT.enemy.spawnFrame;
+    if (this.anim.frame < release) return;
     if (!this.weapon.canFire()) return;
     const muzzle = this.muzzleWorld();
     const aimX = player.footX;
@@ -276,10 +408,8 @@ export class Enemy {
     this._firedClip = true;
     if (!shot) return;
     shot.sheet = game.assets?.sheet("projectiles") || null;
-    game.audio.play(WEAPON_SOUND_ID[this.weapon.id] || "post_producer_attack", {
-      x: muzzle.x,
-      camera: game.camera,
-    });
+    const soundId = WEAPON_SOUND_ID[this.weapon.id] || "post_producer_attack";
+    game.audio.play(soundId, { x: muzzle.x, camera: game.camera });
     projectiles.push(shot);
   }
 
@@ -290,11 +420,11 @@ export class Enemy {
     ctx.globalAlpha = this.alive ? 1 : 0.55;
     this.anim.draw(ctx, origin.x, origin.y, (g, fw, fh) => {
       g.fillStyle = color;
-      g.fillRect(-44, -fh + 86, 88, 162);
+      g.fillRect(-this.w / 2, -this.h + 8, this.w, this.h - 8);
       g.fillStyle = "#1c1408";
       g.font = "11px sans-serif";
       g.textAlign = "center";
-      g.fillText(this.spec.initials || "PP", 0, -fh * 0.42);
+      g.fillText(this.spec.initials || "??", 0, -fh * 0.42);
     });
     ctx.globalAlpha = 1;
   }

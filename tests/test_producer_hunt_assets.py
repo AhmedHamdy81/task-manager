@@ -167,6 +167,7 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
             "ui/menu/logo.png": (1200, 500),
             "weapons/player_weapons.png": (1024, 256),
             "enemies/post_producer/effects/post_producer_attack_impact.png": (512, 128),
+            "enemies/client/effects/client_attack_impact.png": (512, 128),
         }
         for rel, size in expected.items():
             path = ROOT / rel
@@ -193,6 +194,7 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
             "ui/menu/logo.png",
             "weapons/player_weapons.png",
             "enemies/post_producer/effects/post_producer_attack_impact.png",
+            "enemies/client/effects/client_attack_impact.png",
         ):
             self.assertIn(rel, catalog)
 
@@ -221,6 +223,7 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn('vfx_supervisor: "vfx_orb"', combat)
         self.assertIn('colorist: "colorist_chroma_bolt"', combat)
         self.assertIn('post_producer: "deadline_projectile"', combat)
+        self.assertIn('client: "client_revision_pulse"', combat)
         self.assertIn("damage: 10", combat)
         self.assertIn("cooldown: 0.25", combat)
         self.assertIn("lifetime: 2", combat)

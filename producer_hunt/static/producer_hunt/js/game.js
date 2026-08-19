@@ -7,7 +7,7 @@ import { ENEMY_TYPES, Enemy } from "./enemy.js";
 import { HUD } from "./hud.js";
 import { CharacterSelect } from "./character-select.js";
 import { aabb, hitsSolid } from "./collision.js";
-import { STUDIO_01, buildWorld, LevelDataError } from "./levels/level-01.js";
+import { LEVELS, STUDIO_01, buildWorld, LevelDataError, resolveLevel } from "./levels/level-01.js";
 import { AssetLoader } from "./asset-loader.js";
 import { WORLD_SHEETS, drawCoverImage, drawSheetFrame } from "./asset-catalog.js";
 import { COMBAT } from "./combat.js";
@@ -61,6 +61,7 @@ export class Game {
     this.hud = new HUD();
     this.select = new CharacterSelect();
     this.state = new GameStateManager(GameState.BOOT);
+    this.levelId = LEVELS[options.levelId] ? options.levelId : STUDIO_01.id;
     this.player = null;
     this.character = null;
     this.world = null;
@@ -154,6 +155,7 @@ export class Game {
     try {
       await Promise.all(CHARACTERS.map((ch) => this.assets.loadCharacterKit(ch.sprite)));
       await this.assets.loadEnemyKit(ENEMY_TYPES.post_producer.sprite);
+      await this.assets.loadEnemyKit(ENEMY_TYPES.client.sprite);
       await this.assets.loadCatalog(WORLD_SHEETS);
       await this.audio.preload();
     } catch (err) {
@@ -623,7 +625,7 @@ export class Game {
   beginLevel(character, opts = {}) {
     this.character = characterById(character?.id || character);
     try {
-      this.world = buildWorld(STUDIO_01);
+      this.world = buildWorld(resolveLevel(this.levelId));
     } catch (err) {
       const msg = err instanceof LevelDataError ? err.message : `[Producer Hunt] Required level data is invalid.\n${err}`;
       console.error(msg);
@@ -849,6 +851,7 @@ export class Game {
     for (const enemy of this.enemies) {
       enemy.update(dt, this.player, this.world, this.projectiles, this);
     }
+    this.updateEnemyContact(dt);
     this.updateProjectiles(dt);
     this.updateEffects(dt);
     this.updatePickups();
@@ -857,6 +860,23 @@ export class Game {
     this.updateDoorsAndExit();
     this.updateCheckpoints();
     if (!this.player.alive) this.onPlayerDied();
+  }
+
+  updateEnemyContact(dt) {
+    if (!this.player?.alive) return;
+    for (const enemy of this.enemies) {
+      const dmg = enemy.spec?.contactDamage || 0;
+      if (!enemy.alive || dmg <= 0) continue;
+      if (enemy.contactCool > 0) continue;
+      if (!aabb(this.player.bounds(), enemy.bounds())) continue;
+      const dir = Math.sign(this.player.footX - enemy.footX) || -1;
+      const dealt = this.player.takeDamage(dmg, { knockbackX: dir * 220 });
+      if (!dealt) continue;
+      enemy.contactCool = 0.75;
+      if (this.shakeEnabled()) this.camera.addShake(0.35);
+      this.hud.invalidate();
+      this.sfx("player_hit");
+    }
   }
 
   updateHazards(dt) {
@@ -996,7 +1016,7 @@ export class Game {
   restoreAfterDeath() {
     const snap = this.checkpoint;
     try {
-      this.world = buildWorld(STUDIO_01);
+      this.world = buildWorld(resolveLevel(this.levelId));
     } catch (err) {
       const msg = err instanceof LevelDataError ? err.message : `[Producer Hunt] Required level data is invalid.\n${err}`;
       console.error(msg);

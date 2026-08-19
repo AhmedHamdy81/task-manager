@@ -9,6 +9,7 @@ export const WEAPON_SOUND_ID = {
   vfx_orb: "vfx_supervisor_shoot",
   colorist_chroma_bolt: "colorist_shoot",
   deadline_projectile: "post_producer_attack",
+  client_revision_pulse: "post_producer_attack",
 };
 
 function sound(id, path, category, extra = {}) {

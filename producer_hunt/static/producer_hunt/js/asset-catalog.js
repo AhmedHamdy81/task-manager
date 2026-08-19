@@ -106,6 +106,14 @@ export const WORLD_SHEETS = {
     frameHeight: 128,
     frames: 4,
   },
+  client_impact: {
+    src: "enemies/client/effects/client_attack_impact.png",
+    width: 512,
+    height: 128,
+    frameWidth: 128,
+    frameHeight: 128,
+    frames: 4,
+  },
 };
 
 export const PARALLAX = [
