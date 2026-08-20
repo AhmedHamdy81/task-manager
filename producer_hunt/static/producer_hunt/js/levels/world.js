@@ -1,5 +1,6 @@
 import { instantiatePickup } from "../pickups.js";
 import { ENEMY_TYPES, migrateEnemyType } from "../enemy.js";
+import { musicForLevel } from "../audio-catalog.js";
 import {
   instantiateCheckpoint,
   instantiateDoor,
@@ -51,6 +52,18 @@ export function validateLevel(level) {
     }
   }
   const ALLOWED_ENEMIES = new Set(["post_producer", "client"]);
+  for (const wave of level.waves || []) {
+    if (!wave?.id) errors.push("A wave is missing an id.");
+    for (const pack of wave.enemies || []) {
+      if (String(pack.type || "").trim() === "assistant_producer") {
+        errors.push("Assistant Producer must not spawn.");
+      }
+      const type = migrateEnemyType(pack.type);
+      if (!ENEMY_TYPES[type] || !ALLOWED_ENEMIES.has(type)) {
+        errors.push(`Invalid enemy type "${pack.type}" on wave "${wave.id || "?"}".`);
+      }
+    }
+  }
   const spawnIds = new Set();
   const width = level.worldWidth || 0;
   const height = level.worldHeight || 1080;
@@ -123,7 +136,7 @@ export function buildWorld(level) {
   const world = {
     id: level.id,
     name: level.name,
-    music: level.music || "studio_01_theme",
+    music: musicForLevel(level.id, level.music),
     width: level.worldWidth,
     height: level.worldHeight,
     background: level.background,
@@ -139,6 +152,7 @@ export function buildWorld(level) {
       enemyIds: [...(e.enemyIds || [])],
       activated: Boolean(e.activated),
       cleared: false,
+      boss: Boolean(e.boss),
     })),
     pickups: (level.pickups || []).map((p, i) => instantiatePickup(p, i, level.id)),
     props: (level.props || []).map((p) => ({
@@ -154,8 +168,18 @@ export function buildWorld(level) {
       ...e,
       type: migrateEnemyType(e.type),
     })),
+    waves: (level.waves || []).map((w) => ({
+      ...w,
+      enemies: (w.enemies || []).map((e) => ({
+        ...e,
+        modifiers: e.modifiers ? { ...e.modifiers } : undefined,
+      })),
+    })),
+    spawnZones: (level.spawnZones || []).map((z) => ({ ...z })),
+    wavesComplete: false,
     zones: (level.zones || []).map((z) => ({ ...z })),
     boss: level.boss || null,
+    bossArena: level.bossArena ? { ...level.bossArena } : null,
   };
   syncDoorSolids(world);
   return world;

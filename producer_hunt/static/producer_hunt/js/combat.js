@@ -35,6 +35,52 @@ export const COMBAT = {
     muzzle: { x: 36, y: -96 },
     impactFx: { sheetKey: "client_impact", frames: 4, fps: 16, size: 96 },
   },
+  executive_producer: {
+    damage: 10,
+    cooldown: 1.2,
+    lifetime: 2.4,
+    speed: 280,
+    spawnFrame: 2,
+    attackRange: 640,
+    muzzle: { x: 46, y: -118 },
+    impactFx: { sheetKey: "effects", frames: 1, fps: 0, size: 72, frame: 5, life: 0.18 },
+  },
+};
+
+/** Studio 01 boss. Unit values scale by player shot damage (10). */
+export const EXECUTIVE_PRODUCER_BOSS = {
+  id: "executive_producer",
+  displayName: "THE EXECUTIVE PRODUCER",
+  maxHealth: 40 * COMBAT.player.damage,
+  contactDamage: 2 * COMBAT.player.damage,
+  projectileDamage: 1 * COMBAT.player.damage,
+  moveSpeed: 90,
+  chargeSpeed: 380,
+  phaseTwoHealthRatio: 0.5,
+  scoreValue: 2500,
+  preferredRange: 320,
+  rangeBand: 52,
+  attackCooldown: 1.35,
+  chargeCooldown: 2.75,
+  rangedBurstMin: 1,
+  rangedBurstMax: 3,
+  projectileSpeed: 280,
+  hitInvuln: 0.22,
+  phaseTransitionSec: 1.2,
+  entranceSec: 1.45,
+  recoverySec: 0.55,
+  chargePrepareSec: 0.48,
+  warningSec: 2.2,
+  contactCooldown: 0.7,
+  chargeContactCooldown: 0.55,
+  knockback: 240,
+  chargeKnockback: 380,
+  phase2: {
+    moveSpeedMul: 1.2,
+    attackCooldownMul: 0.75,
+    chargeSpeedMul: 1.2,
+    rangedProjectileAdd: 1,
+  },
 };
 
 export const PROJECTILE_DEFS = {
@@ -86,6 +132,14 @@ export const PROJECTILE_DEFS = {
     vis: 52,
     flip: true,
   },
+  executive_memo: {
+    id: "executive_memo",
+    frame: 4,
+    hitW: 36,
+    hitH: 22,
+    vis: 56,
+    flip: true,
+  },
 };
 
 export const WEAPON_DEFS = {
@@ -129,6 +183,7 @@ export const CHARACTER_WEAPON_ID = {
 export const ENEMY_WEAPON_ID = {
   post_producer: "deadline_projectile",
   client: "client_revision_pulse",
+  executive_producer: "executive_memo",
 };
 
 export function projectileDef(id) {
@@ -142,10 +197,19 @@ export function weaponDefForCharacter(characterId) {
 
 export function enemyWeaponDef(enemyId) {
   const projectileId = ENEMY_WEAPON_ID[enemyId] || ENEMY_WEAPON_ID.post_producer;
-  const combat = enemyId === "client" ? COMBAT.client : COMBAT.enemy;
+  const combat =
+    enemyId === "client"
+      ? COMBAT.client
+      : enemyId === "executive_producer"
+        ? COMBAT.executive_producer
+        : COMBAT.enemy;
+  const names = {
+    client: "Revision Pulse",
+    executive_producer: "Executive Memo",
+  };
   return {
     id: projectileId,
-    name: enemyId === "client" ? "Revision Pulse" : "Deadline",
+    name: names[enemyId] || "Deadline",
     projectileId,
     ...combat,
     ammo: -1,

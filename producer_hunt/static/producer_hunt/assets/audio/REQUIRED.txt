@@ -1,23 +1,29 @@
-# Audio files (optional until supplied)
+# Production MP3 files (optional until supplied)
 
-Place production OGG (primary) here, with MP3 fallbacks if needed:
+Place files under assets/audio/. Missing files stay silent after one console warning.
 
-music/menu_theme.ogg
-music/studio_01_theme.ogg
-music/level_complete.ogg
-sfx/ui_move.ogg
-sfx/ui_confirm.ogg
-sfx/ui_back.ogg
-sfx/editor_shoot.ogg
-sfx/assistant_shoot.ogg
-sfx/vfx_supervisor_shoot.ogg
-sfx/colorist_shoot.ogg
-sfx/post_producer_attack.ogg
-sfx/player_hit.ogg
-sfx/enemy_hit.ogg
-sfx/projectile_impact.ogg
-sfx/pickup_collect.ogg
-sfx/checkpoint_activate.ogg
-sfx/door_open.ogg
-sfx/player_death.ogg
-sfx/level_complete.ogg
+music/menu_theme.mp3
+music/studio_01_theme.mp3
+music/gameplay_music.mp3
+music/boss_music.mp3
+music/boss_01_theme.mp3
+music/game_over_music.mp3
+sfx/player_shoot.mp3
+sfx/player_hit.mp3
+sfx/player_jump.mp3
+sfx/player_land.mp3
+sfx/player_death.mp3
+sfx/enemy_hit.mp3
+sfx/enemy_death.mp3
+sfx/projectile_impact.mp3
+sfx/pickup_collect.mp3
+sfx/health_pickup.mp3
+sfx/ammo_pickup.mp3
+sfx/powerup_collect.mp3
+sfx/boss_warning.mp3
+sfx/level_complete.mp3
+sfx/game_over.mp3
+sfx/ui_hover.mp3
+sfx/ui_confirm.mp3
+sfx/ui_back.mp3
+sfx/pause.mp3

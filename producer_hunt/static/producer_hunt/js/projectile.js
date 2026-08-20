@@ -1,12 +1,18 @@
 import { drawSheetFrame } from "./asset-catalog.js";
 
 export class Projectile {
-  constructor({
-    x,
-    y,
-    vx,
-    damage,
-    owner,
+  constructor(opts = {}) {
+    this.reset(opts);
+  }
+
+  reset({
+    x = 0,
+    y = 0,
+    vx = 0,
+    vy = 0,
+    damage = 0,
+    owner = "player",
+    faction = "",
     type,
     frame = 0,
     w = 32,
@@ -16,15 +22,16 @@ export class Projectile {
     lifetime = 2,
     sheet = null,
     impactFx = null,
-  }) {
+  } = {}) {
     this.x = x;
     this.y = y;
     this.w = w;
     this.h = h;
     this.vx = vx;
-    this.vy = 0;
+    this.vy = vy || 0;
     this.damage = damage;
     this.owner = owner;
+    this.faction = faction || owner;
     this.type = type || "shot";
     this.frame = frame;
     this.sheet = sheet;
@@ -32,10 +39,14 @@ export class Projectile {
     this.direction = Math.sign(vx) || 1;
     this.alive = true;
     this.spent = false;
+    this.hasHit = false;
     this.age = 0;
     this.lifetime = lifetime;
     this.vis = vis;
     this.impactFx = impactFx;
+    this.prevX = x;
+    this.prevY = y;
+    return this;
   }
 
   bounds() {
@@ -49,6 +60,16 @@ export class Projectile {
   disable() {
     this.alive = false;
     this.spent = true;
+    this.hasHit = true;
+  }
+
+  recycle() {
+    this.disable();
+    this.x = 0;
+    this.y = 0;
+    this.vx = 0;
+    this.vy = 0;
+    this.sheet = null;
   }
 
   update(dt) {
@@ -64,8 +85,8 @@ export class Projectile {
   travelBounds() {
     const x = this.prevX == null ? this.x : Math.min(this.prevX, this.x);
     const y = this.prevY == null ? this.y : Math.min(this.prevY, this.y);
-    const w = this.w + Math.abs((this.x - (this.prevX ?? this.x)));
-    const h = this.h + Math.abs((this.y - (this.prevY ?? this.y)));
+    const w = this.w + Math.abs(this.x - (this.prevX ?? this.x));
+    const h = this.h + Math.abs(this.y - (this.prevY ?? this.y));
     return { x, y, w, h };
   }
 

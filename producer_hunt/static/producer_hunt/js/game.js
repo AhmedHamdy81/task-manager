@@ -12,6 +12,7 @@ import { AssetLoader } from "./asset-loader.js";
 import { WORLD_SHEETS, drawCoverImage, drawSheetFrame } from "./asset-catalog.js";
 import { COMBAT } from "./combat.js";
 import { AudioManager } from "./audio.js";
+import { musicForLevel, musicPlayOpts, pickupSoundId } from "./audio-catalog.js";
 import { drawButtons, drawConfirm, drawMenu, drawSettings, hitMenu, menuButtons, moveMenuIndex, settingsRows, confirmButtons } from "./ui.js";
 import { CHARACTERS, characterById } from "./characters.js";
 import { applyPickup, PICKUP_COLLECT_FX } from "./pickups.js";
@@ -26,6 +27,8 @@ import {
 } from "./progression.js";
 import { loadSettings, saveSettings } from "./settings.js";
 import { FxSprite } from "./fx.js";
+import { WaveController, pickWaveSpawn, STUDIO_CLEAR_BONUS } from "./waves.js";
+import { BossEncounter, HostileProjectilePool } from "./boss.js";
 import {
   drawDecorSheet,
   drawHazards,
@@ -89,8 +92,14 @@ export class Game {
     this.character = null;
     this.world = null;
     this.enemies = [];
+    this.waves = null;
+    this.bossEncounter = null;
     this.projectiles = [];
+    this.hostileProjectiles = [];
+    this.hostilePool = new HostileProjectilePool();
     this.effects = [];
+    this._bossMusic = false;
+    this._bossWarned = new Set();
     this.score = 0;
     this.checkpoint = null;
     this.fade = 0;
@@ -148,6 +157,28 @@ export class Game {
     return this.audio.playSound(id, { camera: this.camera, ...extra });
   }
 
+  playMenuMusic() {
+    this.audio.playMusic("music_menu", {
+      loop: true,
+      volume: 0.4,
+    });
+  }
+
+  playBossMusic() {
+    if (this.audio.hasBuffer("music_boss_01")) {
+      this.audio.playMusic("music_boss_01");
+      return;
+    }
+    this.audio.playMusic("music_boss");
+  }
+
+  playLevelMusic(opts = {}) {
+    const id = musicForLevel(this.world?.id || this.levelId, this.world?.music);
+    const start = () => this.audio.ensureMusic(id, { ...musicPlayOpts(id), ...opts });
+    if (this.audio.unlocked) start();
+    else this.audio.unlock().then(start);
+  }
+
   async start() {
     try {
       this._bindShell();
@@ -157,16 +188,19 @@ export class Game {
         this._bootStarted = true;
         await this.preload();
         this.state.set(GameState.START_SCREEN);
-        this.audio.playMusic("menu_theme");
+        this.playMenuMusic();
       }
       if (this.running) return;
       this.running = true;
       if (this.state.is(GameState.START_SCREEN, GameState.CHARACTER_SELECT)) {
-        this.audio.playMusic("menu_theme");
-      } else if (this.state.is(GameState.PLAYING, GameState.RESPAWNING, GameState.PLAYER_DEAD)) {
-        this.audio.playMusic("studio_01_theme");
+        this.playMenuMusic();
+      } else if (this.state.is(GameState.PLAYER_DEAD)) {
+        if (this.audio.hasBuffer("music_game_over")) this.audio.playMusic("music_game_over");
+        else this.playLevelMusic();
+      } else if (this.state.is(GameState.PLAYING, GameState.RESPAWNING)) {
+        this.playLevelMusic();
       } else if (this.state.is(GameState.LEVEL_COMPLETE)) {
-        this.audio.playMusic("level_complete_music");
+        this.audio.stopMusic(0.15);
       }
       this._raf = requestAnimationFrame(this._loop);
     } catch (err) {
@@ -179,6 +213,9 @@ export class Game {
       await Promise.all(CHARACTERS.map((ch) => this.assets.loadCharacterKit(ch.sprite)));
       await this.assets.loadEnemyKit(ENEMY_TYPES.post_producer.sprite);
       await this.assets.loadEnemyKit(ENEMY_TYPES.client.sprite);
+      if (ENEMY_TYPES.executive_producer) {
+        await this.assets.loadEnemyKit(ENEMY_TYPES.executive_producer.sprite);
+      }
       try {
         await this.assets.loadCatalog(WORLD_SHEETS);
       } catch (err) {
@@ -252,8 +289,8 @@ export class Game {
     return nid;
   }
 
-  onClick(e) {
-    this.audio.unlock();
+  async onClick(e) {
+    await this.audio.unlock();
     const p = this.canvasPoint(e);
     const st = this.state.get();
     if (this.overlay === "confirm") {
@@ -265,7 +302,7 @@ export class Game {
       const rows = settingsRows();
       const x = DESIGN_W / 2 - 380;
       rows.forEach((row, i) => {
-        const y = 210 + i * 88;
+        const y = 196 + i * 78;
         if (p.x >= x && p.x <= x + 760 && p.y >= y && p.y <= y + 72) {
           this.menuIndex = i;
           if (row.kind === "action") {
@@ -292,7 +329,7 @@ export class Game {
     }
     if (st === GameState.CHARACTER_SELECT) {
       const act = this.select.handleClick(p.x, p.y);
-      if (act === "focus") this.sfx("ui_move");
+      if (act === "focus") this.sfx("ui_hover");
       if (act === "confirm") {
         this.sfx("ui_confirm");
         this.confirmCharacter();
@@ -335,6 +372,7 @@ export class Game {
     if (id === "START GAME") {
       this.overlay = null;
       this.state.set(GameState.CHARACTER_SELECT);
+      this.playMenuMusic();
     }
     if (id === "SETTINGS") this.openSettings();
     if (id === "CONTROLS") this.showControls = !this.showControls;
@@ -405,7 +443,7 @@ export class Game {
     if (this.input.consume("crouch") || this.input.consume("moveRight")) {
       this.menuIndex = moveMenuIndex(this.menuIndex, 1, buttons.length);
     }
-    if (this.menuIndex !== prev) this.sfx("ui_move");
+    if (this.menuIndex !== prev) this.sfx("ui_hover");
     if (this.input.consume("confirm") && buttons[this.menuIndex]) {
       this.sfx("ui_confirm");
       onConfirm(buttons[this.menuIndex].id);
@@ -420,6 +458,7 @@ export class Game {
     this.menuIndex = 0;
     this.inputLocked = true;
     this.input.clearTransient();
+    this.sfx("pause");
     this.audio.setGameplayMuted(true);
     this.audio.pauseMusic();
     this.state.set(GameState.PAUSED);
@@ -440,6 +479,7 @@ export class Game {
 
   onPlayerDied() {
     if (this.state.get() === GameState.PLAYER_DEAD) return;
+    this.bossEncounter?.onPlayerDied();
     this.stats.deaths += 1;
     this._deathOverlay = false;
     this.overlay = null;
@@ -463,6 +503,9 @@ export class Game {
         if (shot.owner === "enemy") shot.disable();
       }
       this.projectiles = this.projectiles.filter((p) => p.alive);
+      this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
+      this.sfx("game_over", { force: true });
+      if (this.audio.hasBuffer("music_game_over")) this.audio.playMusic("music_game_over");
     }
     if (this._deathOverlay) {
       this.updateMenuNav(this.deathButtons(), (id) => this.handleDeath(id));
@@ -471,6 +514,7 @@ export class Game {
 
   requestRespawn() {
     if (this._respawnLock || this.state.is(GameState.RESPAWNING)) return;
+    this.audio.unlock();
     this.beginRespawn();
   }
 
@@ -511,7 +555,7 @@ export class Game {
     if (this.input.consume("moveLeft") || this.input.consume("jump")) this.menuIndex = 0;
     if (this.input.consume("moveRight") || this.input.consume("crouch")) this.menuIndex = 1;
     this.menuIndex = this.menuIndex ? 1 : 0;
-    if (this.menuIndex !== prev) this.sfx("ui_move");
+    if (this.menuIndex !== prev) this.sfx("ui_hover");
     if (this.input.consume("confirm")) this.handleConfirm(this.menuIndex === 0 ? "CONFIRM" : "CANCEL");
   }
 
@@ -535,7 +579,7 @@ export class Game {
     const prev = this.menuIndex;
     if (this.input.consume("jump")) this.menuIndex = moveMenuIndex(this.menuIndex, -1, rows.length);
     if (this.input.consume("crouch")) this.menuIndex = moveMenuIndex(this.menuIndex, 1, rows.length);
-    if (this.menuIndex !== prev) this.sfx("ui_move");
+    if (this.menuIndex !== prev) this.sfx("ui_hover");
     const row = rows[this.menuIndex];
     if (!row) return;
     if (this.input.consume("moveLeft")) this.adjustSetting(row, -1);
@@ -592,10 +636,14 @@ export class Game {
   }
 
   disposeLevel() {
+    this.destroyWaves();
+    this.bossEncounter?.destroy();
+    this.bossEncounter = null;
     this.world = null;
     this.player = null;
     this.enemies = [];
     this.projectiles = [];
+    this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
     this.effects = [];
     this.checkpoint = null;
     this.completed = false;
@@ -606,6 +654,7 @@ export class Game {
     this.confirmKind = null;
     this._userPaused = false;
     this._autoPaused = false;
+    this._bossMusic = false;
     this.fade = 0;
     this.score = 0;
     this.input.clearTransient();
@@ -617,14 +666,14 @@ export class Game {
     this.menuIndex = 0;
     this.showControls = false;
     this.audio.setGameplayMuted(false);
-    this.audio.playMusic("menu_theme");
+    this.playMenuMusic();
     this.state.set(GameState.START_SCREEN);
   }
 
   goCharacterSelect() {
     this.disposeLevel();
     this.menuIndex = 0;
-    this.audio.playMusic("menu_theme");
+    this.playMenuMusic();
     this.state.set(GameState.CHARACTER_SELECT);
   }
 
@@ -651,11 +700,50 @@ export class Game {
     this.audio.stopGameplayVoices();
   }
 
+  drawBossHud(ctx) {
+    const view = this.bossEncounter?.hudView?.();
+    if (!view) return;
+    const x = DESIGN_W * 0.22;
+    const y = 28;
+    const w = DESIGN_W * 0.56;
+    const ratio = view.maxHealth ? Math.max(0, Math.min(1, view.health / view.maxHealth)) : 0;
+    ctx.save();
+    ctx.fillStyle = "rgba(5, 7, 12, 0.72)";
+    ctx.fillRect(x, y, w, 58);
+    ctx.fillStyle = view.transitioning ? "#fb923c" : "#e8b84a";
+    ctx.font = "bold 16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(view.name, DESIGN_W / 2, y + 20);
+    ctx.fillStyle = "#1f2937";
+    ctx.fillRect(x + 18, y + 32, w - 36, 14);
+    ctx.fillStyle = view.transitioning ? "#f97316" : "#ef4444";
+    ctx.fillRect(x + 18, y + 32, (w - 36) * ratio, 14);
+    ctx.restore();
+  }
+
+  drawWaveBanner(ctx) {
+    const banner = this.waves?.banner;
+    if (!banner?.title || this.state.get() !== GameState.PLAYING) return;
+    ctx.save();
+    ctx.fillStyle = "rgba(5, 7, 12, 0.42)";
+    ctx.fillRect(DESIGN_W * 0.28, DESIGN_H * 0.36, DESIGN_W * 0.44, 128);
+    ctx.strokeStyle = "rgba(232, 184, 74, 0.65)";
+    ctx.strokeRect(DESIGN_W * 0.28, DESIGN_H * 0.36, DESIGN_W * 0.44, 128);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#e8b84a";
+    ctx.font = "bold 42px sans-serif";
+    ctx.fillText(banner.title, DESIGN_W / 2, DESIGN_H * 0.36 + 52);
+    ctx.fillStyle = "#f4f1ea";
+    ctx.font = "bold 22px sans-serif";
+    ctx.fillText(banner.subtitle || "", DESIGN_W / 2, DESIGN_H * 0.36 + 96);
+    ctx.restore();
+  }
+
   drawComplete(ctx) {
     const name = this.world?.name || "The Post Suite";
     const ch = this.character?.displayName || this.character?.name || "—";
     const time = formatClock(this.stats.time || this._playTime);
-    const title = this.world?.id === "studio_02" ? "PHASE 2 COMPLETE" : "LEVEL COMPLETE";
+    const title = this.world?.id === "studio_02" ? "PHASE 2 COMPLETE" : this.world?.id === "studio_01" ? "STUDIO 01 CLEAR" : "LEVEL COMPLETE";
     const lines = [
       `Time  ${time}`,
       `Production tokens  ${this.stats.tokens}`,
@@ -694,7 +782,10 @@ export class Game {
     this.player = new Player(this.character, this.spawn, kit);
     this.checkpoint = opts.checkpoint || null;
     this.spawnEnemies();
+    this.attachWaves();
+    this.attachBossEncounter();
     this.projectiles = [];
+    this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
     this.effects = [];
     this.score = 0;
     this.camera.x = 0;
@@ -702,6 +793,7 @@ export class Game {
     this.fade = 0;
     this.inputLocked = false;
     this.completed = false;
+    this._studioClearAwarded = false;
     this._respawnTimer = 0;
     this._deathOverlay = false;
     this._respawnLock = false;
@@ -715,18 +807,22 @@ export class Game {
     if (this.checkpoint) {
       this.applySnapshot(this.checkpoint);
     } else {
+      this.waves?.start();
       const start = this.world.checkpoints.find((c) => c.isStart) || this.world.checkpoints[0];
       if (start) this.captureCheckpoint(start, { silent: true });
     }
     this.hud.invalidate();
     this.camera.snap(this.player.footX - this.camera.w * 0.38, this.player.footY - this.camera.h * 0.7, this.world);
     this.audio.setGameplayMuted(false);
-    this.audio.playMusic(this.world.music || "studio_01_theme", { restart: true });
+    this._bossMusic = false;
+    this._bossWarned = new Set();
+    this.playLevelMusic();
     this.state.set(GameState.PLAYING);
   }
 
   restartLevel() {
     if (!this.character) return;
+    this.audio.unlock();
     this.beginLevel(this.character);
   }
 
@@ -758,6 +854,8 @@ export class Game {
       defeated: (this.enemies || [])
         .filter((e) => !e.alive && (e.persistent || e.encounterBound))
         .map((e) => e.spawnId),
+      waves: this.waves ? this.waves.snapshot() : null,
+      bossArena: Boolean(this.checkpoint?.bossArena || this.bossEncounter?.active),
       stats: { ...this.stats, time: this._playTime },
     };
     this.spawn = { x: safe.x, y: safe.y };
@@ -821,6 +919,10 @@ export class Game {
       cp.inside = false;
     }
     this.applyEncounterSnapshot(snap);
+    if (this.waves) {
+      if (snap.waves) this.waves.applySnapshot(snap.waves);
+      else this.waves.start();
+    }
     this.hud.invalidate();
   }
 
@@ -888,11 +990,11 @@ export class Game {
     if (st === GameState.CHARACTER_SELECT) {
       if (this.input.consume("moveLeft")) {
         this.select.move(-1);
-        this.sfx("ui_move");
+        this.sfx("ui_hover");
       }
       if (this.input.consume("moveRight")) {
         this.select.move(1);
-        this.sfx("ui_move");
+        this.sfx("ui_hover");
       }
       if (this.input.consume("pause")) {
         this.sfx("ui_back");
@@ -934,7 +1036,9 @@ export class Game {
 
     this._playTime += dt;
     this._worldTime += dt;
-    this.inputLocked = false;
+    this.waves?.update(dt);
+    this.bossEncounter?.update(dt);
+    this.inputLocked = Boolean(this.waves?.blocksInput);
     this.player.update(dt, this.input, this.world, this.projectiles, this);
     this.updateEncounters();
     this.camera.follow(this.player, this.world, dt);
@@ -955,17 +1059,30 @@ export class Game {
   updateEnemyContact(dt) {
     if (!this.player?.alive) return;
     for (const enemy of this.enemies) {
+      if (enemy.combatEnabled === false || enemy.hitboxEnabled === false) continue;
       const dmg = enemy.spec?.contactDamage || 0;
       if (!enemy.alive || dmg <= 0) continue;
       if (enemy.contactCool > 0) continue;
       if (!aabb(this.player.bounds(), enemy.bounds())) continue;
       const dir = Math.sign(this.player.footX - enemy.footX) || -1;
-      const dealt = this.player.takeDamage(dmg, { knockbackX: dir * 220 });
+      const knock = enemy.isBoss
+        ? enemy.state === "charge"
+          ? enemy.cfg?.chargeKnockback || 380
+          : enemy.cfg?.knockback || 240
+        : 220;
+      const cool = enemy.isBoss
+        ? enemy.state === "charge"
+          ? enemy.cfg?.chargeContactCooldown || 0.55
+          : enemy.cfg?.contactCooldown || 0.7
+        : 0.75;
+      const dealt = this.player.takeDamage(dmg, { knockbackX: dir * knock });
       if (!dealt) continue;
-      enemy.contactCool = 0.75;
-      if (this.shakeEnabled()) this.camera.addShake(0.35);
+      enemy.contactCool = cool;
+      this.player.footX += dir * (enemy.isBoss ? 52 : 8);
+      this.player._syncBox?.();
+      if (this.shakeEnabled()) this.camera.addShake(enemy.isBoss ? 0.55 : 0.35);
       this.hud.invalidate();
-      this.sfx("player_hit");
+      if (this.player.alive) this.sfx("player_hit");
     }
   }
 
@@ -981,7 +1098,7 @@ export class Game {
       if (this.shakeEnabled()) this.camera.addShake(0.45);
       h.cool = h.cooldown;
       this.hud.invalidate();
-      this.audio.play("player_hit");
+      if (this.player.alive) this.sfx("player_hit");
       this.spawnFx({
         sheetKey: "effects",
         frame: 5,
@@ -1049,6 +1166,7 @@ export class Game {
   completeLevel() {
     if (this.completed || this.state.get() !== GameState.PLAYING) return;
     this.completed = true;
+    this.waves?.destroy();
     this.inputLocked = true;
     this.stats.time = this._playTime;
     this.overlay = null;
@@ -1058,6 +1176,7 @@ export class Game {
       if (shot.owner === "enemy") shot.disable();
     }
     this.projectiles = this.projectiles.filter((p) => p.alive);
+    this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
     const done = loadSettings().completedLevels || [];
     const patch = {};
     if (this.world?.id && !done.includes(this.world.id)) {
@@ -1068,7 +1187,7 @@ export class Game {
     this.hud.invalidate();
     this.audio.setGameplayMuted(true);
     this.sfx("level_complete", { force: true });
-    this.audio.playMusic("level_complete_music");
+    this.audio.stopMusic(0.25);
     this.state.set(GameState.LEVEL_COMPLETE);
   }
 
@@ -1123,15 +1242,28 @@ export class Game {
     const spawn = snap ? { x: snap.x, y: snap.y } : this.world.spawn;
     this.player = new Player(this.character, spawn, kit);
     this.spawnEnemies();
+    this.attachWaves();
+    this.attachBossEncounter();
     this.projectiles = [];
+    this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
     this.effects = [];
     if (snap) this.applySnapshot(snap);
-    else this.captureCheckpoint(this.world.checkpoints.find((c) => c.isStart), { silent: true });
+    else {
+      this.waves?.start();
+      this.captureCheckpoint(this.world.checkpoints.find((c) => c.isStart), { silent: true });
+    }
     this.player.alive = true;
     this.player.health = Math.max(1, this.player.health);
     this.inputLocked = false;
     this._deathOverlay = false;
+    this._bossMusic = false;
     this.hud.invalidate();
+    this.audio.setGameplayMuted(false);
+    if (snap?.bossArena && this.world?.boss) {
+      this.bossEncounter?.restartCombat();
+    } else {
+      this.playLevelMusic();
+    }
   }
 
   spawnEnemies() {
@@ -1191,27 +1323,153 @@ export class Game {
     this.applyEncounterSnapshot(this.checkpoint);
   }
 
+  destroyWaves() {
+    this.waves?.destroy();
+    this.waves = null;
+  }
+
+  attachWaves() {
+    this.destroyWaves();
+    if ((this.world?.waves || []).length) {
+      this.waves = new WaveController(this, this.world.waves);
+    }
+  }
+
+  attachBossEncounter() {
+    this.bossEncounter?.destroy();
+    this.bossEncounter = this.world?.boss ? new BossEncounter(this) : null;
+  }
+
+  onStudioWavesCleared() {
+    if (!this.world?.boss) {
+      this.awardStudioClear();
+      return;
+    }
+    this.bossEncounter?.begin();
+  }
+
+  acquireHostileShot(opts) {
+    const shot = this.hostilePool.acquire(opts);
+    this.hostileProjectiles.push(shot);
+    return shot;
+  }
+
+  syncWaveCheckpoint() {
+    if (!this.checkpoint || !this.waves) return;
+    this.checkpoint.waves = this.waves.snapshot();
+  }
+
+  spawnWaveEnemy(typeId, modifiers = null, opts = {}) {
+    const type = migrateEnemyType(typeId);
+    if (!ENEMY_TYPES[type]) {
+      console.error(`[Producer Hunt] Enemy creation failed: unknown type "${typeId}"`);
+      return null;
+    }
+    const spec = ENEMY_TYPES[type];
+    const kit = this.assets.enemyKit(type) || spec.sprite;
+    const body = {
+      w: spec.sprite?.collisionWidth || 88,
+      h: spec.sprite?.collisionHeight || 210,
+    };
+    const pos = pickWaveSpawn(this.world, this.player, this.enemies, body);
+    const spawnId = opts.id || `wave_${this.waves?.waveIndex ?? 0}_${this.waves?.spawned ?? this.enemies.length}`;
+    let enemy;
+    try {
+      enemy = new Enemy(
+        type,
+        {
+          id: spawnId,
+          x: pos.x,
+          y: pos.y,
+          patrolMin: pos.x - 140,
+          patrolMax: pos.x + 140,
+          activateRange: 2800,
+          activated: true,
+        },
+        kit
+      );
+    } catch (err) {
+      console.error(`[Producer Hunt] Enemy creation failed: type=${type} id=${spawnId} reason=${err}`);
+      return null;
+    }
+    enemy.spawnId = spawnId;
+    enemy.waveTracked = true;
+    enemy.persistent = false;
+    enemy.applyWaveModifiers(modifiers);
+    if (Number.isFinite(opts.health)) enemy.health = Math.max(1, opts.health);
+    enemy.onWaveExit = (e, reason) => this.waves?.onEnemyExit(e, reason);
+    const issues = enemySpawnSafetyIssues(this.world, enemy);
+    if (issues.length) {
+      console.warn(`[Producer Hunt] Unsafe enemy spawn: type=${enemy.type} id=${spawnId} ${issues.join("; ")}`);
+    }
+    if (this.allowDebug) {
+      console.info(
+        `[Producer Hunt] Spawned enemy:\ntype=${enemy.type}\nid=${spawnId}\nposition=${enemy.footX},${enemy.footY}\nlevel=${this.world.id || this.levelId}`
+      );
+    }
+    this.enemies.push(enemy);
+    return enemy;
+  }
+
+  awardStudioClear() {
+    if (this._studioClearAwarded || this.completed) return;
+    this._studioClearAwarded = true;
+    this.score += STUDIO_CLEAR_BONUS;
+    const enc = (this.world?.encounters || []).find((e) => e.id === "enc_final");
+    if (enc) {
+      enc.activated = true;
+      enc.cleared = true;
+    }
+    if (this.world) this.world.wavesComplete = true;
+    this.hud.invalidate();
+    this.completeLevel();
+  }
+
   updateEncounters() {
     const px = this.player?.footX ?? 0;
     for (const enc of this.world.encounters || []) {
       const wasCleared = Boolean(enc.cleared);
-      if (!enc.activated && px >= enc.activateX) enc.activated = true;
+      if (!enc.activated && !enc.boss && px >= enc.activateX) enc.activated = true;
       if (enc.activated) {
         for (const enemy of this.enemies) {
           if ((enc.enemyIds || []).includes(enemy.spawnId)) enemy.activated = true;
         }
       }
-      enc.cleared = (enc.enemyIds || []).every((id) => {
-        const enemy = this.enemies.find((e) => e.spawnId === id);
-        if (!enemy) return true;
-        return !enemy.alive && (enemy.anim?.finished || enemy.deadTimer > 0.85);
-      });
+      enc.cleared =
+        (enc.enemyIds || []).length > 0
+          ? (enc.enemyIds || []).every((id) => {
+              const enemy = this.enemies.find((e) => e.spawnId === id);
+              if (!enemy) return true;
+              return !enemy.alive && (enemy.anim?.finished || enemy.deadTimer > 0.85);
+            })
+          : Boolean(enc.cleared);
       if (!wasCleared && enc.cleared) {
         for (const shot of this.projectiles) {
           if (shot.owner === "enemy") shot.disable();
         }
         this.projectiles = this.projectiles.filter((p) => p.alive);
       }
+    }
+    this.updateBossMusic();
+  }
+
+  updateBossMusic() {
+    if (this.state.get() !== GameState.PLAYING || !this.world) return;
+    const bossEnc = (this.world.encounters || []).find((enc) => enc.boss && enc.activated && !enc.cleared);
+    if (bossEnc) {
+      if (!this._bossWarned.has(bossEnc.id)) {
+        this._bossWarned.add(bossEnc.id);
+        this.sfx("boss_warning", { force: true });
+      }
+      if (!this._bossMusic) {
+        this._bossMusic = true;
+        this.playBossMusic();
+      }
+      return;
+    }
+    if (this._bossMusic) {
+      this._bossMusic = false;
+      this.playLevelMusic();
     }
   }
 
@@ -1242,10 +1500,10 @@ export class Game {
     this.effects = this.effects.filter((fx) => fx.alive);
   }
 
-  spawnImpact(shot) {
+  spawnImpact(shot, opts = {}) {
     const fx = shot.impactFx || COMBAT.player.impactFx;
     const c = shot.center ? shot.center() : { x: shot.x + shot.w / 2, y: shot.y + shot.h / 2 };
-    this.sfx("projectile_impact", { x: c.x });
+    if (opts.sfx) this.sfx("projectile_impact", { x: c.x });
     this.spawnFx({
       sheetKey: fx.sheetKey,
       frame: fx.frame || 0,
@@ -1258,48 +1516,96 @@ export class Game {
     });
   }
 
-  updateProjectiles(dt) {
-    for (const shot of this.projectiles) {
-      if (!shot.alive || shot.spent) continue;
-      shot.update(dt);
-      if (!shot.alive) continue;
-      if (shot.x < -40 || shot.x > this.world.width + 40) {
-        shot.disable();
-        continue;
+  handlePlayerProjectileHit(a, b) {
+    const projectile = a?.owner === "player" ? a : b?.owner === "player" ? b : null;
+    const enemy = projectile === a ? b : projectile === b ? a : null;
+    if (!projectile?.alive || projectile.spent || projectile.hasHit) return false;
+    if (projectile.faction === "boss" || projectile.owner === "enemy") return false;
+    if (!enemy?.alive || typeof enemy.takeDamage !== "function") return false;
+    if (enemy.hitboxEnabled === false) return false;
+    const travel = typeof projectile.travelBounds === "function" ? projectile.travelBounds() : projectile.bounds();
+    if (!aabb(travel, enemy.bounds()) && !aabb(projectile.bounds(), enemy.bounds())) return false;
+    projectile.hasHit = true;
+    const damage = Number(projectile.damage ?? 1);
+    const wasDying = Boolean(enemy.deathStarted);
+    this.score += enemy.takeDamage(damage, projectile);
+    if (enemy.isBoss) {
+      if (enemy.deathStarted && !wasDying) this.sfx("enemy_death", { x: enemy.footX });
+      else if (!enemy.deathStarted) this.sfx("enemy_hit", { x: enemy.footX });
+    } else if (!enemy.alive) {
+      this.stats.kills += 1;
+      this.sfx("enemy_death", { x: enemy.footX });
+    } else {
+      this.sfx("enemy_hit", { x: enemy.footX });
+    }
+    this.spawnImpact(projectile);
+    projectile.disable();
+    this.hud.invalidate();
+    return true;
+  }
+
+  _stepProjectile(shot, dt, { hostile = false } = {}) {
+    if (!shot.alive || shot.spent) return;
+    shot.update(dt);
+    if (!shot.alive) return;
+    if (shot.x < -40 || shot.x > this.world.width + 40 || shot.y < -80 || shot.y > (this.world.height || DESIGN_H) + 80) {
+      shot.disable();
+      return;
+    }
+    const travel = typeof shot.travelBounds === "function" ? shot.travelBounds() : shot.bounds();
+    if (hitsSolid(travel, this.world.solids)) {
+      this.spawnImpact(shot, { sfx: true });
+      shot.disable();
+      return;
+    }
+    if (shot.owner === "player") {
+      for (const enemy of this.enemies) {
+        if (!enemy.alive) continue;
+        if (this.handlePlayerProjectileHit(shot, enemy)) break;
       }
-      const travel = typeof shot.travelBounds === "function" ? shot.travelBounds() : shot.bounds();
-      if (hitsSolid(travel, this.world.solids)) {
+      return;
+    }
+    if (shot.owner === "enemy") {
+      if (shot.faction === "boss" && this.bossEncounter && !this.bossEncounter.boss?.combatEnabled) {
+        shot.disable();
+        return;
+      }
+      if (this.player.alive && aabb(shot.bounds(), this.player.bounds())) {
+        const dealt = this.player.takeDamage(shot.damage);
+        if (dealt) {
+          this.sfx("player_hit");
+          if (this.shakeEnabled()) this.camera.addShake(0.55);
+          this.hud.invalidate();
+        }
         this.spawnImpact(shot);
         shot.disable();
-        continue;
-      }
-      if (shot.owner === "player") {
-        for (const enemy of this.enemies) {
-          if (!enemy.alive) continue;
-          if (!aabb(shot.bounds(), enemy.bounds())) continue;
-          this.score += enemy.takeDamage(shot.damage);
-          this.sfx("enemy_hit", { x: enemy.footX });
-          if (!enemy.alive) this.stats.kills += 1;
-          this.spawnImpact(shot);
-          shot.disable();
-          break;
-        }
-      } else if (shot.owner === "enemy") {
-        if (this.player.alive && aabb(shot.bounds(), this.player.bounds())) {
-          const dealt = this.player.takeDamage(shot.damage);
-          if (dealt) {
-            this.sfx("player_hit");
-            if (this.shakeEnabled()) this.camera.addShake(0.55);
-          }
-          this.spawnImpact(shot);
-          shot.disable();
-        }
       }
     }
+  }
+
+  updateProjectiles(dt) {
+    for (const shot of this.projectiles) this._stepProjectile(shot, dt);
+    for (const shot of this.hostileProjectiles) this._stepProjectile(shot, dt, { hostile: true });
     this.projectiles = this.projectiles.filter((p) => p.alive);
+    const kept = [];
+    for (const shot of this.hostileProjectiles) {
+      if (shot.alive) kept.push(shot);
+      else this.hostilePool.release(shot);
+    }
+    this.hostileProjectiles = kept;
     this.enemies = this.enemies.filter((e) => {
-      if (e.alive) return true;
+      if (e.isBoss && this.bossEncounter && this.bossEncounter.phase !== "idle" && this.bossEncounter.phase !== "complete") {
+        return true;
+      }
+      if (e.alive) {
+        if (this.world && e.footY > (this.world.height || DESIGN_H) + 24) {
+          e.notifyWaveExit?.("invalid");
+          return false;
+        }
+        return true;
+      }
       if (e.anim && e.anim.name === "death" && !e.anim.finished) return true;
+      if (e.deadTimer >= 0.9) e.notifyWaveExit?.("removed");
       return e.deadTimer < 0.9;
     });
   }
@@ -1310,7 +1616,7 @@ export class Game {
       if (!aabb(this.player.bounds(), pickup)) continue;
       if (!applyPickup(pickup, this.player, this)) continue;
       if (pickup.kind === "production_token" || pickup.kind === "bonus") this.stats.tokens += 1;
-      this.sfx("pickup_collect", { x: pickup.x });
+      this.sfx(pickupSoundId(pickup.effect), { x: pickup.x });
       this.hud.invalidate();
       this.spawnFx({
         sheetKey: PICKUP_COLLECT_FX.sheetKey,
@@ -1352,6 +1658,7 @@ export class Game {
     for (const enemy of this.enemies) enemy.draw(ctx, this.camera);
     if (this.player) this.player.draw(ctx, this.camera, this.assets);
     for (const shot of this.projectiles) shot.draw(ctx, this.camera);
+    for (const shot of this.hostileProjectiles || []) shot.draw(ctx, this.camera);
     if (this.world) drawDecorSheet(ctx, this.assets, "props", this.world.props, this.camera, 128, "front");
     for (const fx of this.effects) fx.draw(ctx, this.camera, drawSheetFrame);
     if (this.fade > 0) {
@@ -1359,12 +1666,16 @@ export class Game {
       ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
     }
     if (this.player && this.state.is(GameState.PLAYING, GameState.RESPAWNING)) {
+      const wave = this.waves?.hud;
       this.hud.draw(ctx, {
         player: this.player,
         score: this.score,
         assets: this.assets,
         objective: currentObjective(this.world, this.player),
+        wave,
       });
+      this.drawBossHud(ctx);
+      this.drawWaveBanner(ctx);
     }
     if (this.debug) this.drawDebug(ctx);
 
@@ -1503,14 +1814,18 @@ export class Game {
     lines.forEach((l, i) => ctx.fillText(l, DESIGN_W - 364, 50 + i * 22));
     ctx.strokeStyle = "#38bdf8";
     ctx.strokeRect(1, 1, DESIGN_W - 2, DESIGN_H - 2);
-    if (p) p.drawAssetDebug(ctx, this.camera, this.world);
-    for (const e of this.enemies) e.drawAssetDebug(ctx, this.camera);
     const drawBox = (box, color) => {
       if (!box) return;
       const s = this.camera.worldToScreen(box.x, box.y);
       ctx.strokeStyle = color;
       ctx.strokeRect(s.x, s.y, box.w, box.h);
     };
+    if (p) p.drawAssetDebug(ctx, this.camera, this.world);
+    for (const e of this.enemies) e.drawAssetDebug(ctx, this.camera);
+    for (const shot of this.projectiles) {
+      if (!shot.alive) continue;
+      drawBox(shot.bounds(), shot.owner === "player" ? "rgba(253,224,71,0.95)" : "rgba(248,113,113,0.95)");
+    }
     for (const h of this.world?.hazards || []) {
       if (h.enabled) drawBox(h, "rgba(250,204,21,0.9)");
     }

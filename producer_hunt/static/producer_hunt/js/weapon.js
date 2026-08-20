@@ -29,19 +29,22 @@ export class Weapon {
     return this.cool <= 0 && this.ammo !== 0;
   }
 
-  tryFire({ x, y, facing, damageMul = 1, owner = "player" }) {
+  tryFire({ x, y, facing, damageMul = 1, owner = "player", faction = "", vx = null, vy = 0, projectile }) {
     if (!this.canFire()) return null;
     this.cool = this.cooldownSec;
     if (this.ammo > 0) this.ammo -= 1;
     const def = projectileDef(this.projectileId);
     const w = def.hitW;
     const h = def.hitH;
-    return new Projectile({
+    const shotVx = vx == null ? facing * this.projectileSpeed : vx;
+    const opts = {
       x: x - w / 2,
       y: y - h / 2,
-      vx: facing * this.projectileSpeed,
+      vx: shotVx,
+      vy: vy || 0,
       damage: this.damage * damageMul,
       owner,
+      faction: faction || owner,
       type: def.id,
       frame: def.frame,
       w,
@@ -50,7 +53,9 @@ export class Weapon {
       flip: def.flip,
       lifetime: this.lifetime,
       impactFx: this.impactFx,
-    });
+    };
+    if (projectile && typeof projectile.reset === "function") return projectile.reset(opts);
+    return new Projectile(opts);
   }
 
   isAmmoFull() {

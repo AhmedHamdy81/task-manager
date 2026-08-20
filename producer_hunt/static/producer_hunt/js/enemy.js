@@ -2,9 +2,8 @@ import { SpriteAnimator } from "./animation.js";
 import { aabb, keepInWorld, lineBlocked, resolveSolids } from "./collision.js";
 import { applyGravity } from "./physics.js";
 import { makeEnemySpriteConfig } from "./sprite-spec.js";
-import { COMBAT, enemyWeaponDef } from "./combat.js";
+import { COMBAT, EXECUTIVE_PRODUCER_BOSS, enemyWeaponDef } from "./combat.js";
 import { Weapon } from "./weapon.js";
-import { WEAPON_SOUND_ID } from "./audio-catalog.js";
 
 const STATE_TO_ANIM = {
   idle: "idle",
@@ -91,9 +90,39 @@ export const ENEMY_TYPES = {
     accent: "#9f1239",
     sprite: makeEnemySpriteConfig("client", {
       collisionWidth: 54,
-      collisionHeight: 152,
+      collisionHeight: 210,
     }),
     impactSheet: "client_impact",
+  },
+  executive_producer: {
+    id: "executive_producer",
+    type: "executive_producer",
+    name: EXECUTIVE_PRODUCER_BOSS.displayName,
+    initials: "EP",
+    behavior: "boss",
+    isBoss: true,
+    artFacing: 1,
+    health: EXECUTIVE_PRODUCER_BOSS.maxHealth,
+    speed: EXECUTIVE_PRODUCER_BOSS.moveSpeed,
+    chaseSpeed: EXECUTIVE_PRODUCER_BOSS.moveSpeed,
+    damage: EXECUTIVE_PRODUCER_BOSS.projectileDamage,
+    contactDamage: EXECUTIVE_PRODUCER_BOSS.contactDamage,
+    scoreValue: EXECUTIVE_PRODUCER_BOSS.scoreValue,
+    detectionRange: 2400,
+    preferredRange: EXECUTIVE_PRODUCER_BOSS.preferredRange,
+    attackRange: COMBAT.executive_producer.attackRange,
+    rangeBand: EXECUTIVE_PRODUCER_BOSS.rangeBand,
+    hitStun: EXECUTIVE_PRODUCER_BOSS.hitInvuln,
+    color: "#f59e0b",
+    accent: "#92400e",
+    sprite: makeEnemySpriteConfig("executive_producer", {
+      collisionWidth: 96,
+      collisionHeight: 210,
+      collisionOffsetX: 0,
+      collisionOffsetY: 0,
+    }),
+    impactSheet: "effects",
+    boss: EXECUTIVE_PRODUCER_BOSS,
   },
 };
 
@@ -107,7 +136,7 @@ export class Enemy {
     this.collisionOffsetX = body.collisionOffsetX || 0;
     this.collisionOffsetY = body.collisionOffsetY || 0;
     this.w = body.collisionWidth || spec.sprite?.collisionWidth || 88;
-    this.h = body.collisionHeight || spec.sprite?.collisionHeight || 170;
+    this.h = body.collisionHeight || spec.sprite?.collisionHeight || 210;
     this.footX = spawn.x;
     this.footY = spawn.y;
     this._syncBox();
@@ -134,6 +163,41 @@ export class Enemy {
     this.activated = Boolean(spawn.activated);
     this.activateRange = spawn.activateRange || 640;
     this.spawnId = spawn.id || spec.id;
+    this.waveTracked = false;
+    this.waveMods = null;
+    this.elite = false;
+    this._waveDeathReported = false;
+    this.onWaveExit = null;
+    this.isBoss = Boolean(spec.isBoss);
+    this.hitboxEnabled = true;
+    this.invuln = 0;
+    this.combatEnabled = true;
+  }
+
+  applyWaveModifiers(mods) {
+    if (!mods) return;
+    this.spec = { ...this.spec };
+    this.waveMods = { ...mods };
+    const hm = Number(mods.healthMultiplier) || 1;
+    const sm = Number(mods.speedMultiplier) || 1;
+    const dm = Number(mods.damageMultiplier) || 1;
+    this.spec.health = this.spec.health * hm;
+    this.health = this.spec.health;
+    this.spec.speed *= sm;
+    this.spec.chaseSpeed *= sm;
+    this.spec.damage *= dm;
+    this.spec.scoreValue = Math.round((this.spec.scoreValue || 0) * Math.max(hm, 1));
+    if (this.weapon) this.weapon.damage = (this.weapon.damage || this.spec.damage) * dm;
+    this.elite = Boolean(mods.elite);
+    if (this.spec.behavior !== "cautious_ranged") {
+      this.vx = this.spec.speed * (this.direction || 1);
+    }
+  }
+
+  notifyWaveExit(reason) {
+    if (this._waveDeathReported) return;
+    this._waveDeathReported = true;
+    if (typeof this.onWaveExit === "function") this.onWaveExit(this, reason);
   }
 
   _syncBox() {
@@ -147,7 +211,7 @@ export class Enemy {
   }
 
   bounds() {
-    if (!this.alive) return { x: this.x, y: this.y, w: 0, h: 0 };
+    if (!this.alive || this.hitboxEnabled === false) return { x: this.x, y: this.y, w: 0, h: 0 };
     return { x: this.x, y: this.y, w: this.w, h: this.h };
   }
 
@@ -190,6 +254,7 @@ export class Enemy {
 
   update(dt, player, world, projectiles = null, game = null) {
     if (this.contactCool > 0) this.contactCool -= dt;
+    if (this.invuln > 0) this.invuln -= dt;
     if (!this.alive) {
       this.deadTimer += dt;
       this.state = "death";
@@ -247,6 +312,10 @@ export class Enemy {
       }
     }
 
+    if (this.spec.behavior === "boss") {
+      this._updateBoss(player, world, dt, projectiles, game);
+      return;
+    }
     if (this.spec.behavior === "cautious_ranged") this._updateCautiousRanged(player, world, dt);
     else this._updateAggressive(player, dt);
 
@@ -260,6 +329,8 @@ export class Enemy {
     this.anim.update(dt);
     if (projectiles && game) this._trySpawnShot(player, world, projectiles, game);
   }
+
+  _updateBoss() {}
 
   _updateAggressive(player, dt) {
     const dx = player.footX - this.footX;
@@ -370,22 +441,34 @@ export class Enemy {
 
   takeDamage(amount) {
     if (!this.alive) return 0;
+    if (this.hitboxEnabled === false) return 0;
+    if (this.isBoss && this.invuln > 0) return 0;
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) return 0;
     this.health -= amt;
     this._firedClip = true;
     if (this.health <= 0) {
-      this.alive = false;
       this.health = 0;
-      this.vx = 0;
-      this.state = "death";
-      this.anim.play("death", { restart: true });
-      return this.spec.scoreValue;
+      if (typeof this.beginDeath === "function") this.beginDeath();
+      else this._beginDeath();
+      return this.isBoss ? 0 : this.spec.scoreValue || 0;
     }
     this.hitFlash = this.spec.hitStun ?? 0.16;
+    if (this.isBoss) this.invuln = Math.max(this.invuln || 0, this.spec.hitStun ?? 0.16);
     this.state = "hit";
     this.anim.play("hit", { restart: true });
     return 0;
+  }
+
+  _beginDeath() {
+    if (!this.alive && this.state === "death") return;
+    this.alive = false;
+    this.health = 0;
+    this.vx = 0;
+    this.state = "death";
+    this.hitboxEnabled = false;
+    this.anim.play("death", { restart: true });
+    this.notifyWaveExit("defeated");
   }
 
   _trySpawnShot(player, world, projectiles, game) {
@@ -410,8 +493,6 @@ export class Enemy {
     this._firedClip = true;
     if (!shot) return;
     shot.sheet = game.assets?.sheet("projectiles") || null;
-    const soundId = WEAPON_SOUND_ID[this.weapon.id] || "post_producer_attack";
-    game.audio.play(soundId, { x: muzzle.x, camera: game.camera });
     projectiles.push(shot);
   }
 
@@ -421,13 +502,24 @@ export class Enemy {
     const color = this.spec.color;
     ctx.globalAlpha = this.alive ? 1 : 0.55;
     this.anim.draw(ctx, origin.x, origin.y, (g, fw, fh) => {
-      g.fillStyle = color;
+      g.fillStyle = this.elite ? "#fbbf24" : color;
       g.fillRect(-this.w / 2, -this.h + 8, this.w, this.h - 8);
       g.fillStyle = "#1c1408";
       g.font = "11px sans-serif";
       g.textAlign = "center";
       g.fillText(this.spec.initials || "??", 0, -fh * 0.42);
     });
+    if (this.elite) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(251, 191, 36, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(origin.x - this.w / 2 - 2, origin.y - this.h - 2, this.w + 4, this.h + 4);
+      ctx.fillStyle = "#fbbf24";
+      ctx.font = "bold 16px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("★", origin.x, origin.y - this.h - 8);
+      ctx.restore();
+    }
     ctx.globalAlpha = 1;
   }
 
