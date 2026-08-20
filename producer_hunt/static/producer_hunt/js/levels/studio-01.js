@@ -1,5 +1,5 @@
 import { t } from "./world.js";
-import { EXECUTIVE_PRODUCER_BOSS } from "../combat.js";
+import { BOSS_01 } from "../combat.js";
 
 const G = t(15);
 const W = t(118);
@@ -7,7 +7,7 @@ const W = t(118);
 /**
  * Studio 01 combat waves. Enabled enemy ids only:
  * post_producer (Post Producer) and client (The Client — second combat kit).
- * The Executive Producer boss starts after these waves, not as a wave spawn.
+ * The Essam Salama (Boss 1) encounter starts after these waves, not as a wave spawn.
  */
 export const STUDIO_01_WAVES = [
   {
@@ -92,7 +92,7 @@ export const STUDIO_01 = {
     { id: "key", type: "keys", count: 1, label: "Collect the access key" },
     { id: "door", type: "door", doorId: "studio_01_gate", label: "Unlock the studio door" },
     { id: "final", type: "waves", label: "Clear all producer waves" },
-    { id: "boss", type: "encounter", encounterId: "enc_final", label: "Defeat the Executive Producer" },
+    { id: "boss", type: "encounter", encounterId: "enc_final", label: "Defeat Essam Salama" },
     { id: "exit", type: "exit", label: "Studio clear" },
   ],
   exitRequires: {
@@ -101,8 +101,11 @@ export const STUDIO_01 = {
     encountersCleared: ["enc_final"],
   },
   waves: STUDIO_01_WAVES,
-  boss: EXECUTIVE_PRODUCER_BOSS,
-  bossArena: { left: t(98), right: t(117), groundY: G },
+  boss: BOSS_01,
+  // Keep the fight on the left side of the locked exit door at tile 112.
+  // The previous right edge (tile 117) spawned Boss 1 behind that solid door,
+  // trapping him between the door and the world boundary.
+  bossArena: { left: t(98), right: t(111), groundY: G },
   spawnZones: [
     { x: t(16), y: G, w: t(26) },
     { x: t(46), y: G, w: t(12) },

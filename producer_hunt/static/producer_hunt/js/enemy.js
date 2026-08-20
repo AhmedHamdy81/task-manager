@@ -1,8 +1,8 @@
 import { SpriteAnimator } from "./animation.js";
 import { aabb, keepInWorld, lineBlocked, resolveSolids } from "./collision.js";
 import { applyGravity } from "./physics.js";
-import { makeEnemySpriteConfig } from "./sprite-spec.js";
-import { COMBAT, EXECUTIVE_PRODUCER_BOSS, enemyWeaponDef } from "./combat.js";
+import { BOSS_01_ANIMATIONS, characterSpriteSrc, makeEnemySpriteConfig } from "./sprite-spec.js";
+import { BOSS_01, COMBAT, enemyWeaponDef } from "./combat.js";
 import { Weapon } from "./weapon.js";
 
 const STATE_TO_ANIM = {
@@ -94,35 +94,38 @@ export const ENEMY_TYPES = {
     }),
     impactSheet: "client_impact",
   },
-  executive_producer: {
-    id: "executive_producer",
-    type: "executive_producer",
-    name: EXECUTIVE_PRODUCER_BOSS.displayName,
-    initials: "EP",
+  boss_01: {
+    id: "boss_01",
+    type: "boss_01",
+    name: BOSS_01.displayName,
+    title: BOSS_01.title,
+    initials: "ES",
     behavior: "boss",
     isBoss: true,
     artFacing: 1,
-    health: EXECUTIVE_PRODUCER_BOSS.maxHealth,
-    speed: EXECUTIVE_PRODUCER_BOSS.moveSpeed,
-    chaseSpeed: EXECUTIVE_PRODUCER_BOSS.moveSpeed,
-    damage: EXECUTIVE_PRODUCER_BOSS.projectileDamage,
-    contactDamage: EXECUTIVE_PRODUCER_BOSS.contactDamage,
-    scoreValue: EXECUTIVE_PRODUCER_BOSS.scoreValue,
+    health: BOSS_01.maxHealth,
+    speed: BOSS_01.walkSpeed,
+    chaseSpeed: BOSS_01.walkSpeed,
+    damage: BOSS_01.projectileDamage,
+    contactDamage: BOSS_01.contactDamage,
+    scoreValue: BOSS_01.scoreValue,
     detectionRange: 2400,
-    preferredRange: EXECUTIVE_PRODUCER_BOSS.preferredRange,
-    attackRange: COMBAT.executive_producer.attackRange,
-    rangeBand: EXECUTIVE_PRODUCER_BOSS.rangeBand,
-    hitStun: EXECUTIVE_PRODUCER_BOSS.hitInvuln,
+    preferredRange: BOSS_01.preferredRange,
+    attackRange: COMBAT.boss_01.attackRange,
+    rangeBand: BOSS_01.rangeBand,
+    hitStun: BOSS_01.hitInvuln,
     color: "#f59e0b",
     accent: "#92400e",
-    sprite: makeEnemySpriteConfig("executive_producer", {
-      collisionWidth: 96,
-      collisionHeight: 210,
+    sprite: makeEnemySpriteConfig("boss_01", {
+      srcFn: (anim) => characterSpriteSrc("boss_01", anim),
+      animationMap: BOSS_01_ANIMATIONS,
+      collisionWidth: 92,
+      collisionHeight: 198,
       collisionOffsetX: 0,
       collisionOffsetY: 0,
     }),
     impactSheet: "effects",
-    boss: EXECUTIVE_PRODUCER_BOSS,
+    boss: BOSS_01,
   },
 };
 

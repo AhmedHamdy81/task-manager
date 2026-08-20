@@ -22,6 +22,12 @@ export class Projectile {
     lifetime = 2,
     sheet = null,
     impactFx = null,
+    animFrames = 1,
+    animFps = 0,
+    spin = 0,
+    gravity = 0,
+    interruptMove = false,
+    tint = "",
   } = {}) {
     this.x = x;
     this.y = y;
@@ -46,6 +52,14 @@ export class Projectile {
     this.impactFx = impactFx;
     this.prevX = x;
     this.prevY = y;
+    this.animFrames = Math.max(1, animFrames || 1);
+    this.animFps = Number(animFps) || 0;
+    this.animTime = 0;
+    this.spin = Number(spin) || 0;
+    this.angle = 0;
+    this.gravity = Number(gravity) || 0;
+    this.interruptMove = Boolean(interruptMove);
+    this.tint = tint || "";
     return this;
   }
 
@@ -78,6 +92,16 @@ export class Projectile {
     this.prevY = this.y;
     this.x += this.vx * dt;
     this.y += this.vy * dt;
+    if (this.gravity) this.vy += this.gravity * dt;
+    if (this.spin) this.angle += this.spin * dt;
+    if (this.animFps > 0) {
+      this.animTime += dt;
+      const step = 1 / this.animFps;
+      while (this.animTime >= step) {
+        this.animTime -= step;
+        this.frame = (this.frame + 1) % this.animFrames;
+      }
+    }
     this.age += dt;
     if (this.age >= this.lifetime) this.disable();
   }
@@ -95,8 +119,14 @@ export class Projectile {
     const c = this.center();
     const s = camera.worldToScreen(c.x, c.y);
     const flip = this.flipArt && this.vx < 0;
-    if (!drawSheetFrame(ctx, this.sheet, this.frame, s.x - vis / 2, s.y - vis / 2, vis, vis, flip)) {
-      ctx.fillStyle = this.owner === "enemy" ? "#f87171" : "#fde68a";
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    if (this.angle) ctx.rotate(this.angle);
+    if (this.tint) ctx.filter = `drop-shadow(0 0 6px ${this.tint})`;
+    const drawn = drawSheetFrame(ctx, this.sheet, this.frame, -vis / 2, -vis / 2, vis, vis, flip);
+    ctx.restore();
+    if (!drawn) {
+      ctx.fillStyle = this.tint || (this.owner === "enemy" ? "#f87171" : "#fde68a");
       ctx.fillRect(s.x - this.w / 2, s.y - this.h / 2, this.w, this.h);
     }
   }

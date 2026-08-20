@@ -35,51 +35,57 @@ export const COMBAT = {
     muzzle: { x: 36, y: -96 },
     impactFx: { sheetKey: "client_impact", frames: 4, fps: 16, size: 96 },
   },
-  executive_producer: {
+  boss_01: {
     damage: 10,
-    cooldown: 1.2,
-    lifetime: 2.4,
-    speed: 280,
-    spawnFrame: 2,
+    cooldown: 1.8,
+    lifetime: 2.6,
+    speed: 420,
+    spawnFrame: 3,
     attackRange: 640,
-    muzzle: { x: 46, y: -118 },
+    muzzle: { x: 58, y: -128 },
     impactFx: { sheetKey: "effects", frames: 1, fps: 0, size: 72, frame: 5, life: 0.18 },
   },
 };
 
-/** Studio 01 boss. Unit values scale by player shot damage (10). */
-export const EXECUTIVE_PRODUCER_BOSS = {
-  id: "executive_producer",
-  displayName: "THE EXECUTIVE PRODUCER",
-  maxHealth: 40 * COMBAT.player.damage,
+/** Studio 01 Boss 1. Unit values scale to player HP / shot damage (10). */
+export const BOSS_01 = {
+  id: "boss_01",
+  displayName: "ESSAM SALAMA",
+  title: "THE MASTER BARBER",
+  maxHealth: 50 * COMBAT.player.damage,
   contactDamage: 2 * COMBAT.player.damage,
   projectileDamage: 1 * COMBAT.player.damage,
-  moveSpeed: 90,
-  chargeSpeed: 380,
+  walkSpeed: 80,
+  chargeSpeed: 360,
+  attackCooldown: 1.8,
+  hitInvuln: 0.18,
   phaseTwoHealthRatio: 0.5,
-  scoreValue: 2500,
-  preferredRange: 320,
-  rangeBand: 52,
-  attackCooldown: 1.35,
-  chargeCooldown: 2.75,
-  rangedBurstMin: 1,
-  rangedBurstMax: 3,
-  projectileSpeed: 280,
-  hitInvuln: 0.22,
-  phaseTransitionSec: 1.2,
-  entranceSec: 1.45,
-  recoverySec: 0.55,
-  chargePrepareSec: 0.48,
-  warningSec: 2.2,
+  scoreValue: 3000,
+  meleeRange: 128,
+  preferredRange: 280,
+  rangeBand: 48,
+  chargeCooldown: 3.2,
+  spawnSec: 0.9,
+  throwPrepareSec: 0.22,
+  recoverySec: 0.45,
+  chargePrepareSec: 0.42,
+  phaseTransitionSec: 0.85,
+  meleeHitStartFrame: 2,
+  meleeHitEndFrame: 4,
+  throwReleaseFrame: 3,
+  projectileSpeedRazor: 420,
+  projectileSpeedScissors: 300,
+  projectileSpeedClippers: 220,
+  razorGravity: 110,
   contactCooldown: 0.7,
   chargeContactCooldown: 0.55,
   knockback: 240,
   chargeKnockback: 380,
+  meleeKnockback: 320,
   phase2: {
-    moveSpeedMul: 1.2,
-    attackCooldownMul: 0.75,
-    chargeSpeedMul: 1.2,
-    rangedProjectileAdd: 1,
+    walkSpeedMul: 1.2,
+    attackCooldownMul: 0.72,
+    chargeSpeedMul: 1.18,
   },
 };
 
@@ -132,13 +138,55 @@ export const PROJECTILE_DEFS = {
     vis: 52,
     flip: true,
   },
-  executive_memo: {
-    id: "executive_memo",
-    frame: 4,
+  boss_01_razor: {
+    id: "boss_01_razor",
+    sheetKey: "boss_01_razor",
+    frames: 4,
+    fps: 16,
     hitW: 36,
     hitH: 22,
-    vis: 56,
-    flip: true,
+    vis: 80,
+    spin: 12,
+    gravity: 110,
+    lifetime: 2.2,
+    flip: false,
+  },
+  boss_01_scissors: {
+    id: "boss_01_scissors",
+    sheetKey: "boss_01_scissors",
+    frames: 4,
+    fps: 18,
+    hitW: 34,
+    hitH: 34,
+    vis: 78,
+    spin: 18,
+    lifetime: 2.4,
+    flip: false,
+  },
+  boss_01_clippers: {
+    id: "boss_01_clippers",
+    sheetKey: "boss_01_clippers",
+    frames: 4,
+    fps: 14,
+    hitW: 38,
+    hitH: 26,
+    vis: 84,
+    spin: 5,
+    lifetime: 2.6,
+    interruptMove: true,
+    tint: "#22d3ee",
+    flip: false,
+  },
+  boss_01_brush: {
+    id: "boss_01_brush",
+    sheetKey: "boss_01_brush",
+    frames: 4,
+    fps: 12,
+    hitW: 40,
+    hitH: 28,
+    vis: 86,
+    throw: false,
+    flip: false,
   },
 };
 
@@ -183,7 +231,7 @@ export const CHARACTER_WEAPON_ID = {
 export const ENEMY_WEAPON_ID = {
   post_producer: "deadline_projectile",
   client: "client_revision_pulse",
-  executive_producer: "executive_memo",
+  boss_01: "boss_01_razor",
 };
 
 export function projectileDef(id) {
@@ -200,12 +248,12 @@ export function enemyWeaponDef(enemyId) {
   const combat =
     enemyId === "client"
       ? COMBAT.client
-      : enemyId === "executive_producer"
-        ? COMBAT.executive_producer
+      : enemyId === "boss_01"
+        ? COMBAT.boss_01
         : COMBAT.enemy;
   const names = {
     client: "Revision Pulse",
-    executive_producer: "Executive Memo",
+    boss_01: "Straight Razor",
   };
   return {
     id: projectileId,

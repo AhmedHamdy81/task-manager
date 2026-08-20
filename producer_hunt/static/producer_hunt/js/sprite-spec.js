@@ -25,6 +25,17 @@ export const ENEMY_ANIMATIONS = {
   death: { frames: 6, fps: 10, loop: false },
 };
 
+export const BOSS_01_ANIMATIONS = {
+  idle: { frames: 8, fps: 8, loop: true },
+  walk: { frames: 8, fps: 10, loop: true },
+  throw: { frames: 6, fps: 12, loop: false },
+  melee: { frames: 6, fps: 14, loop: false },
+  charge: { frames: 6, fps: 12, loop: true },
+  hit: { frames: 4, fps: 14, loop: false },
+  phase_transition: { frames: 8, fps: 10, loop: false },
+  death: { frames: 6, fps: 8, loop: false },
+};
+
 export const DEFAULT_BODY = {
   renderWidth: SPRITE_FRAME_WIDTH,
   renderHeight: SPRITE_FRAME_HEIGHT,
@@ -93,7 +104,8 @@ export function makeEnemySpriteConfig(id, extras = {}) {
     renderWidth: SPRITE_FRAME_WIDTH,
     renderHeight: SPRITE_FRAME_HEIGHT,
     collisionWidth: 88,
-    collisionHeight: 170,
+    // Visible torso, not the full 256×256 transparent frame. Bottom-center anchored.
+    collisionHeight: 210,
     collisionOffsetX: 0,
     collisionOffsetY: 0,
     ...rest,

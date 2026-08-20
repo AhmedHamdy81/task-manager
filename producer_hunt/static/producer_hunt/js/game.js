@@ -29,6 +29,7 @@ import { loadSettings, saveSettings } from "./settings.js";
 import { FxSprite } from "./fx.js";
 import { WaveController, pickWaveSpawn, STUDIO_CLEAR_BONUS } from "./waves.js";
 import { BossEncounter, HostileProjectilePool } from "./boss.js";
+import { CinematicPlayer } from "./cinematic.js";
 import {
   drawDecorSheet,
   drawHazards,
@@ -94,6 +95,8 @@ export class Game {
     this.enemies = [];
     this.waves = null;
     this.bossEncounter = null;
+    this.cinematic = new CinematicPlayer(this);
+    this._cinematicActive = false;
     this.projectiles = [];
     this.hostileProjectiles = [];
     this.hostilePool = new HostileProjectilePool();
@@ -165,11 +168,44 @@ export class Game {
   }
 
   playBossMusic() {
-    if (this.audio.hasBuffer("music_boss_01")) {
-      this.audio.playMusic("music_boss_01");
-      return;
-    }
-    this.audio.playMusic("music_boss");
+    if (this._cinematicActive) return;
+    const id = this.audio.hasBuffer("music_boss_01")
+      ? "music_boss_01"
+      : this.audio.hasBuffer("music_boss")
+        ? "music_boss"
+        : musicForLevel(this.world?.id || this.levelId, this.world?.music);
+    const start = () => {
+      this.audio.ensureMusic(id, musicPlayOpts(id));
+      this._bossMusic = true;
+    };
+    this.audio.unlock().then(start);
+  }
+
+  playBossIntro(opts = {}) {
+    return this.cinematic.playBossIntro(opts);
+  }
+
+  beginCinematic() {
+    this._cinematicActive = true;
+    this.inputLocked = true;
+    this.input.clearTransient();
+    this.audio.stopGameplayVoices();
+  }
+
+  endCinematic() {
+    this._cinematicActive = false;
+    this.inputLocked = false;
+    this.input.clearTransient();
+  }
+
+  updateCinematicInput() {
+    if (!this._cinematicActive) return;
+    const skip =
+      this.input.consume("pause") ||
+      this.input.consume("confirm") ||
+      this.input.consume("shoot");
+    if (skip) this.cinematic.trySkip();
+    this.input.pressed.clear();
   }
 
   playLevelMusic(opts = {}) {
@@ -213,8 +249,8 @@ export class Game {
       await Promise.all(CHARACTERS.map((ch) => this.assets.loadCharacterKit(ch.sprite)));
       await this.assets.loadEnemyKit(ENEMY_TYPES.post_producer.sprite);
       await this.assets.loadEnemyKit(ENEMY_TYPES.client.sprite);
-      if (ENEMY_TYPES.executive_producer) {
-        await this.assets.loadEnemyKit(ENEMY_TYPES.executive_producer.sprite);
+      if (ENEMY_TYPES.boss_01) {
+        await this.assets.loadEnemyKit(ENEMY_TYPES.boss_01.sprite);
       }
       try {
         await this.assets.loadCatalog(WORLD_SHEETS);
@@ -238,6 +274,7 @@ export class Game {
     document.removeEventListener("fullscreenchange", this._onFullscreen);
     this.canvas.removeEventListener("click", this._onClick);
     window.removeEventListener("keydown", this._onPreventScroll);
+    this.cinematic?.cancel();
     this.audio.dispose();
     this._listenersOn = false;
   }
@@ -616,6 +653,7 @@ export class Game {
   applySettings() {
     this.settings = { ...this.settings, ...loadSettings() };
     this.audio.applyMix(this.settings);
+    this.cinematic?.applyMix?.();
   }
 
   shakeEnabled() {
@@ -639,6 +677,8 @@ export class Game {
     this.destroyWaves();
     this.bossEncounter?.destroy();
     this.bossEncounter = null;
+    this.cinematic?.cancel();
+    this._cinematicActive = false;
     this.world = null;
     this.player = null;
     this.enemies = [];
@@ -681,6 +721,10 @@ export class Game {
     if (document.hidden) {
       this.input.clearTransient();
       this.audio.stopGameplayVoices();
+      if (this._cinematicActive) {
+        this.cinematic.pause();
+        return;
+      }
       if (this.state.get() === GameState.PLAYING) {
         this._autoPaused = true;
         this.overlay = null;
@@ -693,6 +737,7 @@ export class Game {
       return;
     }
     this.input.clearTransient();
+    if (this._cinematicActive) this.cinematic.resume();
   }
 
   onWindowBlur() {
@@ -704,20 +749,23 @@ export class Game {
     const view = this.bossEncounter?.hudView?.();
     if (!view) return;
     const x = DESIGN_W * 0.22;
-    const y = 28;
+    const y = 22;
     const w = DESIGN_W * 0.56;
     const ratio = view.maxHealth ? Math.max(0, Math.min(1, view.health / view.maxHealth)) : 0;
     ctx.save();
-    ctx.fillStyle = "rgba(5, 7, 12, 0.72)";
-    ctx.fillRect(x, y, w, 58);
-    ctx.fillStyle = view.transitioning ? "#fb923c" : "#e8b84a";
+    ctx.fillStyle = "rgba(5, 7, 12, 0.78)";
+    ctx.fillRect(x, y, w, 72);
+    ctx.fillStyle = view.transitioning ? "#22d3ee" : "#e8b84a";
     ctx.font = "bold 16px sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(view.name, DESIGN_W / 2, y + 20);
+    ctx.fillStyle = view.phase === 2 ? "#67e8f9" : "#cbd5e1";
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText(view.title || "", DESIGN_W / 2, y + 38);
     ctx.fillStyle = "#1f2937";
-    ctx.fillRect(x + 18, y + 32, w - 36, 14);
-    ctx.fillStyle = view.transitioning ? "#f97316" : "#ef4444";
-    ctx.fillRect(x + 18, y + 32, (w - 36) * ratio, 14);
+    ctx.fillRect(x + 18, y + 48, w - 36, 14);
+    ctx.fillStyle = view.transitioning ? "#22d3ee" : view.phase === 2 ? "#f97316" : "#ef4444";
+    ctx.fillRect(x + 18, y + 48, (w - 36) * ratio, 14);
     ctx.restore();
   }
 
@@ -856,6 +904,7 @@ export class Game {
         .map((e) => e.spawnId),
       waves: this.waves ? this.waves.snapshot() : null,
       bossArena: Boolean(this.checkpoint?.bossArena || this.bossEncounter?.active),
+      bossIntroWatched: Boolean(this.checkpoint?.bossIntroWatched || this.bossEncounter?.introPlayed),
       stats: { ...this.stats, time: this._playTime },
     };
     this.spawn = { x: safe.x, y: safe.y };
@@ -1029,6 +1078,11 @@ export class Game {
     }
     if (st !== GameState.PLAYING) return;
 
+    if (this._cinematicActive) {
+      this.updateCinematicInput();
+      return;
+    }
+
     if (this.input.consume("pause")) {
       this.openPause();
       return;
@@ -1038,7 +1092,7 @@ export class Game {
     this._worldTime += dt;
     this.waves?.update(dt);
     this.bossEncounter?.update(dt);
-    this.inputLocked = Boolean(this.waves?.blocksInput);
+    this.inputLocked = Boolean(this.waves?.blocksInput) || Boolean(this.bossEncounter?.blocksInput);
     this.player.update(dt, this.input, this.world, this.projectiles, this);
     this.updateEncounters();
     this.camera.follow(this.player, this.world, dt);
@@ -1060,15 +1114,20 @@ export class Game {
     if (!this.player?.alive) return;
     for (const enemy of this.enemies) {
       if (enemy.combatEnabled === false || enemy.hitboxEnabled === false) continue;
+      const melee = Boolean(enemy.isBoss && enemy.meleeActive);
+      if (melee && enemy.meleeHitOnce) continue;
       const dmg = enemy.spec?.contactDamage || 0;
       if (!enemy.alive || dmg <= 0) continue;
-      if (enemy.contactCool > 0) continue;
-      if (!aabb(this.player.bounds(), enemy.bounds())) continue;
+      if (!melee && enemy.contactCool > 0) continue;
+      const box = melee && typeof enemy.meleeBounds === "function" ? enemy.meleeBounds() : enemy.bounds();
+      if (!aabb(this.player.bounds(), box)) continue;
       const dir = Math.sign(this.player.footX - enemy.footX) || -1;
       const knock = enemy.isBoss
-        ? enemy.state === "charge"
-          ? enemy.cfg?.chargeKnockback || 380
-          : enemy.cfg?.knockback || 240
+        ? melee
+          ? enemy.cfg?.meleeKnockback || 320
+          : enemy.state === "charge"
+            ? enemy.cfg?.chargeKnockback || 380
+            : enemy.cfg?.knockback || 240
         : 220;
       const cool = enemy.isBoss
         ? enemy.state === "charge"
@@ -1077,7 +1136,8 @@ export class Game {
         : 0.75;
       const dealt = this.player.takeDamage(dmg, { knockbackX: dir * knock });
       if (!dealt) continue;
-      enemy.contactCool = cool;
+      if (melee) enemy.meleeHitOnce = true;
+      else enemy.contactCool = cool;
       this.player.footX += dir * (enemy.isBoss ? 52 : 8);
       this.player._syncBox?.();
       if (this.shakeEnabled()) this.camera.addShake(enemy.isBoss ? 0.55 : 0.35);
@@ -1454,6 +1514,7 @@ export class Game {
   }
 
   updateBossMusic() {
+    if (this._cinematicActive || this.bossEncounter?.phase === "intro") return;
     if (this.state.get() !== GameState.PLAYING || !this.world) return;
     const bossEnc = (this.world.encounters || []).find((enc) => enc.boss && enc.activated && !enc.cleared);
     if (bossEnc) {
@@ -1566,12 +1627,17 @@ export class Game {
       return;
     }
     if (shot.owner === "enemy") {
-      if (shot.faction === "boss" && this.bossEncounter && !this.bossEncounter.boss?.combatEnabled) {
-        shot.disable();
-        return;
+      if (shot.faction === "boss") {
+        const st = this.bossEncounter?.boss?.state;
+        if (st === "spawning" || st === "death" || st === "complete" || this.bossEncounter?.phase === "intro") {
+          shot.disable();
+          return;
+        }
       }
       if (this.player.alive && aabb(shot.bounds(), this.player.bounds())) {
-        const dealt = this.player.takeDamage(shot.damage);
+        const dir = Math.sign(shot.vx) || Math.sign(this.player.footX - shot.x) || 1;
+        const knock = shot.interruptMove ? dir * 420 : dir * 160;
+        const dealt = this.player.takeDamage(shot.damage, shot.interruptMove ? { knockbackX: knock } : {});
         if (dealt) {
           this.sfx("player_hit");
           if (this.shakeEnabled()) this.camera.addShake(0.55);

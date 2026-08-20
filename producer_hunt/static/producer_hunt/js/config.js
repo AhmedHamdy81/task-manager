@@ -20,7 +20,9 @@ export const CAMERA = {
 /** Sprite frame / collision / muzzle overlay. Disabled in production. */
 export const DEBUG_QUERY = "debug";
 export const DEBUG_ASSETS = false;
-export const ASSET_CACHE_KEY = "ph-20260820-boss";
+export const ASSET_CACHE_KEY = "ph-20260820-boss01";
+export const DEBUG_REPLAY_BOSS_INTRO = false;
+export const BOSS_INTRO_SRC = "videos/boss_01_intro.mp4";
 
 export const DEFAULT_KEYMAP = {
   moveLeft: ["KeyA", "ArrowLeft"],

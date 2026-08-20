@@ -166,6 +166,41 @@ export class AssetLoader {
     return entry;
   }
 
+  _fillNearestAnims(kit) {
+    const has = (name) => Boolean(kit.animations?.[name]?.image);
+    const fallbacks = {
+      idle: ["walk", "throw", "melee", "charge", "attack"],
+      walk: ["idle", "charge", "throw"],
+      throw: ["melee", "attack", "walk", "idle"],
+      melee: ["throw", "walk", "idle"],
+      charge: ["walk", "idle"],
+      attack: ["throw", "melee", "walk", "idle"],
+      hit: ["idle", "walk"],
+      phase_transition: ["hit", "idle", "walk"],
+      death: ["hit", "idle"],
+    };
+    for (const [name, alts] of Object.entries(fallbacks)) {
+      const clip = kit.animations[name];
+      if (!clip || has(name)) continue;
+      for (const alt of alts) {
+        if (!has(alt)) continue;
+        const src = kit.animations[alt];
+        kit.animations[name] = {
+          ...clip,
+          image: src.image,
+          frames: src.frames,
+          fps: clip.fps || src.fps,
+          frameWidth: src.frameWidth,
+          frameHeight: src.frameHeight,
+          renderWidth: src.renderWidth,
+          renderHeight: src.renderHeight,
+        };
+        this._warnOnce(`[Producer Hunt] Missing ${kit.id} animation "${name}", using "${alt}".`);
+        break;
+      }
+    }
+  }
+
   async loadCatalog(catalog) {
     const entries = Object.entries(catalog || {});
     await Promise.all(entries.map(([key, spec]) => this.loadSheet(key, spec)));
@@ -231,6 +266,7 @@ export class AssetLoader {
   async loadEnemyKit(config) {
     if (this.enemyKits.has(config.id)) return this.enemyKits.get(config.id);
     const kit = await this._hydrateAnims(config);
+    this._fillNearestAnims(kit);
     this.enemyKits.set(config.id, kit);
     return kit;
   }
