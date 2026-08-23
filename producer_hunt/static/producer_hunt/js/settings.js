@@ -8,13 +8,18 @@ const ALLOWED_LEVEL_IDS = new Set(["studio_01", "studio_02"]);
 
 export const SETTINGS_DEFAULTS = {
   masterVolume: 1,
-  musicVolume: 0.8,
-  effectsVolume: 1,
+  musicVolume: 0.45,
+  effectsVolume: 0.75,
+  muted: false,
   screenShake: true,
   reducedMotion: false,
+  reducedFlashes: false,
+  hazardSymbols: true,
+  captions: false,
   characterId: "",
   completedLevels: [],
   phase2Complete: false,
+  difficulty: "normal",
 };
 
 let _saveWarn = false;
@@ -48,11 +53,16 @@ export function normalizeSettings(raw) {
     masterVolume: clamp01(src.masterVolume, SETTINGS_DEFAULTS.masterVolume),
     musicVolume: clamp01(src.musicVolume, SETTINGS_DEFAULTS.musicVolume),
     effectsVolume: clamp01(src.effectsVolume, SETTINGS_DEFAULTS.effectsVolume),
+    muted: src.muted === true,
     screenShake: src.screenShake !== false,
     reducedMotion: src.reducedMotion === true,
+    reducedFlashes: src.reducedFlashes === true,
+    hazardSymbols: src.hazardSymbols !== false,
+    captions: src.captions === true,
     characterId,
     completedLevels: completed,
     phase2Complete: src.phase2Complete === true || completed.includes("studio_02"),
+    difficulty: src.difficulty === "easy" || src.difficulty === "hard" ? src.difficulty : "normal",
   };
 }
 

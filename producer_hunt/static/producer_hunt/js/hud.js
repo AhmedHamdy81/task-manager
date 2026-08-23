@@ -21,7 +21,7 @@ export class HUD {
   constructor() {
     this._layer = document.createElement("canvas");
     this._layer.width = 640;
-    this._layer.height = 200;
+    this._layer.height = 300;
     this._sig = "";
   }
 
@@ -29,7 +29,7 @@ export class HUD {
     this._sig = "";
   }
 
-  signature({ player, score, assets, objective = "" }) {
+  signature({ player, score, assets, objective = "", wave = null, crew = null }) {
     const w = player.weapon;
     const ab = player.ability;
     const kit = assets?.characterKit(player.character.id);
@@ -40,14 +40,24 @@ export class HUD {
       portrait,
       Math.ceil(player.health),
       player.maxHealth,
+      Math.ceil(player.energy || 0),
+      player.energyMax || 0,
+      w.id,
       w.ammo,
       w.maxAmmo,
+      player.loadout?.currentId || "",
+      player.notice?.text || "",
       score,
       player.keys || 0,
       ab?.ready ? 1 : 0,
       cd,
       player.alive ? 1 : 0,
       objective,
+      wave?.index ?? 0,
+      wave?.total ?? 0,
+      wave?.living ?? 0,
+      crew?.found ?? 0,
+      crew?.total ?? 0,
     ].join("|");
   }
 
@@ -60,11 +70,11 @@ export class HUD {
     ctx.drawImage(this._layer, 0, 0);
   }
 
-  _compose(ctx, { player, score, assets, objective = "" }) {
+  _compose(ctx, { player, score, assets, objective = "", wave = null, crew = null }) {
     ctx.clearRect(0, 0, this._layer.width, this._layer.height);
 
     const keys = player.keys || 0;
-    const panelH = 168;
+    const panelH = 268;
     ctx.fillStyle = "rgba(5, 7, 12, 0.62)";
     ctx.fillRect(MARGIN, MARGIN, 560, panelH);
 
@@ -102,24 +112,57 @@ export class HUD {
     ctx.font = "13px sans-serif";
     ctx.fillText(`${Math.max(0, Math.ceil(player.health))} / ${player.maxHealth}`, textX + 250, MARGIN + 54);
 
-    icon(ctx, sheet, HUD_FRAMES.score, textX, MARGIN + 64);
-    ctx.fillStyle = "#f4f1ea";
-    ctx.fillText(`${score}`, textX + 28, MARGIN + 82);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "13px sans-serif";
+    ctx.fillText("EN", textX, MARGIN + 72);
+    const eRatio = player.energyMax ? Math.max(0, Math.min(1, (player.energy || 0) / player.energyMax)) : 0;
+    ctx.fillStyle = "#1f2937";
+    ctx.fillRect(textX + 28, MARGIN + 62, 214, 12);
+    ctx.fillStyle = "#38bdf8";
+    ctx.fillRect(textX + 28, MARGIN + 62, 214 * eRatio, 12);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.fillText(`${Math.max(0, Math.ceil(player.energy || 0))} / ${player.energyMax || 0}`, textX + 250, MARGIN + 73);
 
-    icon(ctx, sheet, HUD_FRAMES.ammo, textX + 140, MARGIN + 64);
+    icon(ctx, sheet, HUD_FRAMES.score, textX, MARGIN + 84);
+    ctx.fillStyle = "#f4f1ea";
+    ctx.fillText(`${score}`, textX + 28, MARGIN + 102);
+
+    icon(ctx, sheet, HUD_FRAMES.ammo, textX + 140, MARGIN + 84);
     const ammoLabel = player.weapon.ammo < 0 ? "∞" : `${player.weapon.ammo} / ${player.weapon.maxAmmo}`;
-    ctx.fillText(ammoLabel, textX + 168, MARGIN + 82);
+    ctx.fillText(ammoLabel, textX + 168, MARGIN + 102);
+
+    const weapons = assets?.sheet("player_weapons");
+    const wdef = player.loadout?.def?.() || {};
+    drawSheetFrame(ctx, weapons, wdef.hudIcon ?? player.weapon.weaponFrame ?? 0, textX, MARGIN + 108, 28, 28);
+    ctx.fillStyle = "#f4f1ea";
+    ctx.font = "bold 13px sans-serif";
+    ctx.fillText((wdef.displayName || player.weapon.name || "Pistol").toUpperCase(), textX + 34, MARGIN + 128);
+    if (player.notice?.text) {
+      ctx.fillStyle = player.notice.text === "EMPTY" ? "#f87171" : "#e8b84a";
+      ctx.fillText(player.notice.text, textX + 250, MARGIN + 128);
+    }
 
     const spec = player.ability;
     ctx.fillStyle = "#94a3b8";
-    ctx.fillText(spec.name, textX, MARGIN + 108);
+    ctx.fillText(spec.name, textX, MARGIN + 152);
     ctx.fillStyle = spec.ready ? "#e8b84a" : "#64748b";
-    ctx.fillText(spec.ready ? "READY" : `CD ${Math.max(0, spec.cool).toFixed(1)}s`, textX + 160, MARGIN + 108);
+    ctx.fillText(spec.ready ? "READY" : `CD ${Math.max(0, spec.cool).toFixed(1)}s`, textX + 160, MARGIN + 152);
 
-    icon(ctx, sheet, HUD_FRAMES.objective, textX, MARGIN + 118);
+    icon(ctx, sheet, HUD_FRAMES.objective, textX, MARGIN + 162);
     ctx.fillStyle = "#f4f1ea";
     const obj = objective || (keys > 0 ? `KEY ${keys}` : "");
-    ctx.fillText(obj, textX + 28, MARGIN + 136);
-    if (keys > 0) ctx.fillText(`KEY ${keys}`, textX + 300, MARGIN + 136);
+    ctx.fillText(obj, textX + 28, MARGIN + 180);
+    if (wave && wave.total > 0) {
+      ctx.fillStyle = "#e8b84a";
+      ctx.font = "bold 13px sans-serif";
+      ctx.fillText(`WAVE ${wave.index} / ${wave.total}`, textX, MARGIN + 204);
+      ctx.fillText(`ENEMIES ${wave.living}`, textX + 168, MARGIN + 204);
+    }
+    if (keys > 0) ctx.fillText(`KEY ${keys}`, textX + 300, MARGIN + 180);
+    if (crew && crew.total > 0) {
+      ctx.fillStyle = "#e8b84a";
+      ctx.font = "bold 13px sans-serif";
+      ctx.fillText(`CREW ${crew.found}/${crew.total}`, textX + 300, MARGIN + 204);
+    }
   }
 }

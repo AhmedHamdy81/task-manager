@@ -100,9 +100,14 @@ export function settingsRows() {
     { id: "masterVolume", label: "Master volume", kind: "slider" },
     { id: "musicVolume", label: "Music volume", kind: "slider" },
     { id: "effectsVolume", label: "Effects volume", kind: "slider" },
+    { id: "muted", label: "Mute", kind: "toggle" },
     { id: "fullscreen", label: "Fullscreen", kind: "toggle" },
     { id: "screenShake", label: "Screen shake", kind: "toggle" },
     { id: "reducedMotion", label: "Reduced motion", kind: "toggle" },
+    { id: "reducedFlashes", label: "Reduce flashes", kind: "toggle" },
+    { id: "hazardSymbols", label: "Hazard symbols", kind: "toggle" },
+    { id: "captions", label: "Captions", kind: "toggle" },
+    { id: "difficulty", label: "Difficulty", kind: "cycle" },
     { id: "BACK", label: "Back", kind: "action" },
   ];
 }
@@ -120,33 +125,36 @@ export function drawSettings(ctx, settings, focus, extras = {}) {
 
   const rows = settingsRows();
   const x = DESIGN_W / 2 - 380;
+  const rowH = 58;
   rows.forEach((row, i) => {
-    const y = 210 + i * 88;
+    const y = 176 + i * rowH;
     const on = i === focus;
     ctx.fillStyle = on ? "#243044" : "#152033";
-    ctx.fillRect(x, y, 760, 72);
+    ctx.fillRect(x, y, 760, 52);
     ctx.lineWidth = on ? 4 : 1;
     ctx.strokeStyle = on ? "#f4f1ea" : "#e8b84a";
-    ctx.strokeRect(x + 0.5, y + 0.5, 759, 71);
+    ctx.strokeRect(x + 0.5, y + 0.5, 759, 51);
     if (on) {
       ctx.fillStyle = "#e8b84a";
-      ctx.font = "bold 22px sans-serif";
+      ctx.font = "bold 20px sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText("▸", x + 16, y + 46);
+      ctx.fillText("▸", x + 16, y + 34);
     }
     ctx.fillStyle = "#f4f1ea";
-    ctx.font = "bold 22px sans-serif";
+    ctx.font = "bold 20px sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText(row.label, x + 48, y + 46);
+    ctx.fillText(row.label, x + 48, y + 34);
     ctx.textAlign = "right";
     ctx.fillStyle = "#e8b84a";
     if (row.kind === "slider") {
       const v = Math.round((settings[row.id] ?? 0) * 100);
-      drawMeter(ctx, x + 400, y + 24, 280, 24, settings[row.id] ?? 0, on);
-      ctx.fillText(`${v}%`, x + 736, y + 46);
+      drawMeter(ctx, x + 400, y + 16, 280, 20, settings[row.id] ?? 0, on);
+      ctx.fillText(`${v}%`, x + 736, y + 34);
     } else if (row.kind === "toggle") {
       const onVal = row.id === "fullscreen" ? Boolean(extras.fullscreen) : Boolean(settings[row.id]);
-      ctx.fillText(onVal ? "ON" : "OFF", x + 736, y + 46);
+      ctx.fillText(onVal ? "ON" : "OFF", x + 736, y + 34);
+    } else if (row.kind === "cycle") {
+      ctx.fillText(String(settings[row.id] || "normal").toUpperCase(), x + 736, y + 34);
     }
   });
 

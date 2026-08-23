@@ -1,5 +1,39 @@
 /** Studio hazards, doors, checkpoints, and exit. Level data looks up ids. */
 
+/** Character roster unlocks. The select menu reads this; it does not grant unlocks. */
+export const CHARACTER_UNLOCKS = {
+  editor: { id: "editor", always: true },
+  assistant: { id: "assistant", always: true },
+  vfx_supervisor: {
+    id: "vfx_supervisor",
+    type: "completedLevel",
+    levelId: "studio_01",
+    label: "Defeat Boss 1",
+  },
+  colorist: {
+    id: "colorist",
+    type: "completedLevel",
+    levelId: "studio_02",
+    label: "Complete Studio 02",
+  },
+};
+
+export function isCharacterUnlocked(characterId, settings = {}) {
+  const rule = CHARACTER_UNLOCKS[characterId] || CHARACTER_UNLOCKS.editor;
+  if (rule.always) return true;
+  const done = Array.isArray(settings.completedLevels) ? settings.completedLevels : [];
+  if (rule.type === "completedLevel") return done.includes(rule.levelId);
+  if (rule.type === "phase2") return Boolean(settings.phase2Complete);
+  return false;
+}
+
+export function characterUnlockRequirement(characterId) {
+  const rule = CHARACTER_UNLOCKS[characterId];
+  if (!rule || rule.always) return "";
+  return rule.label || "LOCKED";
+}
+
+
 export const HAZARD_DAMAGE = 10;
 export const HAZARD_COOLDOWN = 0.75;
 export const HAZARD_VIS = 128;
@@ -79,6 +113,88 @@ export const HAZARD_DEFS = {
     animation: "spark",
     enabled: true,
   },
+  steam_vent: {
+    id: "steam_vent",
+    sprite_frame: 4,
+    collision_width: 48,
+    collision_height: 150,
+    hitOffsetX: 40,
+    hitOffsetY: -22,
+    damage: HAZARD_DAMAGE,
+    telegraphDuration: 0.8,
+    activeDuration: 1.2,
+    inactiveDuration: 2.2,
+    cooldown: 0.75,
+    knockback: 280,
+    animation: "steam",
+    sound: "env_steam",
+    cycle: true,
+    enabled: true,
+  },
+  electrical_floor: {
+    id: "electrical_floor",
+    sprite_frame: 1,
+    collision_width: 140,
+    collision_height: 18,
+    hitOffsetX: 0,
+    hitOffsetY: 110,
+    damage: HAZARD_DAMAGE,
+    telegraphDuration: 1.0,
+    activeDuration: 0.9,
+    inactiveDuration: 2.6,
+    cooldown: 0.75,
+    knockback: 160,
+    animation: "spark",
+    sound: "env_electric",
+    cycle: true,
+    enabled: true,
+  },
+  falling_light: {
+    id: "falling_light",
+    sprite_frame: 2,
+    collision_width: 48,
+    collision_height: 28,
+    hitOffsetX: 40,
+    hitOffsetY: 6,
+    damage: HAZARD_DAMAGE * 2,
+    telegraphDuration: 1.2,
+    cooldown: 0.75,
+    knockback: 200,
+    animation: "fall",
+    sound: "env_alarm",
+    cycle: true,
+    enabled: true,
+  },
+  camera_rig: {
+    id: "camera_rig",
+    sprite_frame: 5,
+    collision_width: 160,
+    collision_height: 24,
+    hitOffsetX: 0,
+    hitOffsetY: 0,
+    damage: 0,
+    cooldown: 0,
+    animation: "track",
+    sound: "env_machine",
+    enabled: true,
+  },
+  rolling_cart: {
+    id: "rolling_cart",
+    sprite_frame: 3,
+    collision_width: 110,
+    collision_height: 70,
+    hitOffsetX: 0,
+    hitOffsetY: 58,
+    damage: HAZARD_DAMAGE,
+    telegraphDuration: 0.9,
+    inactiveDuration: 7,
+    cooldown: 0.75,
+    knockback: 340,
+    animation: "roll",
+    sound: "env_alarm",
+    cycle: true,
+    enabled: true,
+  },
 };
 
 const HAZARD_BY_FRAME = Object.fromEntries(
@@ -113,24 +229,54 @@ export function hazardDef(kindOrFrame) {
 export function instantiateHazard(raw, index, levelId) {
   const def = hazardDef(raw.kind || raw.frame);
   const vis = HAZARD_VIS;
+  const x = Number.isFinite(raw.hitX) ? raw.hitX : raw.x + (def.hitOffsetX || 0);
+  const y = Number.isFinite(raw.hitY) ? raw.hitY : raw.y + (def.hitOffsetY || 0);
   return {
     id: raw.id || `${levelId || "lvl"}_hazard_${index}`,
     kind: def.id,
     frame: def.sprite_frame,
     vis,
     vx: 0,
-    x: raw.x + (def.hitOffsetX || 0),
-    y: raw.y + (def.hitOffsetY || 0),
-    w: def.collision_width,
-    h: def.collision_height,
+    x,
+    y,
+    w: raw.w || def.collision_width,
+    h: raw.h || def.collision_height,
     drawX: raw.x,
     drawY: raw.y,
-    damage: def.damage,
-    cooldown: def.cooldown,
+    damage: raw.damage != null ? Number(raw.damage) : def.damage,
+    cooldown: raw.cooldown ?? def.cooldown,
     cool: 0,
     animation: def.animation,
-    enabled: def.enabled !== false && !def.reserved,
+    sound: raw.sound || def.sound,
+    enabled: raw.enabled !== false && def.enabled !== false && !def.reserved,
     reserved: Boolean(def.reserved),
+    cycle: Boolean(def.cycle),
+    phase: def.cycle ? "idle" : null,
+    phaseAge: 0,
+    telegraphDuration: raw.telegraphDuration ?? def.telegraphDuration,
+    activeDuration: raw.activeDuration ?? def.activeDuration,
+    inactiveDuration: raw.inactiveDuration ?? def.inactiveDuration,
+    knockback: raw.knockback ?? def.knockback ?? 220,
+    hitCooldown: 0.75,
+    pathLeft: raw.pathLeft,
+    pathRight: raw.pathRight,
+    speed: raw.speed,
+    dir: raw.dir || 1,
+    endPause: raw.endPause,
+    moverX: x,
+    pause: 0,
+    trigger: raw.trigger,
+    triggerX: raw.triggerX,
+    impactX: raw.impactX,
+    impactY: raw.impactY,
+    impactRadius: raw.impactRadius ?? 65,
+    ceilingY: raw.ceilingY,
+    reset: raw.reset,
+    idleWait: raw.idleWait,
+    cartX: x,
+    visible: def.id !== "rolling_cart",
+    hitsEnemies: Boolean(raw.hitsEnemies),
+    hitsBoss: Boolean(raw.hitsBoss),
   };
 }
 
@@ -249,7 +395,12 @@ export function syncDoorSolids(world) {
   const blocking = (world.doors || [])
     .filter((d) => d.state !== "open")
     .map((d) => ({ x: d.x, y: d.y, w: d.w, h: d.h, doorId: d.id }));
-  world.solids = [...(world.platformSolids || []), ...blocking];
+    world.solids = [
+      ...(world.platformSolids || []),
+      ...blocking,
+      ...(world.moverSolids || []),
+      ...(world.destructibleSolids || []),
+    ];
 }
 
 export function currentObjective(world, player) {
@@ -274,6 +425,7 @@ function isStepComplete(step, world, player) {
     const enc = (world.encounters || []).find((e) => e.id === step.encounterId);
     return Boolean(enc && enc.cleared);
   }
+  if (step.type === "waves") return Boolean(world.wavesComplete);
   if (step.type === "exit") return false;
   return true;
 }
@@ -302,7 +454,8 @@ export function findSafeSpawn(world, spawnX, spawnY, extra = []) {
   const candidates = [0, -90, 90, -180, 180, -270, 270];
   const blockers = [
     ...(world.solids || []),
-    ...(world.hazards || []).filter((h) => h.enabled),
+    ...(world.hazards || []).filter((h) => h.enabled && h.damage > 0 && (h.phase == null || h.phase === "active" || h.phase === "impact")),
+    ...(world.destructibleSolids || []),
     ...(world.doors || []).filter((d) => d.state !== "open"),
     ...extra,
   ];

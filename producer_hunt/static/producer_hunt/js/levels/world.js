@@ -7,6 +7,8 @@ import {
   instantiateHazard,
   syncDoorSolids,
 } from "../progression.js";
+import { instantiateDestructible, injectDestructibleSolids } from "../destructibles.js";
+import { instantiateRescue } from "../rescues.js";
 
 export const TILE = 64;
 export const t = (n) => n * TILE;
@@ -51,16 +53,23 @@ export function validateLevel(level) {
       errors.push(`Objective "${step.id}" references missing checkpoint "${step.checkpointId}".`);
     }
   }
-  const ALLOWED_ENEMIES = new Set(["post_producer", "client"]);
+  const ALLOWED_ENEMIES = new Set(["post_producer", "client", "colorist", "vfx_supervisor"]);
   for (const wave of level.waves || []) {
     if (!wave?.id) errors.push("A wave is missing an id.");
     for (const pack of wave.enemies || []) {
-      if (String(pack.type || "").trim() === "assistant_producer") {
-        errors.push("Assistant Producer must not spawn.");
-      }
       const type = migrateEnemyType(pack.type);
       if (!ENEMY_TYPES[type] || !ALLOWED_ENEMIES.has(type)) {
         errors.push(`Invalid enemy type "${pack.type}" on wave "${wave.id || "?"}".`);
+      }
+    }
+  }
+  for (const enc of level.encounters || []) {
+    for (const wave of enc.waves || []) {
+      for (const pack of wave.enemies || []) {
+        const type = migrateEnemyType(pack.type);
+        if (!ENEMY_TYPES[type] || !ALLOWED_ENEMIES.has(type)) {
+          errors.push(`Invalid enemy type "${pack.type}" on encounter "${enc.id || "?"}".`);
+        }
       }
     }
   }
@@ -69,7 +78,7 @@ export function validateLevel(level) {
   const height = level.worldHeight || 1080;
   for (const spawn of level.enemySpawns || []) {
     if (String(spawn.type || "").trim() === "assistant_producer") {
-      errors.push("Assistant Producer must not spawn.");
+      warnings.push("Legacy assistant_producer spawn migrated to post_producer.");
     }
     const type = migrateEnemyType(spawn.type);
     if (!ENEMY_TYPES[type] || !ALLOWED_ENEMIES.has(type)) {
@@ -161,6 +170,12 @@ export function buildWorld(level) {
       layer: p.layer || "back",
     })),
     hazards: (level.hazards || []).map((h, i) => instantiateHazard(h, i, level.id)),
+    destructibles: (level.destructibles || []).map((d, i) => instantiateDestructible(d, i, level.id)),
+    rescues: (level.rescues || []).map((r, i) => instantiateRescue(r, i, level.id)),
+    ambients: (level.ambients || []).map((a) => ({ ...a })),
+    hazardQuietX: level.hazardQuietX,
+    moverSolids: [],
+    destructibleSolids: [],
     hints: (level.hints || []).map((h) => ({ ...h })),
     platformSolids,
     solids: platformSolids.slice(),
@@ -182,5 +197,6 @@ export function buildWorld(level) {
     bossArena: level.bossArena ? { ...level.bossArena } : null,
   };
   syncDoorSolids(world);
+  injectDestructibleSolids(world);
   return world;
 }

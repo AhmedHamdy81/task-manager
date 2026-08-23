@@ -65,10 +65,12 @@ export class Input {
       if (ax > 0.55 || gp.buttons?.[15]?.pressed) now.add("moveRight");
       if (ay < -0.55 || gp.buttons?.[12]?.pressed) now.add("jump");
       if (ay > 0.55 || gp.buttons?.[13]?.pressed) now.add("crouch");
+      if (gp.buttons?.[3]?.pressed) now.add("interact");
       if (gp.buttons?.[0]?.pressed) now.add("confirm");
       if (gp.buttons?.[1]?.pressed || gp.buttons?.[9]?.pressed) now.add("pause");
       if (gp.buttons?.[2]?.pressed) now.add("shoot");
       if (gp.buttons?.[5]?.pressed || gp.buttons?.[7]?.pressed) now.add("special");
+      if (gp.buttons?.[4]?.pressed) now.add("weaponCycle");
     }
     for (const action of now) {
       if (!this._gp.has(action)) this.pressed.add(action);

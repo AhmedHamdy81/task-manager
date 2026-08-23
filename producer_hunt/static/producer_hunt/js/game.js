@@ -1,4 +1,4 @@
-import { DEBUG_ASSETS, DESIGN_H, DESIGN_W } from "./config.js";
+import { BASE_JUMP_VELOCITY, DEBUG_ASSETS, DEBUG_COMBAT, DESIGN_H, DESIGN_W, HITSTOP_HEAVY_SEC, HITSTOP_LIGHT_SEC, SHAKE_HEAVY, SHAKE_LIGHT } from "./config.js";
 import { GameState, GameStateManager } from "./game-state.js";
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
@@ -6,7 +6,8 @@ import { Player } from "./player.js";
 import { ENEMY_TYPES, Enemy, migrateEnemyType } from "./enemy.js";
 import { HUD } from "./hud.js";
 import { CharacterSelect } from "./character-select.js";
-import { aabb, hitsSolid } from "./collision.js";
+import { HowToPlay } from "./how-to-play.js";
+import { aabb, hitsSolid, resolveKnockback } from "./collision.js";
 import { LEVELS, STUDIO_01, buildWorld, LevelDataError, resolveLevel, nextLevelId, levelDataLoads } from "./levels/level-01.js";
 import { AssetLoader } from "./asset-loader.js";
 import { WORLD_SHEETS, drawCoverImage, drawSheetFrame } from "./asset-catalog.js";
@@ -16,6 +17,7 @@ import { musicForLevel, musicPlayOpts, pickupSoundId } from "./audio-catalog.js"
 import { drawButtons, drawConfirm, drawMenu, drawSettings, hitMenu, menuButtons, moveMenuIndex, settingsRows, confirmButtons } from "./ui.js";
 import { CHARACTERS, characterById } from "./characters.js";
 import { applyPickup, PICKUP_COLLECT_FX } from "./pickups.js";
+import { validatePlayerWeapons, warnProjectileFaction } from "./player-weapons.js";
 import {
   canCompleteLevel,
   currentObjective,
@@ -28,6 +30,48 @@ import {
 import { loadSettings, saveSettings } from "./settings.js";
 import { FxSprite } from "./fx.js";
 import { WaveController, pickWaveSpawn, STUDIO_CLEAR_BONUS } from "./waves.js";
+import { EncounterDirector, pickEncounterSpawn } from "./encounters.js";
+import { AttackCoordinator } from "./enemy-ai.js";
+import { cycleDifficulty, resolveDifficulty } from "./difficulty.js";
+import {
+  applyHazardSnapshot,
+  drawAmbients,
+  drawEnvDebug,
+  drawForegroundSilhouettes,
+  drawHazardFx,
+  EXPECTED_ENV_ASSETS,
+  lockedArena,
+  resetHazardVfx,
+  snapshotHazards,
+  tickHazards,
+  tickMovers,
+  warnMissingEnvAsset,
+} from "./studio-env.js";
+import {
+  applyDestructibleSnapshot,
+  cancelPendingExplosions,
+  drawDebris,
+  drawDestructibleDebug,
+  drawDestructibles,
+  EXPECTED_DESTRUCTIBLE_ASSETS,
+  injectDestructibleSolids,
+  resetDestructibleFx,
+  snapshotDestructibles,
+  splashDestructibles,
+  tickDestructibles,
+  tryHitDestructible,
+  warnMissingDestructibleAsset,
+} from "./destructibles.js";
+import {
+  applyRescueSnapshot,
+  drawRescueDebug,
+  drawRescueHud,
+  drawRescues,
+  preloadRescueKits,
+  rescueHud,
+  snapshotRescues,
+  tickRescues,
+} from "./rescues.js";
 import { BossEncounter, HostileProjectilePool } from "./boss.js";
 import { CinematicPlayer } from "./cinematic.js";
 import {
@@ -41,7 +85,17 @@ import {
 } from "./world-render.js";
 
 function emptyStats() {
-  return { tokens: 0, kills: 0, deaths: 0, time: 0 };
+  return {
+    tokens: 0,
+    kills: 0,
+    deaths: 0,
+    time: 0,
+    rescuesFound: 0,
+    totalRescues: 0,
+    rescueScore: 0,
+    allRescuesBonus: 0,
+    allRescuesAwarded: false,
+  };
 }
 
 function formatClock(seconds) {
@@ -87,6 +141,7 @@ export class Game {
     this.camera = new Camera();
     this.hud = new HUD();
     this.select = new CharacterSelect();
+    this.guide = new HowToPlay();
     this.state = new GameStateManager(GameState.BOOT);
     this.levelId = LEVELS[options.levelId] ? options.levelId : STUDIO_01.id;
     this.player = null;
@@ -94,6 +149,9 @@ export class Game {
     this.world = null;
     this.enemies = [];
     this.waves = null;
+    this.director = null;
+    this.attackCoord = new AttackCoordinator();
+    this.dangerZones = [];
     this.bossEncounter = null;
     this.cinematic = new CinematicPlayer(this);
     this._cinematicActive = false;
@@ -101,6 +159,7 @@ export class Game {
     this.hostileProjectiles = [];
     this.hostilePool = new HostileProjectilePool();
     this.effects = [];
+    this.debris = [];
     this._bossMusic = false;
     this._bossWarned = new Set();
     this.score = 0;
@@ -126,7 +185,13 @@ export class Game {
     this._respawnLock = false;
     this._worldTime = 0;
     this._playTime = 0;
+    this._hitStop = 0;
     this.stats = emptyStats();
+    this.enemyTimeScale = 1;
+    this.bossTimeScale = 1;
+    this.hostileTimeScale = 1;
+    this.combatHint = null;
+    this._missingPowerWarned = false;
     this.settings = loadSettings();
     this._loop = (t) => this.frame(t);
     this._onResize = () => this.fitCanvas();
@@ -154,6 +219,41 @@ export class Game {
     this.canvas.addEventListener("click", this._onClick);
     this.audio.attachUnlock(window);
     this._listenersOn = true;
+  }
+
+  combatTimeScale(entity) {
+    if (entity?.isBoss) return this.bossTimeScale ?? 1;
+    return this.enemyTimeScale ?? 1;
+  }
+
+  resetCombatTimeScale() {
+    this.enemyTimeScale = 1;
+    this.bossTimeScale = 1;
+    this.hostileTimeScale = 1;
+  }
+
+  cancelActivePowers() {
+    this.player?.ability?.cancel?.(this);
+    this.resetCombatTimeScale();
+    if (this.player) this.player.powerFx = null;
+  }
+
+  onAbilityFailed(result) {
+    if (!result || result.ok) return;
+    if (result.reason === "missing") {
+      if (!this._missingPowerWarned) {
+        console.warn("[Producer Hunt] Special power is not registered.", result.id || "");
+        this._missingPowerWarned = true;
+      }
+      return;
+    }
+    const text =
+      result.reason === "energy"
+        ? "NOT ENOUGH ENERGY"
+        : result.reason === "cooldown"
+          ? `COOLDOWN ${Math.max(0, result.remain || 0).toFixed(1)}s`
+          : "";
+    if (text) this.combatHint = { text, until: (this._worldTime || 0) + 1.4 };
   }
 
   sfx(id, extra = {}) {
@@ -185,11 +285,22 @@ export class Game {
     return this.cinematic.playBossIntro(opts);
   }
 
+  playBossDefeat(opts = {}) {
+    return this.cinematic.playBossDefeat(opts);
+  }
+
   beginCinematic() {
     this._cinematicActive = true;
     this.inputLocked = true;
     this.input.clearTransient();
     this.audio.stopGameplayVoices();
+    if (this.player) {
+      this.player.vx = 0;
+      this.player.vy = 0;
+    }
+    this.cancelActivePowers();
+    cancelPendingExplosions(this);
+    resetDestructibleFx(this);
   }
 
   endCinematic() {
@@ -249,6 +360,13 @@ export class Game {
       await Promise.all(CHARACTERS.map((ch) => this.assets.loadCharacterKit(ch.sprite)));
       await this.assets.loadEnemyKit(ENEMY_TYPES.post_producer.sprite);
       await this.assets.loadEnemyKit(ENEMY_TYPES.client.sprite);
+      if (ENEMY_TYPES.colorist) await this.assets.loadEnemyKit(ENEMY_TYPES.colorist.sprite);
+      if (ENEMY_TYPES.vfx_supervisor) await this.assets.loadEnemyKit(ENEMY_TYPES.vfx_supervisor.sprite);
+      if (!this.assets.images.get("characters/client/sprites/client_idle.png")) {
+        console.warn(
+          "[Producer Hunt] Client sprites expected at characters/client/sprites/; using enemies/client/sprites/."
+        );
+      }
       if (ENEMY_TYPES.boss_01) {
         await this.assets.loadEnemyKit(ENEMY_TYPES.boss_01.sprite);
       }
@@ -257,6 +375,14 @@ export class Game {
       } catch (err) {
         console.warn("[Producer Hunt] Optional world sheet failed. Enemies still spawn.", err);
       }
+      EXPECTED_ENV_ASSETS.forEach((rel) => {
+        if (!this.assets.images.get(rel)) warnMissingEnvAsset(rel);
+      });
+      for (const rel of EXPECTED_DESTRUCTIBLE_ASSETS) {
+        const img = await this.assets.loadOptionalImage(rel, rel);
+        if (!img) warnMissingDestructibleAsset(rel);
+      }
+      await preloadRescueKits(this.assets);
       await this.audio.preload();
     } catch (err) {
       console.error("[Producer Hunt Asset Error]\n\nPreload failed. Continuing with placeholders.", err);
@@ -296,14 +422,14 @@ export class Game {
   }
 
   startButtons() {
-    return menuButtons(["START GAME", "SETTINGS", "CONTROLS", "EXIT"], 520, { gap: 64 });
+    return menuButtons(["START GAME", "HOW TO PLAY", "SETTINGS", "CONTROLS", "EXIT"], 488, { gap: 58 });
   }
 
   pauseButtons() {
     return menuButtons(
-      ["RESUME", "RESTART FROM CHECKPOINT", "RESTART LEVEL", "SETTINGS", "RETURN TO MAIN MENU"],
-      280,
-      { gap: 64 }
+      ["RESUME", "HOW TO PLAY", "RESTART FROM CHECKPOINT", "RESTART LEVEL", "SETTINGS", "RETURN TO MAIN MENU"],
+      236,
+      { gap: 56 }
     );
   }
 
@@ -335,18 +461,27 @@ export class Game {
       if (hit) this.handleConfirm(hit.id);
       return;
     }
+    if (this.overlay === "howto") {
+      const act = this.guide.handleClick(p.x, p.y);
+      if (act === "back") {
+        this.sfx("ui_back");
+        this.closeHowToPlay();
+      } else if (act === "nav") this.sfx("ui_hover");
+      return;
+    }
     if (this.overlay === "settings") {
       const rows = settingsRows();
       const x = DESIGN_W / 2 - 380;
       rows.forEach((row, i) => {
-        const y = 196 + i * 78;
-        if (p.x >= x && p.x <= x + 760 && p.y >= y && p.y <= y + 72) {
+        const y = 176 + i * 58;
+        if (p.x >= x && p.x <= x + 760 && p.y >= y && p.y <= y + 52) {
           this.menuIndex = i;
           if (row.kind === "action") {
             this.sfx("ui_back");
             this.closeSettings();
           }
           else if (row.kind === "toggle") this.adjustSetting(row, 1);
+          else if (row.kind === "cycle") this.adjustSetting(row, 1);
           else if (row.kind === "slider") {
             const t = (p.x - (x + 400)) / 280;
             this.setSlider(row.id, t);
@@ -367,8 +502,11 @@ export class Game {
     if (st === GameState.CHARACTER_SELECT) {
       const act = this.select.handleClick(p.x, p.y);
       if (act === "focus") this.sfx("ui_hover");
+      if (act === "locked") {
+        this.select.notifyLocked();
+        this.sfx("ui_back");
+      }
       if (act === "confirm") {
-        this.sfx("ui_confirm");
         this.confirmCharacter();
       }
       if (act === "back") {
@@ -408,9 +546,11 @@ export class Game {
   handleStart(id) {
     if (id === "START GAME") {
       this.overlay = null;
+      this.select.enter(this.assets);
       this.state.set(GameState.CHARACTER_SELECT);
       this.playMenuMusic();
     }
+    if (id === "HOW TO PLAY") this.openHowToPlay("menu");
     if (id === "SETTINGS") this.openSettings();
     if (id === "CONTROLS") this.showControls = !this.showControls;
     if (id === "EXIT") this.exit();
@@ -418,6 +558,7 @@ export class Game {
 
   handlePause(id) {
     if (id === "RESUME") this.resumePlay();
+    if (id === "HOW TO PLAY") this.openHowToPlay("pause");
     if (id === "RESTART FROM CHECKPOINT") this.requestRespawn();
     if (id === "RESTART LEVEL") this.askConfirm("restart");
     if (id === "SETTINGS") this.openSettings();
@@ -445,6 +586,7 @@ export class Game {
     this.checkpoint = null;
     this.projectiles = [];
     this.effects = [];
+    this.debris = [];
     this.completed = false;
     this.beginLevel(character);
   }
@@ -516,6 +658,7 @@ export class Game {
 
   onPlayerDied() {
     if (this.state.get() === GameState.PLAYER_DEAD) return;
+    this.cancelActivePowers();
     this.bossEncounter?.onPlayerDied();
     this.stats.deaths += 1;
     this._deathOverlay = false;
@@ -601,6 +744,19 @@ export class Game {
     this.menuIndex = 0;
   }
 
+  openHowToPlay(from = "menu") {
+    this.showControls = false;
+    this.overlay = "howto";
+    this.guide.enter(from);
+    this.guide.preload(this.assets);
+  }
+
+  closeHowToPlay() {
+    this.overlay = null;
+    this.guide.leave();
+    this.menuIndex = 0;
+  }
+
   closeSettings() {
     this.overlay = null;
     this.menuIndex = 0;
@@ -625,7 +781,7 @@ export class Game {
       if (row.kind === "action") {
         this.sfx("ui_back");
         this.closeSettings();
-      } else if (row.kind === "toggle") this.adjustSetting(row, 1);
+      } else if (row.kind === "toggle" || row.kind === "cycle") this.adjustSetting(row, 1);
     }
   }
 
@@ -640,6 +796,11 @@ export class Game {
     }
     if (row.kind === "toggle") {
       this.settings = saveSettings({ [row.id]: !this.settings[row.id] });
+      this.applySettings();
+      return;
+    }
+    if (row.kind === "cycle" && row.id === "difficulty") {
+      this.settings = saveSettings({ difficulty: cycleDifficulty(this.settings.difficulty, dir || 1) });
       this.applySettings();
     }
   }
@@ -657,7 +818,42 @@ export class Game {
   }
 
   shakeEnabled() {
-    return this.settings.screenShake !== false && !this.settings.reducedMotion;
+    return this.settings.screenShake !== false && !this.settings.reducedMotion && !this.settings.reducedFlashes;
+  }
+
+  beginHitStop(seconds, shake = 0) {
+    if (this.settings.reducedMotion) return;
+    const sec = Number(seconds) || 0;
+    if (sec > 0) this._hitStop = Math.max(this._hitStop, sec);
+    if (shake > 0 && this.shakeEnabled()) this.camera.addShake(shake);
+  }
+
+  beginShake(amount) {
+    if (!amount || !this.shakeEnabled()) return;
+    this.camera.addShake(amount);
+  }
+
+  _applyPlayerKnockback(dx) {
+    if (!this.player?.alive || !this.world || !dx) return;
+    resolveKnockback(this.player, this.world.solids, dx);
+    this.player.x = Math.max(0, Math.min((this.world.width || DESIGN_W) - this.player.w, this.player.x));
+    this.player._syncFeet();
+  }
+
+  resetCombatFeel() {
+    this._hitStop = 0;
+    this.camera?.clearShake?.();
+    if (this.player) {
+      this.player.jumpBuffer = 0;
+      this.player._jumpCutPending = false;
+      this.player.speedMul = 1;
+      this.player.damageMul = 1;
+      this.player.airControlMul = this.player.baseAirControl || 1;
+      this.player.shooting = false;
+      this.player.loadout?.resetFireState?.();
+      this.player._syncWeaponRef?.();
+      if (this.player.weapon) this.player.weapon.cool = 0;
+    }
   }
 
   isFullscreen() {
@@ -674,6 +870,10 @@ export class Game {
   }
 
   disposeLevel() {
+    this.cancelActivePowers();
+    resetHazardVfx(this);
+    this.audio?.stopSound?.("env_ambience");
+    resetDestructibleFx(this);
     this.destroyWaves();
     this.bossEncounter?.destroy();
     this.bossEncounter = null;
@@ -685,6 +885,7 @@ export class Game {
     this.projectiles = [];
     this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
     this.effects = [];
+    this.debris = [];
     this.checkpoint = null;
     this.completed = false;
     this.inputLocked = false;
@@ -705,7 +906,10 @@ export class Game {
     this.levelId = STUDIO_01.id;
     this.menuIndex = 0;
     this.showControls = false;
+    this.overlay = null;
+    this.guide.leave();
     this.audio.setGameplayMuted(false);
+    this.select.leave();
     this.playMenuMusic();
     this.state.set(GameState.START_SCREEN);
   }
@@ -714,6 +918,7 @@ export class Game {
     this.disposeLevel();
     this.menuIndex = 0;
     this.playMenuMusic();
+    this.select.enter(this.assets);
     this.state.set(GameState.CHARACTER_SELECT);
   }
 
@@ -787,6 +992,19 @@ export class Game {
     ctx.restore();
   }
 
+  drawCombatHint(ctx) {
+    const hint = this.combatHint;
+    if (!hint || (this._worldTime || 0) > hint.until) return;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(5, 7, 12, 0.7)";
+    ctx.fillRect(DESIGN_W / 2 - 220, 118, 440, 48);
+    ctx.fillStyle = "#fbbf24";
+    ctx.font = "bold 22px sans-serif";
+    ctx.fillText(hint.text, DESIGN_W / 2, 150);
+    ctx.restore();
+  }
+
   drawComplete(ctx) {
     const name = this.world?.name || "The Post Suite";
     const ch = this.character?.displayName || this.character?.name || "—";
@@ -798,6 +1016,7 @@ export class Game {
       `Enemies defeated  ${this.stats.kills}`,
       `Character  ${ch}`,
       `Deaths  ${this.stats.deaths}`,
+      `Crew rescued  ${this.stats.rescuesFound || 0} / ${this.stats.totalRescues || rescueHud(this.world).total}`,
     ];
     drawMenu(ctx, title, name, this.completeButtons(), { focus: this.menuIndex, titleY: 140 });
     ctx.textAlign = "center";
@@ -807,12 +1026,24 @@ export class Game {
   }
 
   confirmCharacter() {
+    if (this._selectConfirming) return;
+    if (!this.select.isUnlocked()) {
+      this.select.notifyLocked();
+      this.sfx("ui_back");
+      return;
+    }
+    this.sfx("ui_confirm");
+    this._selectConfirming = true;
     this.select.persist();
+    this.select.leave();
     this.beginLevel(this.select.selected);
+    this._selectConfirming = false;
   }
 
   beginLevel(character, opts = {}) {
+    this.cancelActivePowers();
     this.character = characterById(character?.id || character);
+    if (this.debug || DEBUG_COMBAT) validatePlayerWeapons(this.character, true);
     try {
       this.world = buildWorld(resolveLevel(this.levelId));
     } catch (err) {
@@ -832,9 +1063,14 @@ export class Game {
     this.spawnEnemies();
     this.attachWaves();
     this.attachBossEncounter();
+    tickMovers(this, 0);
     this.projectiles = [];
     this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
     this.effects = [];
+    this.debris = [];
+    this.resetCombatTimeScale();
+    this.resetCombatFeel();
+    this.combatHint = null;
     this.score = 0;
     this.camera.x = 0;
     this.camera.look = 0;
@@ -890,6 +1126,7 @@ export class Game {
       y: safe.y,
       health: Math.max(1, this.player.health),
       ammo: this.player.weapon.ammo,
+      loadout: this.player.loadout?.snapshot?.(),
       score: this.score,
       keys: this.player.keys,
       abilityCool: this.player.ability?.cool || 0,
@@ -903,6 +1140,10 @@ export class Game {
         .filter((e) => !e.alive && (e.persistent || e.encounterBound))
         .map((e) => e.spawnId),
       waves: this.waves ? this.waves.snapshot() : null,
+      director: this.director ? this.director.snapshot() : null,
+      hazards: snapshotHazards(this.world),
+      destructibles: snapshotDestructibles(this.world),
+      rescues: snapshotRescues(this.world),
       bossArena: Boolean(this.checkpoint?.bossArena || this.bossEncounter?.active),
       bossIntroWatched: Boolean(this.checkpoint?.bossIntroWatched || this.bossEncounter?.introPlayed),
       stats: { ...this.stats, time: this._playTime },
@@ -922,14 +1163,28 @@ export class Game {
     this.player.alive = this.player.health > 0;
     this.player.deadTimer = 0;
     this.player.invuln = 0.4;
-    this.player.weapon.ammo = Number.isFinite(snap.ammo) ? snap.ammo : this.player.weapon.ammo;
+    this.player._powerCancelled = false;
+    if (snap.loadout && this.player.loadout) {
+      this.player.loadout.applySnapshot(snap.loadout);
+      this.player._syncWeaponRef?.();
+    } else if (this.player.loadout) {
+      this.player.loadout.applySnapshot(null);
+      this.player._syncWeaponRef?.();
+    } else {
+      this.player.weapon.ammo = Number.isFinite(snap.ammo) ? snap.ammo : this.player.weapon.ammo;
+    }
     this.player.keys = Number.isFinite(snap.keys) ? snap.keys : 0;
+    this.cancelActivePowers();
     if (this.player.ability) {
       this.player.ability.cool = Number.isFinite(snap.abilityCool) ? snap.abilityCool : 0;
       this.player.ability.active = 0;
     }
     this.player.speedMul = 1;
+    this.player.airControlMul = this.player.baseAirControl || 1;
     this.player.damageMul = 1;
+    this.player.baseJumpVelocity = BASE_JUMP_VELOCITY;
+    this.player.jumpMultiplier = this.player.stats?.jumpMultiplier || this.player.character?.jumpMultiplier || 1;
+    this.player.energy = this.player.energyMax;
     this.score = Number.isFinite(snap.score) ? snap.score : 0;
     if (snap.stats && typeof snap.stats === "object") {
       this.stats = {
@@ -937,6 +1192,11 @@ export class Game {
         kills: Number(snap.stats.kills) || 0,
         deaths: Number(snap.stats.deaths) || 0,
         time: Number(snap.stats.time) || 0,
+        rescuesFound: Number(snap.stats.rescuesFound) || 0,
+        totalRescues: Number(snap.stats.totalRescues) || 0,
+        rescueScore: Number(snap.stats.rescueScore) || 0,
+        allRescuesBonus: Number(snap.stats.allRescuesBonus) || 0,
+        allRescuesAwarded: Boolean(snap.stats.allRescuesAwarded),
       };
       this._playTime = this.stats.time;
     }
@@ -949,6 +1209,9 @@ export class Game {
     this.spawn = { x: safe.x, y: safe.y };
     this.camera.snap(safe.x - this.camera.w * 0.38, safe.y - this.camera.h * 0.7, this.world);
     this.camera.look = this.player.facing * 40;
+    applyHazardSnapshot(this.world, snap.hazards);
+    applyDestructibleSnapshot(this.world, snap.destructibles);
+    applyRescueSnapshot(this.world, snap.rescues);
     for (const p of this.world.pickups) {
       if (p.respawn) p.taken = false;
       else p.taken = Boolean(snap.pickups && snap.pickups[p.id]);
@@ -972,6 +1235,12 @@ export class Game {
       if (snap.waves) this.waves.applySnapshot(snap.waves);
       else this.waves.start();
     }
+    this.director?.applySnapshot(snap.director);
+    injectDestructibleSolids(this.world);
+    tickMovers(this, 0);
+    resetHazardVfx(this);
+    resetDestructibleFx(this);
+    this.dangerZones = [];
     this.hud.invalidate();
   }
 
@@ -984,6 +1253,7 @@ export class Game {
         enc.activated = Boolean(rec.activated);
         enc.cleared = Boolean(rec.cleared);
       }
+      if (enc.scripted) continue;
       for (const enemy of this.enemies) {
         if (!(enc.enemyIds || []).includes(enemy.spawnId)) continue;
         if (enc.cleared) {
@@ -1021,7 +1291,7 @@ export class Game {
 
   update(dt) {
     const st = this.state.get();
-    this.camera.updateShake(st === GameState.PLAYING ? dt : 0, this.shakeEnabled());
+    this.camera.updateShake(st === GameState.PLAYING && !this._cinematicActive ? dt : 0, this.shakeEnabled());
 
     if (this.overlay === "confirm") {
       this.updateConfirmInput();
@@ -1031,12 +1301,21 @@ export class Game {
       this.updateSettingsInput();
       return;
     }
+    if (this.overlay === "howto") {
+      const act = this.guide.handleInput(this.input);
+      if (act === "back") {
+        this.sfx("ui_back");
+        this.closeHowToPlay();
+      } else if (act === "nav") this.sfx("ui_hover");
+      return;
+    }
 
     if (st === GameState.START_SCREEN) {
       this.updateMenuNav(this.startButtons(), (id) => this.handleStart(id));
       return;
     }
     if (st === GameState.CHARACTER_SELECT) {
+      this.select.update(dt, this.assets);
       if (this.input.consume("moveLeft")) {
         this.select.move(-1);
         this.sfx("ui_hover");
@@ -1050,8 +1329,7 @@ export class Game {
         this.goMainMenu({ dispose: true });
         return;
       }
-      if (this.input.consume("confirm")) {
-        this.sfx("ui_confirm");
+      if (this.input.consume("confirm") || this.input.consume("shoot")) {
         this.confirmCharacter();
       }
       return;
@@ -1088,14 +1366,31 @@ export class Game {
       return;
     }
 
+    if (this._hitStop > 0) {
+      this._hitStop -= dt;
+      if (this.player) {
+        if (this.player.hitFlash > 0) this.player.hitFlash -= dt;
+        if (this.player.invuln > 0) this.player.invuln -= dt;
+      }
+      for (const enemy of this.enemies) {
+        if (enemy.hitFlash > 0) enemy.hitFlash -= dt;
+      }
+      this.updateEffects(dt);
+      return;
+    }
+
     this._playTime += dt;
     this._worldTime += dt;
     this.waves?.update(dt);
+    this.director?.update(dt);
     this.bossEncounter?.update(dt);
     this.inputLocked = Boolean(this.waves?.blocksInput) || Boolean(this.bossEncounter?.blocksInput);
+    tickMovers(this, dt);
     this.player.update(dt, this.input, this.world, this.projectiles, this);
     this.updateEncounters();
-    this.camera.follow(this.player, this.world, dt);
+    this.updateDangerZones(dt);
+    this.attackCoord?.configure(resolveDifficulty(this.settings?.difficulty));
+    this.camera.follow(this.player, this.world, dt, lockedArena(this));
     for (const enemy of this.enemies) {
       enemy.update(dt, this.player, this.world, this.projectiles, this);
     }
@@ -1104,6 +1399,8 @@ export class Game {
     this.updateEffects(dt);
     this.updatePickups();
     this.updateHazards(dt);
+    tickDestructibles(this, dt);
+    tickRescues(this, dt);
     updateDoors(this.world, dt);
     this.updateDoorsAndExit();
     this.updateCheckpoints();
@@ -1114,9 +1411,13 @@ export class Game {
     if (!this.player?.alive) return;
     for (const enemy of this.enemies) {
       if (enemy.combatEnabled === false || enemy.hitboxEnabled === false) continue;
-      const melee = Boolean(enemy.isBoss && enemy.meleeActive);
+      const melee = Boolean(enemy.meleeActive);
       if (melee && enemy.meleeHitOnce) continue;
-      const dmg = enemy.spec?.contactDamage || 0;
+      const dmg = melee
+        ? enemy.state === "charge"
+          ? enemy.spec?.chargeDamage || enemy.spec?.damage || 0
+          : enemy.spec?.damage || enemy.spec?.contactDamage || 0
+        : enemy.spec?.contactDamage || 0;
       if (!enemy.alive || dmg <= 0) continue;
       if (!melee && enemy.contactCool > 0) continue;
       const box = melee && typeof enemy.meleeBounds === "function" ? enemy.meleeBounds() : enemy.bounds();
@@ -1138,36 +1439,16 @@ export class Game {
       if (!dealt) continue;
       if (melee) enemy.meleeHitOnce = true;
       else enemy.contactCool = cool;
-      this.player.footX += dir * (enemy.isBoss ? 52 : 8);
-      this.player._syncBox?.();
-      if (this.shakeEnabled()) this.camera.addShake(enemy.isBoss ? 0.55 : 0.35);
+      this._applyPlayerKnockback(dir * (enemy.isBoss ? 36 : 18));
+      if (this.shakeEnabled()) this.camera.addShake(enemy.isBoss ? SHAKE_HEAVY : 0.22);
+      this.beginHitStop(enemy.isBoss ? HITSTOP_HEAVY_SEC : HITSTOP_LIGHT_SEC);
       this.hud.invalidate();
       if (this.player.alive) this.sfx("player_hit");
     }
   }
 
   updateHazards(dt) {
-    for (const h of this.world.hazards || []) {
-      if (h.cool > 0) h.cool -= dt;
-      if (!h.enabled || !this.player.alive) continue;
-      if (h.cool > 0) continue;
-      if (!aabb(this.player.bounds(), h)) continue;
-      const dir = Math.sign(this.player.footX - (h.x + h.w / 2)) || -1;
-      const dealt = this.player.takeDamage(h.damage, { knockbackX: dir * 280 });
-      if (!dealt) continue;
-      if (this.shakeEnabled()) this.camera.addShake(0.45);
-      h.cool = h.cooldown;
-      this.hud.invalidate();
-      if (this.player.alive) this.sfx("player_hit");
-      this.spawnFx({
-        sheetKey: "effects",
-        frame: 5,
-        x: this.player.footX,
-        y: this.player.footY - 90,
-        size: 72,
-        life: 0.2,
-      });
-    }
+    tickHazards(this, dt);
   }
 
   updateCheckpoints() {
@@ -1196,6 +1477,8 @@ export class Game {
 
   updateDoorsAndExit() {
     if (this.completed || !this.player.alive) return;
+    const phase = this.bossEncounter?.phase;
+    if (phase === "dying" || phase === "defeat_cinematic") return;
     const bounds = this.player.bounds();
     const exit = (this.world.doors || []).find((d) => d.kind === "exit");
     if (
@@ -1304,9 +1587,14 @@ export class Game {
     this.spawnEnemies();
     this.attachWaves();
     this.attachBossEncounter();
+    tickMovers(this, 0);
     this.projectiles = [];
     this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
     this.effects = [];
+    this.debris = [];
+    this.resetCombatTimeScale();
+    this.resetCombatFeel();
+    this.combatHint = null;
     if (snap) this.applySnapshot(snap);
     else {
       this.waves?.start();
@@ -1386,6 +1674,8 @@ export class Game {
   destroyWaves() {
     this.waves?.destroy();
     this.waves = null;
+    this.director?.destroy();
+    this.director = null;
   }
 
   attachWaves() {
@@ -1393,6 +1683,9 @@ export class Game {
     if ((this.world?.waves || []).length) {
       this.waves = new WaveController(this, this.world.waves);
     }
+    this.director?.destroy();
+    this.director = new EncounterDirector(this);
+    this.dangerZones = [];
   }
 
   attachBossEncounter() {
@@ -1471,6 +1764,96 @@ export class Game {
     return enemy;
   }
 
+  spawnEncounterEnemy(enc, typeId, opts = {}) {
+    const type = migrateEnemyType(typeId);
+    if (!ENEMY_TYPES[type]) {
+      console.error(`[Producer Hunt] Enemy creation failed: unknown type "${typeId}"`);
+      return null;
+    }
+    const spec = ENEMY_TYPES[type];
+    const kit = this.assets.enemyKit(type) || spec.sprite;
+    const body = {
+      w: spec.sprite?.collisionWidth || 88,
+      h: spec.sprite?.collisionHeight || 210,
+    };
+    const arena = { left: enc.arenaLeft, right: enc.arenaRight };
+    let pos = null;
+    if (Number.isFinite(opts.x) && Number.isFinite(opts.y) && !(opts.x === 0 && opts.y === 0)) {
+      pos = { x: opts.x, y: opts.y };
+    } else {
+      pos = pickEncounterSpawn(this.world, this.player, this.enemies, body, arena, enc.spawnPoints);
+    }
+    if (!pos || (pos.x === 0 && pos.y === 0)) {
+      console.warn(`[Producer Hunt] Encounter "${enc.id}" has no valid spawn for ${type}.`);
+      return null;
+    }
+    const spawnId = opts.id || `${enc.id}_${type}_${this.enemies.length}`;
+    const enemy = new Enemy(
+      type,
+      {
+        id: spawnId,
+        x: pos.x,
+        y: pos.y,
+        patrolMin: Math.max(enc.arenaLeft || pos.x - 120, pos.x - 140),
+        patrolMax: Math.min(enc.arenaRight || pos.x + 120, pos.x + 140),
+        zoneLeft: enc.arenaLeft,
+        zoneRight: enc.arenaRight,
+        activateRange: 2800,
+        activated: true,
+        encounterId: enc.id,
+      },
+      kit
+    );
+    enemy.spawnLock = 0.45;
+    enemy.encounterId = enc.id;
+    if (opts.modifiers) enemy.applyWaveModifiers(opts.modifiers);
+    if (Number.isFinite(opts.health)) enemy.health = Math.max(1, opts.health);
+    this.enemies.push(enemy);
+    return enemy;
+  }
+
+  spawnDangerZone(opts) {
+    this.dangerZones.push({
+      x: opts.x,
+      y: opts.y,
+      w: opts.w || 64,
+      h: opts.h || 24,
+      life: opts.life || 1.2,
+      delay: opts.delay || 0,
+      damage: opts.damage || 10,
+      owner: opts.owner || "enemy",
+      kind: opts.kind || "hazard",
+      hit: false,
+      age: 0,
+    });
+  }
+
+  updateDangerZones(dt) {
+    if (!this.player?.alive) {
+      this.dangerZones = this.dangerZones.filter((z) => (z.age += dt) < z.life + z.delay);
+      return;
+    }
+    const next = [];
+    for (const z of this.dangerZones) {
+      z.age += dt;
+      if (z.age < z.delay) {
+        next.push(z);
+        continue;
+      }
+      if (z.age > z.delay + z.life) continue;
+      if (!z.hit && aabb(this.player.bounds(), z)) {
+        const dealt = this.player.takeDamage(z.damage);
+        if (dealt) {
+          this.sfx("player_hit");
+          this.hud.invalidate();
+        }
+        z.hit = true;
+      }
+      next.push(z);
+    }
+    this.dangerZones = next;
+  }
+
   awardStudioClear() {
     if (this._studioClearAwarded || this.completed) return;
     this._studioClearAwarded = true;
@@ -1489,7 +1872,8 @@ export class Game {
     const px = this.player?.footX ?? 0;
     for (const enc of this.world.encounters || []) {
       const wasCleared = Boolean(enc.cleared);
-      if (!enc.activated && !enc.boss && px >= enc.activateX) enc.activated = true;
+      if (!enc.activated && !enc.boss && !enc.scripted && px >= enc.activateX) enc.activated = true;
+      if (enc.scripted) continue;
       if (enc.activated) {
         for (const enemy of this.enemies) {
           if ((enc.enemyIds || []).includes(enemy.spawnId)) enemy.activated = true;
@@ -1515,6 +1899,8 @@ export class Game {
 
   updateBossMusic() {
     if (this._cinematicActive || this.bossEncounter?.phase === "intro") return;
+    if (this.bossEncounter?.phase === "dying" || this.bossEncounter?.phase === "defeat_cinematic") return;
+    if (this.bossEncounter?.boss?.deathStarted) return;
     if (this.state.get() !== GameState.PLAYING || !this.world) return;
     const bossEnc = (this.world.encounters || []).find((enc) => enc.boss && enc.activated && !enc.cleared);
     if (bossEnc) {
@@ -1577,17 +1963,78 @@ export class Game {
     });
   }
 
+  _applySplash(shot, exclude) {
+    if (!shot || shot.owner !== "player" || !(shot.splashRadius > 0) || !(shot.splashDamage > 0)) return;
+    const c = shot.center ? shot.center() : { x: shot.x + shot.w / 2, y: shot.y + shot.h / 2 };
+    const seen = new Set();
+    for (const enemy of this.enemies) {
+      if (!enemy?.alive || enemy === exclude) continue;
+      if (enemy.hitboxEnabled === false) continue;
+      if (typeof enemy.takeDamage !== "function") continue;
+      if (seen.has(enemy)) continue;
+      const box = enemy.bounds();
+      const ex = box.x + box.w / 2;
+      const ey = box.y + box.h / 2;
+      const dist = Math.hypot(ex - c.x, ey - c.y);
+      if (dist > shot.splashRadius) continue;
+      seen.add(enemy);
+      const falloff = 1 - dist / shot.splashRadius;
+      let dmg = Math.max(1, Math.round(shot.splashDamage * (0.4 + 0.6 * falloff)));
+      if (enemy.isBoss && shot.bossDamageMul && shot.bossDamageMul < 1) {
+        dmg = Math.max(1, Math.round(dmg * shot.bossDamageMul));
+      }
+      const wasDying = Boolean(enemy.deathStarted);
+      this.score += enemy.takeDamage(dmg, shot);
+      if (enemy.isBoss) {
+        if (enemy.deathStarted && !wasDying) this.sfx("enemy_death", { x: enemy.footX });
+        else if (!enemy.deathStarted) this.sfx("enemy_hit", { x: enemy.footX });
+      } else if (!enemy.alive) {
+        this.stats.kills += 1;
+        this.sfx("enemy_death", { x: enemy.footX });
+      } else {
+        this.sfx("enemy_hit", { x: enemy.footX });
+      }
+    }
+    splashDestructibles(this, shot, exclude);
+  }
+
+  _onShotDestroyed(shot) {
+    if (!shot?.makeHazard || shot.owner !== "enemy") return;
+    const c = shot.center ? shot.center() : { x: shot.x, y: shot.y };
+    this.spawnDangerZone({
+      x: c.x - 36,
+      y: c.y - 10,
+      w: 72,
+      h: 28,
+      life: 1.6,
+      delay: 0.15,
+      damage: shot.hazardDamage || 10,
+      owner: "enemy",
+      kind: "vfx_pool",
+    });
+  }
+
   handlePlayerProjectileHit(a, b) {
     const projectile = a?.owner === "player" ? a : b?.owner === "player" ? b : null;
     const enemy = projectile === a ? b : projectile === b ? a : null;
-    if (!projectile?.alive || projectile.spent || projectile.hasHit) return false;
+    if (!projectile?.alive || projectile.spent || projectile.hasHit) {
+      if (DEBUG_COMBAT && projectile?.hasHit && projectile.alive) {
+        console.warn(`[Producer Hunt] Duplicate collision damage blocked for ${projectile.weaponId || projectile.type}`);
+      }
+      return false;
+    }
     if (projectile.faction === "boss" || projectile.owner === "enemy") return false;
+    if (projectile.faction === "player" && enemy === this.player) return false;
     if (!enemy?.alive || typeof enemy.takeDamage !== "function") return false;
     if (enemy.hitboxEnabled === false) return false;
+    if (enemy === this.player) return false;
     const travel = typeof projectile.travelBounds === "function" ? projectile.travelBounds() : projectile.bounds();
     if (!aabb(travel, enemy.bounds()) && !aabb(projectile.bounds(), enemy.bounds())) return false;
     projectile.hasHit = true;
-    const damage = Number(projectile.damage ?? 1);
+    let damage = Number(projectile.damage ?? 1);
+    if (enemy.isBoss && projectile.bossDamageMul && projectile.bossDamageMul !== 1) {
+      damage = Math.max(1, Math.round(damage * projectile.bossDamageMul));
+    }
     const wasDying = Boolean(enemy.deathStarted);
     this.score += enemy.takeDamage(damage, projectile);
     if (enemy.isBoss) {
@@ -1599,7 +2046,12 @@ export class Game {
     } else {
       this.sfx("enemy_hit", { x: enemy.footX });
     }
+    const stop = projectile.hitStop;
+    if (stop === "heavy") this.beginHitStop(HITSTOP_HEAVY_SEC, projectile.cameraShake || SHAKE_HEAVY);
+    else if (stop === "light") this.beginHitStop(HITSTOP_LIGHT_SEC, projectile.cameraShake || SHAKE_LIGHT);
+    else if (enemy.isBoss) this.beginHitStop(HITSTOP_LIGHT_SEC, SHAKE_LIGHT);
     this.spawnImpact(projectile);
+    this._applySplash(projectile, enemy);
     projectile.disable();
     this.hud.invalidate();
     return true;
@@ -1608,14 +2060,26 @@ export class Game {
   _stepProjectile(shot, dt, { hostile = false } = {}) {
     if (!shot.alive || shot.spent) return;
     shot.update(dt);
-    if (!shot.alive) return;
+    if (!shot.alive) {
+      this._onShotDestroyed(shot);
+      return;
+    }
+    warnProjectileFaction(shot);
+    if (!shot.owner) shot.disable();
     if (shot.x < -40 || shot.x > this.world.width + 40 || shot.y < -80 || shot.y > (this.world.height || DESIGN_H) + 80) {
       shot.disable();
       return;
     }
     const travel = typeof shot.travelBounds === "function" ? shot.travelBounds() : shot.bounds();
-    if (hitsSolid(travel, this.world.solids)) {
+    if (tryHitDestructible(this, shot)) return;
+    const solids =
+      shot.owner === "player"
+        ? (this.world.solids || []).filter((s) => !s.destructibleId)
+        : this.world.solids;
+    if (hitsSolid(travel, solids)) {
       this.spawnImpact(shot, { sfx: true });
+      if (shot.owner === "player") this._applySplash(shot, null);
+      this._onShotDestroyed(shot);
       shot.disable();
       return;
     }
@@ -1634,24 +2098,30 @@ export class Game {
           return;
         }
       }
-      if (this.player.alive && aabb(shot.bounds(), this.player.bounds())) {
+      if (this.player.alive && (aabb(travel, this.player.bounds()) || aabb(shot.bounds(), this.player.bounds()))) {
         const dir = Math.sign(shot.vx) || Math.sign(this.player.footX - shot.x) || 1;
-        const knock = shot.interruptMove ? dir * 420 : dir * 160;
-        const dealt = this.player.takeDamage(shot.damage, shot.interruptMove ? { knockbackX: knock } : {});
+        const knock = shot.interruptMove ? dir * 280 : dir * 70;
+        const dealt = this.player.takeDamage(shot.damage, { knockbackX: knock });
         if (dealt) {
           this.sfx("player_hit");
-          if (this.shakeEnabled()) this.camera.addShake(0.55);
+          this._applyPlayerKnockback(dir * (shot.interruptMove ? 32 : 10));
+          this.beginHitStop(shot.interruptMove ? HITSTOP_HEAVY_SEC : HITSTOP_LIGHT_SEC, shot.interruptMove ? SHAKE_HEAVY : SHAKE_LIGHT);
           this.hud.invalidate();
         }
         this.spawnImpact(shot);
+        this._onShotDestroyed(shot);
         shot.disable();
       }
     }
   }
 
   updateProjectiles(dt) {
-    for (const shot of this.projectiles) this._stepProjectile(shot, dt);
-    for (const shot of this.hostileProjectiles) this._stepProjectile(shot, dt, { hostile: true });
+    for (const shot of this.projectiles) {
+      const step = shot.owner === "enemy" ? dt * (this.hostileTimeScale ?? 1) : dt;
+      this._stepProjectile(shot, step);
+    }
+    const hostileDt = dt * (this.hostileTimeScale ?? 1);
+    for (const shot of this.hostileProjectiles) this._stepProjectile(shot, hostileDt, { hostile: true });
     this.projectiles = this.projectiles.filter((p) => p.alive);
     const kept = [];
     for (const shot of this.hostileProjectiles) {
@@ -1705,6 +2175,9 @@ export class Game {
       if (this.overlay === "settings") {
         drawSettings(ctx, this.settings, this.menuIndex, { fullscreen: this.isFullscreen() });
       }
+      if (this.overlay === "howto") {
+        this.guide.draw(ctx, this.assets, this.input.keymap);
+      }
       if (this.debug) this.drawDebug(ctx);
       return;
     }
@@ -1725,27 +2198,41 @@ export class Game {
     if (this.player) this.player.draw(ctx, this.camera, this.assets);
     for (const shot of this.projectiles) shot.draw(ctx, this.camera);
     for (const shot of this.hostileProjectiles || []) shot.draw(ctx, this.camera);
-    if (this.world) drawDecorSheet(ctx, this.assets, "props", this.world.props, this.camera, 128, "front");
+    if (this.world) {
+      drawDecorSheet(ctx, this.assets, "props", this.world.props, this.camera, 128, "front");
+      drawAmbients(ctx, this, "front");
+      drawForegroundSilhouettes(ctx, this);
+    }
+    drawDebris(ctx, this);
     for (const fx of this.effects) fx.draw(ctx, this.camera, drawSheetFrame);
     if (this.fade > 0) {
       ctx.fillStyle = `rgba(5, 7, 12, ${this.fade})`;
       ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
     }
-    if (this.player && this.state.is(GameState.PLAYING, GameState.RESPAWNING)) {
-      const wave = this.waves?.hud;
+    if (this.player && this.state.is(GameState.PLAYING, GameState.RESPAWNING) && !this._cinematicActive) {
+      const wave = this.waves?.hud || this.director?.hud;
+      const crew = rescueHud(this.world);
       this.hud.draw(ctx, {
         player: this.player,
         score: this.score,
         assets: this.assets,
         objective: currentObjective(this.world, this.player),
         wave,
+        crew,
       });
       this.drawBossHud(ctx);
       this.drawWaveBanner(ctx);
+      this.drawCombatHint(ctx);
+      drawRescueHud(ctx, this);
     }
-    if (this.debug) this.drawDebug(ctx);
+    if (this.debug || DEBUG_COMBAT) {
+      this.drawDebug(ctx);
+      drawEnvDebug(ctx, this);
+      drawDestructibleDebug(ctx, this);
+      drawRescueDebug(ctx, this);
+    }
 
-    if (st === GameState.PAUSED && this.overlay !== "settings" && this.overlay !== "confirm") {
+    if (st === GameState.PAUSED && this.overlay !== "settings" && this.overlay !== "confirm" && this.overlay !== "howto") {
       drawMenu(ctx, "PAUSED", this.world?.name || "", this.pauseButtons(), { focus: this.menuIndex, titleY: 150 });
     }
     if (st === GameState.PLAYER_DEAD && this._deathOverlay && this.overlay !== "confirm") {
@@ -1759,6 +2246,9 @@ export class Game {
     }
     if (this.overlay === "confirm") {
       drawConfirm(ctx, "CONFIRM", this.confirmCopy(), this.menuIndex);
+    }
+    if (this.overlay === "howto") {
+      this.guide.draw(ctx, this.assets, this.input.keymap);
     }
   }
 
@@ -1795,10 +2285,10 @@ export class Game {
       const lines = String(this.levelError).split("\n");
       lines.forEach((line, i) => ctx.fillText(line, DESIGN_W / 2, 400 + i * 22));
     }
-    if (this.overlay !== "settings") {
+    if (this.overlay !== "settings" && this.overlay !== "howto") {
       drawButtons(ctx, this.startButtons(), { focus: this.menuIndex });
     }
-    if (this.showControls && this.overlay !== "settings") {
+    if (this.showControls && this.overlay !== "settings" && this.overlay !== "howto") {
       ctx.fillStyle = "rgba(5,7,12,0.88)";
       ctx.fillRect(560, 160, 800, 420);
       ctx.fillStyle = "#f4f1ea";
@@ -1809,7 +2299,7 @@ export class Game {
         "W / ↑             jump",
         "S / ↓             crouch",
         "SPACE             shoot",
-        "SHIFT             special",
+        "Q                 special",
         "ESC               pause",
         "ENTER             confirm",
       ];
@@ -1844,6 +2334,7 @@ export class Game {
 
     drawHints(ctx, this.world.hints, cam);
     drawDecorSheet(ctx, this.assets, "props", this.world.props, cam, 128, "back");
+    drawAmbients(ctx, this, "back");
 
     if (!drawTiledPlatforms(ctx, this.assets, this.world.platformSolids || this.world.solids, cam)) {
       for (const solid of this.world.solids) {
@@ -1856,8 +2347,29 @@ export class Game {
     }
 
     drawProgression(ctx, this.assets, this.world, cam);
+    drawRescues(ctx, this, "back");
+    drawDestructibles(ctx, this);
+    drawRescues(ctx, this, "front");
     drawPickups(ctx, this.assets, this.world.pickups, cam, this._worldTime * 1000);
     drawHazards(ctx, this.assets, this.world.hazards, cam);
+    drawHazardFx(ctx, this);
+    this.drawDangerZones(ctx);
+  }
+
+  drawDangerZones(ctx) {
+    const cam = this.camera;
+    for (const z of this.dangerZones || []) {
+      const s = cam.worldToScreen(z.x, z.y);
+      const warning = z.age < z.delay;
+      ctx.save();
+      ctx.globalAlpha = warning ? 0.45 : 0.72;
+      ctx.fillStyle = warning ? "#fbbf24" : "#ef4444";
+      ctx.fillRect(s.x, s.y, z.w, z.h);
+      ctx.strokeStyle = warning ? "#fde68a" : "#fecaca";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(s.x, s.y, z.w, z.h);
+      ctx.restore();
+    }
   }
 
   drawDebug(ctx) {
@@ -1891,6 +2403,10 @@ export class Game {
     for (const shot of this.projectiles) {
       if (!shot.alive) continue;
       drawBox(shot.bounds(), shot.owner === "player" ? "rgba(253,224,71,0.95)" : "rgba(248,113,113,0.95)");
+    }
+    for (const shot of this.hostileProjectiles || []) {
+      if (!shot.alive) continue;
+      drawBox(shot.bounds(), "rgba(248,113,113,0.95)");
     }
     for (const h of this.world?.hazards || []) {
       if (h.enabled) drawBox(h, "rgba(250,204,21,0.9)");

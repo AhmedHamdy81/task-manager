@@ -18,7 +18,8 @@ export const WAVE_TIMING = {
 export const WAVE_MIN_PLAYER_DX = 500;
 export const STUDIO_CLEAR_BONUS = 500;
 
-const ALLOWED = new Set(["post_producer", "client"]);
+export const WAVE_ENEMY_TYPES = new Set(["post_producer", "client", "colorist", "vfx_supervisor"]);
+const ALLOWED = WAVE_ENEMY_TYPES;
 
 export function resolveWaveEnemyType(typeId) {
   const id = migrateEnemyType(typeId);
@@ -57,7 +58,7 @@ function hazardBox(h) {
   return { x: h.x, y: h.y, w: h.w || 96, h: h.h || 96 };
 }
 
-function spawnBlocked(world, x, y, w, h, extras = []) {
+export function spawnBlocked(world, x, y, w, h, extras = []) {
   const box = { x: x - w / 2, y: y - h, w, h };
   const solids = world.solids || [];
   const buried = solids.some((s) => s.y + 8 < y - 8 && aabb(box, s));
@@ -71,6 +72,10 @@ function spawnBlocked(world, x, y, w, h, extras = []) {
   for (const hz of world.hazards || []) {
     if (hz.enabled === false) continue;
     if (aabb(box, hazardBox(hz))) return true;
+  }
+  for (const d of world.destructibles || []) {
+    if (!d.blocksMovement || d.state === "gone" || d.state === "rubble") continue;
+    if (aabb(box, d)) return true;
   }
   for (const p of world.props || []) {
     if (aabb(box, { x: p.x, y: p.y, w: p.w || 128, h: p.h || 128 })) return true;
@@ -88,7 +93,7 @@ function spawnBlocked(world, x, y, w, h, extras = []) {
   return false;
 }
 
-function collectFloorPoints(world) {
+export function collectFloorPoints(world) {
   const groundY = world.ground?.y ?? 960;
   const points = [];
   for (const z of world.spawnZones || []) {
