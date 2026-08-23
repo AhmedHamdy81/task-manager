@@ -1,4 +1,5 @@
 import { DESIGN_H, DESIGN_W } from "./config.js";
+import { PARTICLE_CYCLE, SHAKE_CYCLE } from "./presentation.js";
 
 export function menuButtons(items, y0 = DESIGN_H / 2 - 20, opts = {}) {
   const w = opts.w || 520;
@@ -100,13 +101,16 @@ export function settingsRows() {
     { id: "masterVolume", label: "Master volume", kind: "slider" },
     { id: "musicVolume", label: "Music volume", kind: "slider" },
     { id: "effectsVolume", label: "Effects volume", kind: "slider" },
+    { id: "voiceVolume", label: "Voice / video volume", kind: "slider" },
+    { id: "ambienceVolume", label: "Ambience volume", kind: "slider" },
     { id: "muted", label: "Mute", kind: "toggle" },
     { id: "fullscreen", label: "Fullscreen", kind: "toggle" },
-    { id: "screenShake", label: "Screen shake", kind: "toggle" },
+    { id: "screenShake", label: "Screen shake", kind: "cycle", values: SHAKE_CYCLE },
+    { id: "reducedFlashes", label: "Flashes", kind: "toggle", invertLabel: true },
+    { id: "particleDensity", label: "Particle density", kind: "cycle", values: PARTICLE_CYCLE },
+    { id: "hazardSymbols", label: "Warning symbols", kind: "toggle" },
+    { id: "captions", label: "Subtitles", kind: "toggle" },
     { id: "reducedMotion", label: "Reduced motion", kind: "toggle" },
-    { id: "reducedFlashes", label: "Reduce flashes", kind: "toggle" },
-    { id: "hazardSymbols", label: "Hazard symbols", kind: "toggle" },
-    { id: "captions", label: "Captions", kind: "toggle" },
     { id: "difficulty", label: "Difficulty", kind: "cycle" },
     { id: "BACK", label: "Back", kind: "action" },
   ];
@@ -125,36 +129,38 @@ export function drawSettings(ctx, settings, focus, extras = {}) {
 
   const rows = settingsRows();
   const x = DESIGN_W / 2 - 380;
-  const rowH = 58;
+  const rowH = 42;
   rows.forEach((row, i) => {
-    const y = 176 + i * rowH;
+    const y = 148 + i * rowH;
     const on = i === focus;
     ctx.fillStyle = on ? "#243044" : "#152033";
-    ctx.fillRect(x, y, 760, 52);
-    ctx.lineWidth = on ? 4 : 1;
+    ctx.fillRect(x, y, 760, 38);
+    ctx.lineWidth = on ? 3 : 1;
     ctx.strokeStyle = on ? "#f4f1ea" : "#e8b84a";
-    ctx.strokeRect(x + 0.5, y + 0.5, 759, 51);
+    ctx.strokeRect(x + 0.5, y + 0.5, 759, 37);
     if (on) {
       ctx.fillStyle = "#e8b84a";
-      ctx.font = "bold 20px sans-serif";
+      ctx.font = "bold 18px sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText("▸", x + 16, y + 34);
+      ctx.fillText("▸", x + 16, y + 26);
     }
     ctx.fillStyle = "#f4f1ea";
-    ctx.font = "bold 20px sans-serif";
+    ctx.font = "bold 18px sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText(row.label, x + 48, y + 34);
+    ctx.fillText(row.label, x + 48, y + 26);
     ctx.textAlign = "right";
     ctx.fillStyle = "#e8b84a";
     if (row.kind === "slider") {
       const v = Math.round((settings[row.id] ?? 0) * 100);
-      drawMeter(ctx, x + 400, y + 16, 280, 20, settings[row.id] ?? 0, on);
-      ctx.fillText(`${v}%`, x + 736, y + 34);
+      drawMeter(ctx, x + 400, y + 10, 280, 16, settings[row.id] ?? 0, on);
+      ctx.fillText(`${v}%`, x + 736, y + 26);
     } else if (row.kind === "toggle") {
-      const onVal = row.id === "fullscreen" ? Boolean(extras.fullscreen) : Boolean(settings[row.id]);
-      ctx.fillText(onVal ? "ON" : "OFF", x + 736, y + 34);
+      let onVal = row.id === "fullscreen" ? Boolean(extras.fullscreen) : Boolean(settings[row.id]);
+      if (row.id === "reducedFlashes") onVal = !settings.reducedFlashes;
+      const label = row.id === "reducedFlashes" ? (onVal ? "FULL" : "REDUCED") : onVal ? "ON" : "OFF";
+      ctx.fillText(label, x + 736, y + 26);
     } else if (row.kind === "cycle") {
-      ctx.fillText(String(settings[row.id] || "normal").toUpperCase(), x + 736, y + 34);
+      ctx.fillText(String(settings[row.id] || "normal").toUpperCase(), x + 736, y + 26);
     }
   });
 

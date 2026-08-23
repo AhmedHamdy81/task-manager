@@ -162,7 +162,8 @@ export const STUDIO_01 = {
   checkpoints: [
     { id: "studio_01_start", x: t(4), y: G, spawnX: t(4), spawnY: G, isStart: true, activated: true },
     { id: "studio_01_mid", x: t(62), y: G, spawnX: t(60), spawnY: G },
-    { id: "studio_01_boss", x: t(102), y: G, spawnX: t(100), spawnY: G },
+    { id: "studio_01_vehicle", x: t(63), y: G, spawnX: t(62), spawnY: G },
+    { id: "studio_01_boss", x: t(97), y: G, spawnX: t(97), spawnY: G },
   ],
   doors: [
     {
@@ -207,7 +208,7 @@ export const STUDIO_01 = {
   // Keep the fight on the left side of the locked exit door at tile 112.
   // The previous right edge (tile 117) spawned Boss 1 behind that solid door,
   // trapping him between the door and the world boundary.
-  bossArena: { left: t(98), right: t(111), groundY: G },
+  bossArena: { left: t(96), right: t(111), groundY: G },
   spawnZones: [
     { x: t(16), y: G, w: t(26) },
     { x: t(46), y: G, w: t(12) },
@@ -216,7 +217,7 @@ export const STUDIO_01 = {
   ],
   encounters: [
     ...STUDIO_01_ENCOUNTERS,
-    { id: "enc_final", boss: true, activateX: t(98), enemyIds: [] },
+    { id: "enc_final", boss: true, activateX: t(96), enemyIds: [] },
   ],
   hints: [
     { x: t(3.2), y: G - 150, text: "MOVE  A / D" },
@@ -226,6 +227,8 @@ export const STUDIO_01 = {
     { x: t(12), y: G - 150, text: "WATCH STEAM PUFFS" },
     { x: t(12), y: G - 178, text: "WEAPONS  1-4   CYCLE  E" },
     { x: t(14), y: G - t(4) - 150, text: "RESCUE  F / ENTER" },
+    { x: t(63), y: G - 150, text: "BATTLE DOLLY  F / ENTER" },
+    { x: t(63), y: G - 178, text: "HOP  W   FLASH  SPACE   BLAST  Q" },
   ],
   platforms: [
     { x: 0, y: 0, w: t(1), h: G },
@@ -335,6 +338,10 @@ export const STUDIO_01 = {
     { id: "studio_01_booth_sound", kind: "locked_sound_booth", x: t(14) + 24, y: G - t(4) },
     { id: "studio_01_cage_camera", kind: "equipment_cage", x: t(31), y: G },
     { id: "studio_01_debris_stunt", kind: "collapsed_set_debris", x: t(61), y: G },
+    { id: "studio_01_dolly_barricade_a", kind: "dolly_barricade", x: t(65) + 32, y: G },
+    { id: "studio_01_dolly_barricade_b", kind: "dolly_barricade", x: t(69) + 16, y: G },
+    { id: "studio_01_dolly_barricade_c", kind: "dolly_barricade", x: t(73) + 24, y: G },
+    { id: "studio_01_dolly_canister", kind: "compressed_air_canister", x: t(72) + 8, y: G },
     { id: "studio_01_barrier_intern", kind: "security_barrier", x: t(84) + 16, y: G - t(4) },
   ],
   rescues: [
@@ -371,6 +378,21 @@ export const STUDIO_01 = {
       escapeX: t(78),
     },
   ],
+  vehicles: [
+    {
+      id: "studio_01_battle_dolly",
+      kind: "battle_dolly",
+      sequenceId: "studio_01_battle_dolly",
+      x: t(63),
+      y: G,
+      left: t(62),
+      right: t(80),
+      stopX: t(79),
+      camLeft: t(62),
+      camRight: t(80),
+      encounterId: "enc_dolly",
+    },
+  ],
   pickups: [
     { id: "studio_01_mg", kind: "machine_gun", x: t(34), y: G - t(4) - 64 },
     { id: "studio_01_token_intro", kind: "production_token", x: t(28), y: G - 64 },
@@ -379,11 +401,13 @@ export const STUDIO_01 = {
     { id: "studio_01_ammo_post", kind: "ammo", x: t(56), y: G - 64 },
     { id: "studio_01_health_post", kind: "health", x: t(80), y: G - 64 },
     { id: "studio_01_shotgun", kind: "shotgun", x: t(70), y: G - t(4) - 64 },
+    { id: "studio_01_dolly_repair_a", kind: "vehicle_repair", x: t(67), y: G - 64 },
+    { id: "studio_01_dolly_repair_b", kind: "vehicle_repair", x: t(74), y: G - 64 },
     { id: "studio_01_key", kind: "access_key", x: t(86), y: G - t(4) - 64 },
     { id: "studio_01_health_pre_boss", kind: "health", x: t(96), y: G - 64 },
     { id: "studio_01_blaster", kind: "heavy_blaster", x: t(98), y: G - 64 },
     { id: "studio_01_energy_final", kind: "energy", x: t(100), y: G - 64 },
-    { id: "studio_01_bonus", kind: "bonus", x: t(108), y: G - 64 },
+    { id: "studio_01_bonus", kind: "bonus", x: t(113), y: G - 64 },
   ],
   props: [
     { frame: 0, x: t(2), y: G - 128, w: 128, h: 128, layer: "back" },
@@ -393,9 +417,9 @@ export const STUDIO_01 = {
     { frame: 6, x: t(58), y: G - 128, w: 128, h: 128, layer: "back" },
     { frame: 2, x: t(76), y: G - 128, w: 128, h: 128, layer: "back" },
     { frame: 5, x: t(90), y: G - 128, w: 128, h: 128, layer: "back" },
-    { frame: 5, x: t(102), y: G - 128, w: 128, h: 128, layer: "front" },
-    { frame: 4, x: t(106), y: G - 128, w: 128, h: 128, layer: "front" },
-    { frame: 4, x: t(109), y: G - 128, w: 128, h: 128, layer: "front" },
+    { frame: 5, x: t(114), y: G - 128, w: 128, h: 128, layer: "front" },
+    { frame: 4, x: t(115), y: G - 128, w: 128, h: 128, layer: "front" },
+    { frame: 4, x: t(116), y: G - 128, w: 128, h: 128, layer: "front" },
   ],
   ambients: [
     { kind: "monitor", x: t(3), y: G - 210, layer: "back" },
@@ -428,7 +452,7 @@ export const STUDIO_01 = {
     { label: "D  VFX BAY", x: t(46), y: 160, w: t(20), color: "#0e7490" },
     { label: "E  CLIENT REVIEW", x: t(66), y: 160, w: t(16), color: "#9f1239" },
     { label: "F  BOSS APPROACH", x: t(82), y: 160, w: t(16), color: "#854d0e" },
-    { label: "WRAP STAGE", x: t(98), y: 160, w: t(19), color: "#e8b84a" },
+    { label: "WRAP STAGE", x: t(96), y: 160, w: t(16), color: "#e8b84a" },
   ],
 };
 

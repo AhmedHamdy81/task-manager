@@ -6,12 +6,14 @@ export const CHARACTER_UNLOCKS = {
   assistant: { id: "assistant", always: true },
   vfx_supervisor: {
     id: "vfx_supervisor",
+    always: true,
     type: "completedLevel",
     levelId: "studio_01",
     label: "Defeat Boss 1",
   },
   colorist: {
     id: "colorist",
+    always: true,
     type: "completedLevel",
     levelId: "studio_02",
     label: "Complete Studio 02",

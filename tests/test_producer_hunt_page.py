@@ -173,7 +173,7 @@ class ProducerHuntPageTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         html = r.get_data(as_text=True)
         self.assertIn('data-allow-debug="0"', html)
-        self.assertIn("ph-20260819-clientvis", html)
+        self.assertIn("ph-20260819-waves", html)
 
     def test_machine_room_role_cannot_open_game(self):
         self.user.role = "machine_room"

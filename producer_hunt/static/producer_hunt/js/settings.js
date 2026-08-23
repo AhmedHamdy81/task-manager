@@ -1,17 +1,23 @@
 /** Lightweight persistence for Producer Hunt only. */
 
+import { MIX } from "./presentation.js";
+
 export const SETTINGS_KEY = "bigbangadmin.producer_hunt";
+
 export const LEGACY_SETTINGS_KEY = "producerHunt.settings";
 
 const ALLOWED_CHARACTER_IDS = new Set(["editor", "assistant", "colorist", "vfx_supervisor"]);
 const ALLOWED_LEVEL_IDS = new Set(["studio_01", "studio_02"]);
 
 export const SETTINGS_DEFAULTS = {
-  masterVolume: 1,
-  musicVolume: 0.45,
-  effectsVolume: 0.75,
+  masterVolume: MIX.masterVolume,
+  musicVolume: MIX.musicVolume,
+  effectsVolume: MIX.effectsVolume,
+  voiceVolume: MIX.voiceVolume,
+  ambienceVolume: MIX.ambienceVolume,
   muted: false,
-  screenShake: true,
+  screenShake: "full",
+  particleDensity: "medium",
   reducedMotion: false,
   reducedFlashes: false,
   hazardSymbols: true,
@@ -36,6 +42,17 @@ function warnRejected(reason) {
   console.warn(`[Producer Hunt] Save data was rejected or migrated. ${reason}`);
 }
 
+function normalizeShake(src) {
+  if (src.screenShake === false || src.screenShake === "off") return "off";
+  if (src.screenShake === "reduced") return "reduced";
+  return "full";
+}
+
+function normalizeDensity(src) {
+  if (src.particleDensity === "high" || src.particleDensity === "low") return src.particleDensity;
+  return "medium";
+}
+
 export function normalizeSettings(raw) {
   const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   if (raw != null && (typeof raw !== "object" || Array.isArray(raw))) {
@@ -53,8 +70,11 @@ export function normalizeSettings(raw) {
     masterVolume: clamp01(src.masterVolume, SETTINGS_DEFAULTS.masterVolume),
     musicVolume: clamp01(src.musicVolume, SETTINGS_DEFAULTS.musicVolume),
     effectsVolume: clamp01(src.effectsVolume, SETTINGS_DEFAULTS.effectsVolume),
+    voiceVolume: clamp01(src.voiceVolume, SETTINGS_DEFAULTS.voiceVolume),
+    ambienceVolume: clamp01(src.ambienceVolume, SETTINGS_DEFAULTS.ambienceVolume),
     muted: src.muted === true,
-    screenShake: src.screenShake !== false,
+    screenShake: normalizeShake(src),
+    particleDensity: normalizeDensity(src),
     reducedMotion: src.reducedMotion === true,
     reducedFlashes: src.reducedFlashes === true,
     hazardSymbols: src.hazardSymbols !== false,

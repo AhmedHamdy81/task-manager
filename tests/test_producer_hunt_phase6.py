@@ -62,7 +62,7 @@ class ProducerHuntPhase6Tests(unittest.TestCase):
         self.assertNotIn("rescues:", self.s2)
         self.assertIn("instantiateRescue", self.world)
         self.assertIn("x: t(84) + 36", self.s1)
-        self.assertIn("activateX: t(98)", self.s1)
+        self.assertIn("activateX: t(96)", self.s1)
 
     def test_wiring_hud_checkpoint_input(self):
         self.assertIn("tickRescues(this, dt)", self.game)
@@ -70,8 +70,7 @@ class ProducerHuntPhase6Tests(unittest.TestCase):
         self.assertIn("applyRescueSnapshot(this.world, snap.rescues)", self.game)
         self.assertIn("preloadRescueKits", self.game)
         self.assertIn("drawRescueHud", self.game)
-        self.assertIn("CREW", self.hud)
-        self.assertIn("Crew rescued", self.game)
+        self.assertIn("Crew rescued", self.hud)
         self.assertIn("interact:", self.cfg)
         self.assertIn('consume("special")', self.player)
         self.assertIn("rescueBuff", self.player)

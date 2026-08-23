@@ -7,7 +7,7 @@ const W = t(142);
 export const STUDIO_02 = {
   id: "studio_02",
   name: "Client Review",
-  music: "studio_01_theme",
+  music: "music_gameplay",
   worldWidth: W,
   worldHeight: 1080,
   background: {
@@ -86,12 +86,16 @@ export const STUDIO_02 = {
   ],
   pickups: [
     { id: "studio_02_token_bay", kind: "production_token", x: t(40), y: G - t(4) - 64 },
+    { id: "studio_02_mg", kind: "machine_gun", x: t(34), y: G - 64 },
     { id: "studio_02_health_mixed", kind: "health", x: t(68), y: G - 64 },
     { id: "studio_02_energy_corridor", kind: "energy", x: t(72), y: G - 64 },
+    { id: "studio_02_ammo_corridor", kind: "ammo", x: t(74), y: G - 64 },
+    { id: "studio_02_shotgun", kind: "shotgun", x: t(86), y: G - t(4) - 64 },
     { id: "studio_02_token_opt_a", kind: "production_token", x: t(80), y: G - t(4) - 64 },
     { id: "studio_02_token_opt_b", kind: "production_token", x: t(88), y: G - t(4) - 64 },
     { id: "studio_02_key", kind: "access_key", x: t(95), y: G - t(4) - 64 },
     { id: "studio_02_health_final", kind: "health", x: t(104), y: G - 64 },
+    { id: "studio_02_blaster", kind: "heavy_blaster", x: t(105), y: G - 64 },
     { id: "studio_02_energy_final", kind: "energy", x: t(106), y: G - 64 },
     { id: "studio_02_bonus", kind: "bonus", x: t(130), y: G - 64 },
   ],

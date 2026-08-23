@@ -2,6 +2,8 @@
  * One-shot HTML video overlay for Producer Hunt cinematics.
  * Completes exactly once from ended, skip, error, timeout, or cancel.
  */
+import { BOSS_DEFEAT_SRC, BOSS_INTRO_SRC } from "./config.js";
+
 const SKIP_GUARD_SEC = 0.5;
 const DEFAULT_TIMEOUT_SEC = 14;
 const VIDEO_VOLUME = 0.8;
@@ -14,7 +16,9 @@ export class CinematicPlayer {
     this.skipBtn = elements.skipBtn || null;
     this._playing = false;
     this._completed = false;
+    this._allowSkip = true;
     this._onComplete = null;
+    this._failMessage = "";
     this._skipReadyAt = 0;
     this._timeout = 0;
     this._onEnded = () => this.complete("ended");
@@ -36,9 +40,17 @@ export class CinematicPlayer {
     this.skipBtn = elements.skipBtn || this.skipBtn;
   }
 
+  assetSrc(rel) {
+    const path = rel || "";
+    return this.game.assets?.url?.(path) || `${this.game.assets?.baseUrl || ""}/${path}`;
+  }
+
   introSrc() {
-    const rel = "videos/boss_01_intro.mp4";
-    return this.game.assets?.url?.(rel) || `${this.game.assets?.baseUrl || ""}/${rel}`;
+    return this.assetSrc(BOSS_INTRO_SRC);
+  }
+
+  defeatSrc() {
+    return this.assetSrc(BOSS_DEFEAT_SRC);
   }
 
   applyMix() {
@@ -46,12 +58,38 @@ export class CinematicPlayer {
     if (!video) return;
     const muted = Boolean(this.game.audio?.muted || this.game.settings?.muted);
     const master = Number(this.game.audio?.volumes?.master);
-    const vol = (Number.isFinite(master) ? master : 1) * VIDEO_VOLUME;
+    const voice = Number(this.game.audio?.volumes?.voice);
+    const vol =
+      (Number.isFinite(master) ? master : 1) * (Number.isFinite(voice) ? voice : VIDEO_VOLUME);
     video.muted = muted;
     video.volume = muted ? 0 : Math.max(0, Math.min(1, vol));
   }
 
-  async playBossIntro({ src, onComplete, timeoutSec = DEFAULT_TIMEOUT_SEC } = {}) {
+  playBossIntro(options = {}) {
+    return this.playCinematic({
+      src: this.introSrc(),
+      timeoutSec: 14,
+      failMessage: "[Producer Hunt] Boss intro playback failed. Starting the encounter.",
+      ...options,
+    });
+  }
+
+  playBossDefeat(options = {}) {
+    return this.playCinematic({
+      src: this.defeatSrc(),
+      timeoutSec: 20,
+      failMessage: "[Producer Hunt] Boss defeat video failed. Continuing to results.",
+      ...options,
+    });
+  }
+
+  async playCinematic({
+    src,
+    allowSkip = true,
+    timeoutSec = DEFAULT_TIMEOUT_SEC,
+    onComplete,
+    failMessage,
+  } = {}) {
     if (this._playing) return;
     this.bindDom({
       root: this.root || document.querySelector(".ph-boss-intro"),
@@ -60,7 +98,9 @@ export class CinematicPlayer {
     });
     this._playing = true;
     this._completed = false;
+    this._allowSkip = allowSkip !== false;
     this._onComplete = typeof onComplete === "function" ? onComplete : null;
+    this._failMessage = failMessage || "[Producer Hunt] Cinematic playback failed.";
     this._skipReadyAt = performance.now() + SKIP_GUARD_SEC * 1000;
 
     this.game.beginCinematic?.();
@@ -77,6 +117,7 @@ export class CinematicPlayer {
     this.root.hidden = false;
     this.root.classList.add("is-visible");
     this.root.setAttribute("aria-hidden", "false");
+    if (this.skipBtn) this.skipBtn.hidden = !this._allowSkip;
     this.video.setAttribute("playsinline", "");
     this.video.setAttribute("preload", "auto");
     this.video.playsInline = true;
@@ -86,7 +127,7 @@ export class CinematicPlayer {
 
     this.video.addEventListener("ended", this._onEnded);
     this.video.addEventListener("error", this._onError);
-    this.skipBtn?.addEventListener("click", this._onSkipClick);
+    if (this._allowSkip) this.skipBtn?.addEventListener("click", this._onSkipClick);
 
     const ms = Math.max(3000, (Number(timeoutSec) || DEFAULT_TIMEOUT_SEC) * 1000);
     this._timeout = window.setTimeout(() => this.complete("timeout"), ms);
@@ -94,14 +135,13 @@ export class CinematicPlayer {
     try {
       this.video.load();
       await this.video.play();
-    } catch (err) {
-      console.warn("[Producer Hunt] Boss intro playback failed. Starting the encounter.", err);
+    } catch {
       this.complete("rejected");
     }
   }
 
   trySkip() {
-    if (!this._playing) return false;
+    if (!this._playing || !this._allowSkip) return false;
     if (performance.now() < this._skipReadyAt) return false;
     this.complete("skip");
     return true;
@@ -161,15 +201,18 @@ export class CinematicPlayer {
     this.game.input?.clearTransient?.();
     const done = this._onComplete;
     this._onComplete = null;
+    if (reason === "error" || reason === "rejected" || reason === "missing-dom" || reason === "timeout") {
+      console.warn(this._failMessage);
+    }
     if (reason === "cancel") return;
-    const startCombat = () => {
+    const finish = () => {
       if (typeof done === "function") done(reason);
     };
     const resume = this.game.audio?.unlock?.();
     if (resume && typeof resume.then === "function") {
-      resume.then(startCombat, startCombat);
+      resume.then(finish, finish);
       return;
     }
-    startCombat();
+    finish();
   }
 }

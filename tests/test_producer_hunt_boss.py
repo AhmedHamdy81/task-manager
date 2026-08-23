@@ -23,6 +23,7 @@ def png_size(path: Path) -> tuple[int, int]:
 class ProducerHuntBossTests(unittest.TestCase):
     def setUp(self):
         self.boss = (JS / "boss.js").read_text()
+        self.brain = (JS / "boss-brain.js").read_text()
         self.combat = (JS / "combat.js").read_text()
         self.enemy = (JS / "enemy.js").read_text()
         self.game = (JS / "game.js").read_text()
@@ -39,41 +40,57 @@ class ProducerHuntBossTests(unittest.TestCase):
         self.assertIn("export const BOSS_01", self.combat)
         self.assertIn('displayName: "ESSAM SALAMA"', self.combat)
         self.assertIn('title: "THE MASTER BARBER"', self.combat)
-        self.assertIn("maxHealth: 50 * COMBAT.player.damage", self.combat)
+        self.assertIn("maxHealth: 120 * COMBAT.player.damage", self.combat)
         self.assertIn("contactDamage: 2 * COMBAT.player.damage", self.combat)
         self.assertIn("projectileDamage: 1 * COMBAT.player.damage", self.combat)
-        self.assertIn("walkSpeed: 80", self.combat)
-        self.assertIn("chargeSpeed: 360", self.combat)
-        self.assertIn("attackCooldown: 1.8", self.combat)
-        self.assertIn("hitInvuln: 0.18", self.combat)
-        self.assertIn("phaseTwoHealthRatio: 0.5", self.combat)
-        self.assertIn("scoreValue: 3000", self.combat)
-        self.assertIn("walkSpeedMul: 1.2", self.combat)
-        self.assertIn("attackCooldownMul: 0.72", self.combat)
-        self.assertIn("chargeSpeedMul: 1.18", self.combat)
+        self.assertIn("walkSpeed: 90", self.combat)
+        self.assertIn("chargeSpeed: 430", self.combat)
+        self.assertIn("attackCooldown: 1.6", self.combat)
+        self.assertIn("hitInvuln: 0.05", self.combat)
+        self.assertIn("phaseTwoHealthRatio: 0.65", self.combat)
+        self.assertIn("phaseThreeHealthRatio: 0.32", self.combat)
+        self.assertIn("healthDropSec: 15", self.combat)
+        self.assertIn("studio_01_health_pre_boss", self.level)
+        self.assertIn("_spawnHealthDrop", self.boss)
+        self.assertIn("instantiatePickup", self.boss)
+        self.assertIn("walkSpeedMul: 1.12", self.combat)
+        self.assertIn("attackCooldownMul: 0.88", self.combat)
+        self.assertIn("chargeSpeedMul: 1.06", self.combat)
         for state in (
-            "spawning",
-            "idle",
-            "approach",
-            "throw_prepare",
-            "throw_attack",
-            "melee_attack",
-            "charge_prepare",
-            "charge",
-            "charge_recovery",
+            "inactive",
+            "intro",
+            "ready",
+            "choose_attack",
+            "move",
+            "telegraph",
+            "attack",
+            "recover",
             "hit",
             "phase_transition",
+            "stagger",
             "death",
-            "complete",
+            "completed",
         ):
-            self.assertIn(f'{state}: "{state}"', self.boss)
-        self.assertIn("export class BossEnemy", self.boss)
+            self.assertIn(f'{state}: "{state}"', self.brain)
+        for alias in (
+            'spawning: "ready"',
+            'idle: "choose_attack"',
+            'approach: "move"',
+            'throw_prepare: "telegraph"',
+            'charge_prepare: "telegraph"',
+            'throw_attack: "attack"',
+            'melee_attack: "attack"',
+            'charge: "attack"',
+            'charge_recovery: "recover"',
+            'complete: "completed"',
+        ):
+            self.assertIn(alias, self.brain)
+        self.assertIn("export class BossEnemy", self.brain)
         self.assertIn("export class BossEncounter", self.boss)
         self.assertIn("export class HostileProjectilePool", self.boss)
-        self.assertIn("phaseShifted", self.boss)
-        self.assertIn("ATTACK_LOCK", self.boss)
-        self.assertIn("throwReleaseFrame", self.boss)
-        self.assertIn("meleeActive", self.boss)
+        self.assertIn("phaseShifted", self.brain)
+        self.assertIn("throwReleaseFrame", self.combat)
+        self.assertIn("meleeActive", self.brain)
         self.assertNotIn("executive_producer", self.boss)
         self.assertNotIn("assistant_producer/", self.boss)
 
@@ -146,7 +163,7 @@ class ProducerHuntBossTests(unittest.TestCase):
         self.assertIn("collisionHeight: 198", self.enemy)
         self.assertIn("hitboxEnabled", self.enemy)
         self.assertIn("loadEnemyKit(ENEMY_TYPES.boss_01.sprite)", self.game)
-        self.assertEqual(self.level.count('type: "post_producer"'), 3)
+        self.assertGreaterEqual(self.level.count('type: "post_producer"'), 5)
         self.assertNotIn('type: "executive_producer"', self.level)
         self.assertNotIn('type: "boss_01"', self.level)
         self.assertIn("meleeHitOnce", self.game)

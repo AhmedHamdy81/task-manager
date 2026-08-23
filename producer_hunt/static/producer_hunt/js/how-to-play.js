@@ -266,7 +266,7 @@ function drawStatBar(ctx, x, y, value) {
 }
 
 function enabledPickups() {
-  return Object.values(PICKUP_DEFS).filter((d) => d && !d.reserved && d.effect !== "none");
+  return Object.values(PICKUP_DEFS).filter((d) => d && !d.reserved && d.effect !== "none" && d.effect !== "vehicle_repair");
 }
 
 function enabledHazards() {
@@ -511,7 +511,7 @@ export class HowToPlay {
       ["WEAPON 1-4", formatCodes([...(keymap.weapon1 || []), ...(keymap.weapon2 || []), ...(keymap.weapon3 || []), ...(keymap.weapon4 || [])])],
       ["CYCLE WEAPON", formatCodes(keymap.weaponCycle)],
       ["SPECIAL POWER", formatCodes(keymap.special)],
-      ["RESCUE", formatCodes(keymap.interact || keymap.confirm)],
+      ["RESCUE / VEHICLE", formatCodes(keymap.interact || keymap.confirm)],
       ["PAUSE", formatCodes(keymap.pause)],
       ["CONFIRM", formatCodes(keymap.confirm)],
     ];
@@ -531,7 +531,7 @@ export class HowToPlay {
       ["SHOOT", "X"],
       ["CYCLE WEAPON", "LB"],
       ["SPECIAL POWER", "RB / RT"],
-      ["RESCUE", "Y"],
+      ["RESCUE / VEHICLE", "Y"],
       ["PAUSE", "B / Start"],
       ["CONFIRM", "A"],
     ];

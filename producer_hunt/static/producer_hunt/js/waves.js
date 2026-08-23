@@ -16,7 +16,7 @@ export const WAVE_TIMING = {
 };
 
 export const WAVE_MIN_PLAYER_DX = 500;
-export const STUDIO_CLEAR_BONUS = 500;
+export const STUDIO_CLEAR_BONUS = 5000;
 
 export const WAVE_ENEMY_TYPES = new Set(["post_producer", "client", "colorist", "vfx_supervisor"]);
 const ALLOWED = WAVE_ENEMY_TYPES;

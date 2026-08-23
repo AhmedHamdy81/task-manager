@@ -8,6 +8,7 @@ import { COMBAT } from "./combat.js";
 import { drawSheetFrame } from "./asset-catalog.js";
 import { WEAPON_SOUND_ID } from "./audio-catalog.js";
 import { EMPTY_CLICK_SEC, EMPTY_SWAP_SEC, WeaponLoadout, validatePlayerWeapons } from "./player-weapons.js";
+import { nextVolleyId } from "./score-manager.js";
 
 export class Player {
   constructor(character, spawn, spriteKit = null) {
@@ -67,7 +68,10 @@ export class Player {
     this.shooting = false;
     this._firedClip = false;
     this._wasAirborne = false;
+    this.landTimer = 0;
     this._jumpCutPending = false;
+    this.mounted = false;
+    this.hidden = false;
   }
 
   _standingBox() {
@@ -241,6 +245,17 @@ export class Player {
     this.ability.update(dt, ctx);
     this._updateEmptyWeapon(dt, ctx);
 
+    if (this.mounted) {
+      this.vx = 0;
+      this.vy = 0;
+      this.shooting = false;
+      this.jumpBuffer = 0;
+      this.anim.play("idle");
+      this.anim.flip = this.facing < 0;
+      this.anim.update(dt);
+      return;
+    }
+
     const locked = Boolean(ctx?.inputLocked);
     const wantCrouch = !locked && input.isDown("crouch") && this.onGround;
     if (wantCrouch) this.crouching = true;
@@ -302,8 +317,19 @@ export class Player {
     this._updateJumpRecord();
     if (wasAirborne && this.onGround) {
       this._finishJumpRecord();
+      this.landTimer = 0.14;
       ctx?.audio?.playSound?.("player_land");
+      ctx?.spawnFx?.({
+        sheetKey: "effects",
+        frame: 0,
+        x: this.footX,
+        y: this.footY - 8,
+        size: 48,
+        life: 0.18,
+        kind: "dust",
+      });
     }
+    if (this.landTimer > 0) this.landTimer = Math.max(0, this.landTimer - dt);
     this._wasAirborne = !this.onGround;
 
     if (!locked) this._handleWeaponSwitch(input, ctx);
@@ -374,6 +400,8 @@ export class Player {
       return;
     }
     if (!attack.fired) return;
+    const volleyId = nextVolleyId();
+    ctx.scoreboard?.noteAttackFired(volleyId);
     const def = attack.weapon;
     const sheet = ctx.assets?.sheet(def.projectileAsset || "projectiles") || ctx.assets?.sheet("projectiles") || null;
     const sfx = WEAPON_SOUND_ID[def.id] || def.shotSfx || "player_shoot";
@@ -387,7 +415,31 @@ export class Player {
       size: fx.size,
       life: fx.life,
       flipX: this.facing < 0,
+      kind: "muzzle",
     });
+    if (def.id === "shotgun" && !ctx.settings?.reducedFlashes) {
+      ctx.spawnFx?.({
+        sheetKey: "effects",
+        frame: 5,
+        x: muzzle.x + this.facing * 18,
+        y: muzzle.y,
+        size: 72,
+        life: 0.14,
+        flipX: this.facing < 0,
+        kind: "extra",
+      });
+    }
+    if (def.id === "heavy_blaster") {
+      ctx.spawnFx?.({
+        sheetKey: "effects",
+        frame: 7,
+        x: muzzle.x,
+        y: muzzle.y,
+        size: 56,
+        life: 0.12,
+        kind: "extra",
+      });
+    }
     if (def.casing) {
       ctx.spawnFx?.({
         sheetKey: "effects",
@@ -404,6 +456,7 @@ export class Player {
       shot.sheet = sheet;
       shot.owner = "player";
       shot.faction = "player";
+      shot.volleyId = volleyId;
       projectiles.push(shot);
     }
     ctx?.hud?.invalidate?.();
@@ -412,10 +465,16 @@ export class Player {
   _desiredAnim() {
     if (!this.alive) return "death";
     if (this.hitFlash > 0) return "hit";
+    const powerId = this.ability?.id || "";
+    if (this.ability?.active > 0 && powerId !== "timeline_freeze" && powerId !== "production_rush") {
+      return "special";
+    }
     if (this.crouching && this.shooting) return "crouch_shoot";
+    if (this.shooting && this.onGround && !this.crouching && Math.abs(this.vx) > 40) return "run_shoot";
     if (this.shooting) return "shoot";
     if (!this.onGround) return this.vy < 0 ? "jump" : "fall";
     if (this.crouching) return "crouch";
+    if (this.landTimer > 0 && Math.abs(this.vx) < 40) return "land";
     if (Math.abs(this.vx) > 20) return "run";
     return "idle";
   }
@@ -423,7 +482,9 @@ export class Player {
   _animState() {
     const desired = this._desiredAnim();
     const cur = this.anim.name;
-    const locked = (cur === "death" && !this.anim.finished) || (cur === "hit" && !this.anim.finished && desired !== "death");
+    const locked =
+      (cur === "death" && !this.anim.finished) ||
+      (cur === "hit" && !this.anim.finished && desired !== "death");
     if (locked) return;
     const restartOnce = (desired === "shoot" || desired === "crouch_shoot") && this.anim.finished;
     const started = this.anim.play(desired, { restart: restartOnce });
@@ -431,6 +492,7 @@ export class Player {
   }
 
   takeDamage(amount, opts = {}) {
+    if (this.mounted) return 0;
     if (!this.alive || this.invuln > 0) return 0;
     const amt = Number(amount);
     if (!Number.isFinite(amt) || amt <= 0) return 0;
@@ -441,7 +503,7 @@ export class Player {
       amtTaken = Math.max(1, Math.round(amtTaken * (this.rescueBuff.defenseMul || 0.75)));
     }
     this.health = Math.max(0, this.health - amtTaken);
-    this.invuln = PLAYER_INVULN_SEC;
+    this.invuln = this.host?.playerInvulnSec?.() ?? PLAYER_INVULN_SEC;
     this.hitFlash = PLAYER_HIT_FLASH_SEC;
     this.anim.play("hit", { restart: true });
     if (opts.knockbackX != null && this.health > 0) {
@@ -453,6 +515,11 @@ export class Player {
       this.health = 0;
       this.vx = 0;
       this.anim.play("death", { restart: true });
+    }
+    if (amtTaken > 0) {
+      this.host?.scoreboard?.noteDamageTaken(amtTaken, {
+        encounterId: (this.host.world?.encounters || []).find((e) => e.scripted && e.locked && !e.cleared)?.id || "",
+      });
     }
     return before - this.health;
   }
@@ -471,7 +538,14 @@ export class Player {
   }
 
   draw(ctx, camera, assets = null) {
+    if (this.hidden) return;
     const origin = camera.worldToScreen(this.footX, this.footY);
+    ctx.save();
+    ctx.fillStyle = "rgba(8, 12, 20, 0.45)";
+    ctx.beginPath();
+    ctx.ellipse(origin.x, origin.y - 4, 34, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
     const color = this.character.color;
     const initials = this.character.initials;
     if (this.hitFlash > 0) ctx.globalAlpha = 0.7;

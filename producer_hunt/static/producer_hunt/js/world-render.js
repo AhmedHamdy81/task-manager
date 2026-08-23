@@ -40,6 +40,10 @@ export function drawTiledPlatforms(ctx, assets, solids, camera) {
         else if (i > 0 && remaining > TILE_W && i % 3 === 2) frame = TILE.midAlt;
         const screen = camera.worldToScreen(x, y);
         drawSheetFrame(ctx, sheet, frame, screen.x, screen.y, tw, th);
+        if (row === 0) {
+          ctx.fillStyle = "rgba(251, 191, 36, 0.35)";
+          ctx.fillRect(screen.x, screen.y, tw, 3);
+        }
         i += 1;
       }
       row += 1;
@@ -77,7 +81,7 @@ export function drawHints(ctx, hints, camera) {
 }
 
 export function drawPickups(ctx, assets, pickups, camera, now = 0) {
-  const sheet = assets.sheet("pickups");
+  const defaultSheet = assets.sheet("pickups");
   for (const p of pickups) {
     if (p.taken || p.reserved) continue;
     const vis = p.vis || 64;
@@ -85,9 +89,18 @@ export function drawPickups(ctx, assets, pickups, camera, now = 0) {
     const cy = p.y + p.h / 2 + Math.sin(now / 420 + p.x * 0.01) * 5;
     const s = camera.worldToScreen(cx - vis / 2, cy - vis / 2);
     const frame = p.frame ?? 0;
+    const sheet = assets.sheet(p.sheetKey || "pickups") || defaultSheet;
     if (!drawSheetFrame(ctx, sheet, frame, s.x, s.y, vis, vis)) {
-      ctx.fillStyle = p.kind === "health" ? "#4ade80" : "#fbbf24";
+      ctx.fillStyle = p.kind === "health" ? "#4ade80" : p.effect === "weapon" ? "#38bdf8" : "#fbbf24";
       ctx.fillRect(s.x + vis * 0.2, s.y + vis * 0.2, vis * 0.6, vis * 0.6);
+    }
+    if (p.label) {
+      ctx.save();
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#f8fafc";
+      ctx.fillText(p.label, s.x + vis / 2, s.y - 4);
+      ctx.restore();
     }
   }
 }
@@ -95,6 +108,7 @@ export function drawPickups(ctx, assets, pickups, camera, now = 0) {
 export function drawHazards(ctx, assets, hazards, camera) {
   const sheet = assets.sheet("hazards");
   for (const h of hazards || []) {
+    if (h.cycle) continue;
     const vis = h.vis || 128;
     const s = camera.worldToScreen(h.drawX, h.drawY);
     if (!drawSheetFrame(ctx, sheet, h.frame || 0, s.x, s.y, vis, vis)) {

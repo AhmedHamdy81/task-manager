@@ -1,4 +1,4 @@
-"""The Client enemy is a second type; studio_01 stays Post Producer only."""
+"""The Client is the second enabled enemy type; Studio 01 wave 2 uses it."""
 
 from __future__ import annotations
 
@@ -38,12 +38,13 @@ class ProducerHuntClientTests(unittest.TestCase):
         catalog = (JS / "asset-catalog.js").read_text()
         self.assertIn("client:", enemy)
         self.assertIn('name: "The Client"', enemy)
-        self.assertIn('behavior: "cautious_ranged"', enemy)
+        self.assertIn('behavior: "elite"', enemy)
         self.assertIn("artFacing: -1", enemy)
         self.assertIn("preferredRange: 380", enemy)
         self.assertIn("minRetreatRange: 190", enemy)
         self.assertIn("collisionWidth: 54", enemy)
-        self.assertIn("collisionHeight: 152", enemy)
+        self.assertIn("collisionHeight: 210", enemy)
+        self.assertIn("_aiRanged", enemy)
         self.assertIn("_updateCautiousRanged", enemy)
         self.assertIn("_canStep", enemy)
         self.assertIn("_applyFacingFlip", enemy)
@@ -51,22 +52,27 @@ class ProducerHuntClientTests(unittest.TestCase):
         self.assertIn('client: "client_revision_pulse"', combat)
         self.assertIn("client_revision_pulse:", combat)
         self.assertIn("hitH: 18", combat)
-        self.assertIn("speed: 420", combat)
-        self.assertIn("cooldown: 1.5", combat)
+        self.assertIn("speed: 520", combat)
+        self.assertIn("cooldown: 1.8", combat)
         self.assertIn('sheetKey: "client_impact"', combat)
         self.assertIn("enemies/client/effects/client_attack_impact.png", catalog)
         self.assertNotIn("assistant_producer/", enemy)
         self.assertNotIn("enemies/assistant_producer", catalog)
 
-    def test_studio_01_client_test_and_studio_02_mixed(self):
+    def test_studio_01_waves_and_studio_02_mixed(self):
         s1 = (JS / "levels" / "studio-01.js").read_text()
         s2 = (JS / "levels" / "studio-02.js").read_text()
         index = (JS / "levels" / "level-01.js").read_text()
         game = (JS / "game.js").read_text()
-        self.assertIn('id: "studio_01_client_test_01"', s1)
+        self.assertIn("STUDIO_01_WAVES", s1)
+        self.assertIn("STUDIO_01_ENCOUNTERS", s1)
+        self.assertIn('id: "enc_intro"', s1)
+        self.assertIn('id: "enc_client"', s1)
+        self.assertIn('id: "enc_gauntlet"', s1)
         self.assertIn('type: "client"', s1)
-        self.assertIn("enc_client_test", s1)
-        self.assertEqual(s1.count('type: "post_producer"'), 5)
+        self.assertGreaterEqual(s1.count('type: "post_producer"'), 5)
+        self.assertNotIn("studio_01_client_test_01", s1)
+        self.assertNotIn("assistant_producer", s1)
         self.assertIn('id: "studio_02"', s2)
         self.assertIn('name: "Client Review"', s2)
         self.assertIn('type: "client"', s2)

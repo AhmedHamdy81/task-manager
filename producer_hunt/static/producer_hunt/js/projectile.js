@@ -26,8 +26,19 @@ export class Projectile {
     animFps = 0,
     spin = 0,
     gravity = 0,
+    makeHazard = false,
+    hazardDamage = 0,
     interruptMove = false,
     tint = "",
+    splashRadius = 0,
+    splashDamage = 0,
+    weaponId = "",
+    bossDamageMul = 1,
+    hitStop = "none",
+    impactSfx = "",
+    cameraShake = 0,
+    hitGroup = "",
+    volleyId = "",
   } = {}) {
     this.x = x;
     this.y = y;
@@ -58,8 +69,21 @@ export class Projectile {
     this.spin = Number(spin) || 0;
     this.angle = 0;
     this.gravity = Number(gravity) || 0;
+    this.makeHazard = Boolean(makeHazard);
+    this.hazardDamage = Number(hazardDamage) || 0;
     this.interruptMove = Boolean(interruptMove);
     this.tint = tint || "";
+    this.splashRadius = Number(splashRadius) || 0;
+    this.splashDamage = Number(splashDamage) || 0;
+    this.weaponId = weaponId || "";
+    this.bossDamageMul = Number(bossDamageMul) || 1;
+    this.hitStop = hitStop || "none";
+    this.impactSfx = impactSfx || "";
+    this.cameraShake = Number(cameraShake) || 0;
+    this.hitTargets = null;
+    this.hitGroup = hitGroup || "";
+    this.volleyId = volleyId || "";
+    this._splashDone = false;
     return this;
   }
 
@@ -77,13 +101,17 @@ export class Projectile {
     this.hasHit = true;
   }
 
-  recycle() {
+    recycle() {
     this.disable();
     this.x = 0;
     this.y = 0;
     this.vx = 0;
     this.vy = 0;
     this.sheet = null;
+    this.alive = false;
+    this.spent = true;
+    this.hasHit = true;
+    this.age = 0;
   }
 
   update(dt) {

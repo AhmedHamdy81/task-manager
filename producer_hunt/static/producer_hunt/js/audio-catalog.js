@@ -1,15 +1,13 @@
 /** Data-driven Producer Hunt audio registry. MP3 files are optional until supplied. */
 
+import { MIX } from "./presentation.js";
+
 export const AUDIO_BASE = "audio";
 export const AUDIO_EXTENSIONS = [".mp3"];
 export const MUSIC_CROSSFADE_SEC = 0.7;
 export const MUSIC_LOOP_CROSSFADE_SEC = 0.35;
 
-export const DEFAULT_MIX = {
-  masterVolume: 1,
-  musicVolume: 0.45,
-  effectsVolume: 0.75,
-};
+export const DEFAULT_MIX = { ...MIX };
 
 function sound(id, file, category, extra = {}) {
   return {
@@ -20,7 +18,8 @@ function sound(id, file, category, extra = {}) {
     loop: false,
     maxInstances: 2,
     cooldown: 0.05,
-    spatial: category === "effects",
+    spatial: category === "effects" || category === "ambience",
+    priority: extra.priority != null ? extra.priority : category === "ui" ? 3 : 2,
     ...extra,
   };
 }
@@ -71,16 +70,25 @@ export const SOUND_DEFS = {
     cooldown: 0,
     spatial: false,
   }),
+  music_results: sound("music_results", "music/results_theme", "music", {
+    volume: 0.4,
+    loop: true,
+    maxInstances: 1,
+    cooldown: 0,
+    spatial: false,
+  }),
   player_shoot: sound("player_shoot", "sfx/player_shoot", "effects", {
     volume: 0.72,
-    maxInstances: 8,
-    cooldown: 0.02,
+    maxInstances: 4,
+    cooldown: 0.04,
+    priority: 2,
   }),
   player_hit: sound("player_hit", "sfx/player_hit", "effects", {
     volume: 0.65,
     maxInstances: 1,
     cooldown: 0.12,
     spatial: false,
+    priority: 3,
   }),
   player_jump: sound("player_jump", "sfx/player_jump", "effects", {
     volume: 0.6,
@@ -99,6 +107,7 @@ export const SOUND_DEFS = {
     maxInstances: 1,
     cooldown: 0.4,
     spatial: false,
+    priority: 3,
   }),
   enemy_hit: sound("enemy_hit", "sfx/enemy_hit", "effects", {
     volume: 0.65,
@@ -140,6 +149,7 @@ export const SOUND_DEFS = {
     maxInstances: 1,
     cooldown: 0.5,
     spatial: false,
+    priority: 3,
   }),
   level_complete: sound("level_complete", "sfx/level_complete", "effects", {
     volume: 0.8,
@@ -177,12 +187,13 @@ export const SOUND_DEFS = {
     cooldown: 0.12,
     spatial: false,
   }),
-  env_ambience: sound("env_ambience", "sfx/environment/studio_ambience", "effects", {
+  env_ambience: sound("env_ambience", "sfx/environment/studio_ambience", "ambience", {
     volume: 0.18,
     loop: true,
     maxInstances: 1,
     cooldown: 0,
     spatial: false,
+    priority: 1,
   }),
   env_steam: sound("env_steam", "sfx/environment/steam_vent", "effects", {
     volume: 0.45,
@@ -204,11 +215,12 @@ export const SOUND_DEFS = {
     maxInstances: 2,
     cooldown: 0.2,
   }),
-  env_machine: sound("env_machine", "sfx/environment/machinery", "effects", {
+  env_machine: sound("env_machine", "sfx/environment/machinery", "ambience", {
     volume: 0.22,
     loop: true,
     maxInstances: 1,
     cooldown: 0,
+    priority: 1,
   }),
   env_reel: sound("env_reel", "sfx/environment/film_reel", "effects", {
     volume: 0.2,
@@ -219,6 +231,64 @@ export const SOUND_DEFS = {
     volume: 0.5,
     maxInstances: 1,
     cooldown: 0.4,
+  }),
+  vehicle_engine_loop: sound("vehicle_engine_loop", "sfx/vehicles/engine_loop", "effects", {
+    volume: 0.3,
+    loop: true,
+    maxInstances: 1,
+    cooldown: 0,
+    spatial: false,
+  }),
+  vehicle_enter: sound("vehicle_enter", "sfx/vehicles/enter", "effects", {
+    volume: 0.62,
+    maxInstances: 1,
+    cooldown: 0.2,
+  }),
+  vehicle_exit: sound("vehicle_exit", "sfx/vehicles/exit", "effects", {
+    volume: 0.62,
+    maxInstances: 1,
+    cooldown: 0.2,
+  }),
+  vehicle_hop: sound("vehicle_hop", "sfx/vehicles/hop", "effects", {
+    volume: 0.55,
+    maxInstances: 2,
+    cooldown: 0.08,
+  }),
+  vehicle_cannon: sound("vehicle_cannon", "sfx/vehicles/cannon", "effects", {
+    volume: 0.55,
+    maxInstances: 8,
+    cooldown: 0.04,
+  }),
+  vehicle_spotlight_charge: sound("vehicle_spotlight_charge", "sfx/vehicles/spotlight_charge", "effects", {
+    volume: 0.6,
+    maxInstances: 1,
+    cooldown: 0.3,
+  }),
+  vehicle_spotlight_fire: sound("vehicle_spotlight_fire", "sfx/vehicles/spotlight_fire", "effects", {
+    volume: 0.7,
+    maxInstances: 1,
+    cooldown: 0.4,
+  }),
+  vehicle_hit: sound("vehicle_hit", "sfx/vehicles/hit", "effects", {
+    volume: 0.6,
+    maxInstances: 3,
+    cooldown: 0.08,
+  }),
+  vehicle_warning: sound("vehicle_warning", "sfx/vehicles/warning", "effects", {
+    volume: 0.7,
+    maxInstances: 1,
+    cooldown: 0.4,
+    spatial: false,
+  }),
+  vehicle_explosion: sound("vehicle_explosion", "sfx/vehicles/explosion", "effects", {
+    volume: 0.75,
+    maxInstances: 1,
+    cooldown: 0.3,
+  }),
+  vehicle_repair: sound("vehicle_repair", "sfx/vehicles/repair", "effects", {
+    volume: 0.55,
+    maxInstances: 2,
+    cooldown: 0.15,
   }),
   destruct_metal: sound("destruct_metal", "sfx/destructibles/metal_impact", "effects", {
     volume: 0.45,
@@ -315,6 +385,13 @@ export const SOUND_ALIASES = {
   enemy_fire: "player_shoot",
   enemy_alert: "ui_hover",
   enemy_heavy: "player_shoot",
+  score_tick: "pickup_collect",
+  combo_increase: "pickup_collect",
+  combo_break: "ui_back",
+  bonus_awarded: "powerup_collect",
+  new_record: "pickup_collect",
+  rank_reveal: "level_complete",
+  studio_complete: "level_complete",
 };
 
 export const WEAPON_SOUND_ID = {
@@ -339,6 +416,7 @@ export const MUSIC_PLAY_OPTS = {
   music_studio_01: { loop: true, volume: 0.42 },
   music_boss: { loop: true, volume: 0.62 },
   music_boss_01: { loop: true, volume: 0.62 },
+  music_results: { loop: true, volume: 0.4 },
 };
 
 export function resolveSoundId(id) {
@@ -368,5 +446,6 @@ export function pickupSoundId(effect) {
   if (effect === "ammo") return "ammo_pickup";
   if (effect === "weapon") return "powerup_collect";
   if (effect === "ability") return "powerup_collect";
+  if (effect === "vehicle_repair") return "vehicle_repair";
   return "pickup_collect";
 }

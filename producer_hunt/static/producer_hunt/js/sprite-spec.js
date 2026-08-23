@@ -43,6 +43,16 @@ export const RESCUE_ANIMATIONS = {
   run: { frames: 6, fps: 12, loop: true, file: "rescue_run" },
 };
 
+export const VEHICLE_ANIMATIONS = {
+  idle: { frames: 4, fps: 8, loop: true, file: "idle" },
+  drive: { frames: 6, fps: 12, loop: true, file: "drive" },
+  hop: { frames: 2, fps: 10, loop: false, file: "hop" },
+  fire: { frames: 3, fps: 16, loop: false, file: "fire" },
+  special: { frames: 4, fps: 12, loop: false, file: "special" },
+  hit: { frames: 2, fps: 14, loop: false, file: "hit" },
+  destroyed: { frames: 4, fps: 8, loop: false, file: "destroyed" },
+};
+
 /** Editor idle opaque height (~229px in a 256 frame) is the in-game visual reference. */
 export const PLAYER_VISUAL_PROFILE = {
   targetStandingHeight: 229,

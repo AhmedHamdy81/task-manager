@@ -1,4 +1,4 @@
-import { BASE_JUMP_VELOCITY, DEBUG_ASSETS, DEBUG_COMBAT, DESIGN_H, DESIGN_W, HITSTOP_HEAVY_SEC, HITSTOP_LIGHT_SEC, SHAKE_HEAVY, SHAKE_LIGHT } from "./config.js";
+import { BASE_JUMP_VELOCITY, DEBUG_ASSETS, DEBUG_COMBAT, DESIGN_H, DESIGN_W, HITSTOP_HEAVY_SEC, HITSTOP_LIGHT_SEC, PLAYER_INVULN_SEC, SHAKE_HEAVY, SHAKE_LIGHT, SHAKE_MEDIUM } from "./config.js";
 import { GameState, GameStateManager } from "./game-state.js";
 import { Input } from "./input.js";
 import { Camera } from "./camera.js";
@@ -18,6 +18,7 @@ import { drawButtons, drawConfirm, drawMenu, drawSettings, hitMenu, menuButtons,
 import { CHARACTERS, characterById } from "./characters.js";
 import { applyPickup, PICKUP_COLLECT_FX } from "./pickups.js";
 import { validatePlayerWeapons, warnProjectileFaction } from "./player-weapons.js";
+import { validateStudio01Release } from "./studio-01-validate.js";
 import {
   canCompleteLevel,
   currentObjective,
@@ -28,11 +29,14 @@ import {
   updateDoors,
 } from "./progression.js";
 import { loadSettings, saveSettings } from "./settings.js";
-import { FxSprite } from "./fx.js";
-import { WaveController, pickWaveSpawn, STUDIO_CLEAR_BONUS } from "./waves.js";
+import { FxPool } from "./fx.js";
+import { WaveController, pickWaveSpawn } from "./waves.js";
+import { ScoreManager } from "./score-manager.js";
+import { ResultsScreen } from "./results.js";
 import { EncounterDirector, pickEncounterSpawn } from "./encounters.js";
 import { AttackCoordinator } from "./enemy-ai.js";
 import { cycleDifficulty, resolveDifficulty } from "./difficulty.js";
+import { HIT_CLASS, cycleValue, hitClassForShot, PARTICLE_CYCLE, SHAKE_CYCLE, shakeScale } from "./presentation.js";
 import {
   applyHazardSnapshot,
   drawAmbients,
@@ -72,7 +76,25 @@ import {
   snapshotRescues,
   tickRescues,
 } from "./rescues.js";
-import { BossEncounter, HostileProjectilePool } from "./boss.js";
+import {
+  applyVehicleSnapshot,
+  bindVehicle,
+  clearVehicleProjectiles,
+  drawVehicleDebug,
+  drawVehicleHud,
+  drawVehicles,
+  EXPECTED_VEHICLE_ASSETS,
+  forceVehicleSafeRestore,
+  preloadVehicleKits,
+  snapshotVehicles,
+  tickVehicles,
+  vehicleCameraLock,
+  vehicleFollowTarget,
+  vehicleHud,
+  vehicleTakeDamage,
+  warnMissingVehicleAsset,
+} from "./vehicles.js";
+import { BossEncounter, HostileProjectilePool, drawBossDebug } from "./boss.js";
 import { CinematicPlayer } from "./cinematic.js";
 import {
   drawDecorSheet,
@@ -98,11 +120,30 @@ function emptyStats() {
   };
 }
 
-function formatClock(seconds) {
-  const s = Math.max(0, Math.floor(seconds || 0));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${String(r).padStart(2, "0")}`;
+function combatHitBox(enemy) {
+  if (typeof enemy?.hurtbox === "function") return enemy.hurtbox();
+  return enemy.bounds();
+}
+
+function lockedEncounterId(game) {
+  const enc = (game.world?.encounters || []).find((e) => e.scripted && e.locked && !e.cleared);
+  return enc?.id || "";
+}
+
+function notifyEnemyDamage(game, enemy, source, { wasAlive, wasDying } = {}) {
+  if (source?.volleyId) game.scoreboard?.noteAttackHit(source.volleyId, enemy.spawnId || enemy.id);
+  if (enemy.isBoss) {
+    if (enemy.deathStarted && !wasDying) game.sfx("enemy_death", { x: enemy.footX });
+    else if (!enemy.deathStarted) game.sfx("enemy_hit", { x: enemy.footX });
+    return;
+  }
+  if (wasAlive && !enemy.alive) {
+    game.scoreboard?.awardEnemyDefeat(enemy, source);
+    game.scoreboard?.sync(game);
+    game.sfx("enemy_death", { x: enemy.footX });
+  } else {
+    game.sfx("enemy_hit", { x: enemy.footX });
+  }
 }
 
 function enemySpawnSafetyIssues(world, enemy) {
@@ -147,6 +188,7 @@ export class Game {
     this.player = null;
     this.character = null;
     this.world = null;
+    this.vehicle = null;
     this.enemies = [];
     this.waves = null;
     this.director = null;
@@ -158,13 +200,17 @@ export class Game {
     this.projectiles = [];
     this.hostileProjectiles = [];
     this.hostilePool = new HostileProjectilePool();
-    this.effects = [];
+    this.fx = new FxPool();
     this.debris = [];
     this._bossMusic = false;
     this._bossWarned = new Set();
     this.score = 0;
+    this.scoreboard = new ScoreManager();
+    this.results = new ResultsScreen();
+    this._resultsOpened = false;
     this.checkpoint = null;
     this.fade = 0;
+    this._uiFade = 0;
     this.inputLocked = false;
     this.completed = false;
     this.levelError = "";
@@ -202,6 +248,7 @@ export class Game {
     this._raf = 0;
     this._bootStarted = false;
     this._listenersOn = false;
+    this._rcValidated = false;
     this._onPreventScroll = (e) => {
       const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"];
       if (keys.includes(e.code)) e.preventDefault();
@@ -219,6 +266,11 @@ export class Game {
     this.canvas.addEventListener("click", this._onClick);
     this.audio.attachUnlock(window);
     this._listenersOn = true;
+  }
+
+  playerInvulnSec() {
+    const diff = resolveDifficulty(this.settings?.difficulty);
+    return Number.isFinite(diff.playerInvuln) ? diff.playerInvuln : PLAYER_INVULN_SEC;
   }
 
   combatTimeScale(entity) {
@@ -261,10 +313,7 @@ export class Game {
   }
 
   playMenuMusic() {
-    this.audio.playMusic("music_menu", {
-      loop: true,
-      volume: 0.4,
-    });
+    this.audio.playMusic("music_menu", musicPlayOpts("music_menu"));
   }
 
   playBossMusic() {
@@ -291,6 +340,8 @@ export class Game {
 
   beginCinematic() {
     this._cinematicActive = true;
+    this.camera.clearShake();
+    this._uiFade = 0.4;
     this.inputLocked = true;
     this.input.clearTransient();
     this.audio.stopGameplayVoices();
@@ -301,6 +352,7 @@ export class Game {
     this.cancelActivePowers();
     cancelPendingExplosions(this);
     resetDestructibleFx(this);
+    forceVehicleSafeRestore(this);
   }
 
   endCinematic() {
@@ -347,7 +399,7 @@ export class Game {
       } else if (this.state.is(GameState.PLAYING, GameState.RESPAWNING)) {
         this.playLevelMusic();
       } else if (this.state.is(GameState.LEVEL_COMPLETE)) {
-        this.audio.stopMusic(0.15);
+        this.playResultsMusic();
       }
       this._raf = requestAnimationFrame(this._loop);
     } catch (err) {
@@ -383,6 +435,10 @@ export class Game {
         if (!img) warnMissingDestructibleAsset(rel);
       }
       await preloadRescueKits(this.assets);
+      await preloadVehicleKits(this.assets);
+      for (const rel of EXPECTED_VEHICLE_ASSETS) {
+        if (!this.assets.images.get(rel)) warnMissingVehicleAsset(rel);
+      }
       await this.audio.preload();
     } catch (err) {
       console.error("[Producer Hunt Asset Error]\n\nPreload failed. Continuing with placeholders.", err);
@@ -438,11 +494,19 @@ export class Game {
   }
 
   completeButtons() {
-    const labels = [];
-    if (this.nextPlayableLevel()) labels.push("NEXT LEVEL");
-    labels.push("REPLAY LEVEL", "CHARACTER SELECTION", "MAIN MENU");
-    const y0 = labels.length > 3 ? 540 : 620;
-    return menuButtons(labels, y0, { gap: labels.length > 3 ? 58 : 64 });
+    const y0 = 780;
+    return [
+      {
+        id: "CONTINUE — COMING SOON",
+        label: "CONTINUE — COMING SOON",
+        disabled: true,
+        x: DESIGN_W / 2 - 260,
+        y: y0,
+        w: 520,
+        h: 52,
+      },
+      ...menuButtons(["RETRY STUDIO 01", "CHARACTER SELECT", "MAIN MENU"], y0 + 62, { gap: 58 }),
+    ];
   }
 
   nextPlayableLevel() {
@@ -473,8 +537,8 @@ export class Game {
       const rows = settingsRows();
       const x = DESIGN_W / 2 - 380;
       rows.forEach((row, i) => {
-        const y = 176 + i * 58;
-        if (p.x >= x && p.x <= x + 760 && p.y >= y && p.y <= y + 52) {
+        const y = 148 + i * 42;
+        if (p.x >= x && p.x <= x + 760 && p.y >= y && p.y <= y + 38) {
           this.menuIndex = i;
           if (row.kind === "action") {
             this.sfx("ui_back");
@@ -534,7 +598,7 @@ export class Game {
       return;
     }
     if (st === GameState.LEVEL_COMPLETE) {
-      const buttons = this.completeButtons();
+      const buttons = this.completeButtons().filter((b) => !b.disabled);
       const hit = hitMenu(buttons, p.x, p.y);
       if (!hit) return;
       this.menuIndex = buttons.findIndex((b) => b.id === hit.id);
@@ -572,9 +636,10 @@ export class Game {
   }
 
   handleComplete(id) {
-    if (id === "NEXT LEVEL") this.advanceToNextLevel();
-    if (id === "REPLAY LEVEL") this.restartLevel();
-    if (id === "CHARACTER SELECTION") this.goCharacterSelect();
+    if (!id || String(id).startsWith("CONTINUE")) return;
+    if (id === "NEXT LEVEL") return;
+    if (id === "RETRY STUDIO 01" || id === "REPLAY LEVEL") this.restartLevel();
+    if (id === "CHARACTER SELECT" || id === "CHARACTER SELECTION") this.goCharacterSelect();
     if (id === "MAIN MENU") this.goMainMenu({ dispose: true });
   }
 
@@ -585,7 +650,7 @@ export class Game {
     this.levelId = nid;
     this.checkpoint = null;
     this.projectiles = [];
-    this.effects = [];
+    this.fx?.clear?.();
     this.debris = [];
     this.completed = false;
     this.beginLevel(character);
@@ -640,6 +705,8 @@ export class Game {
     this.sfx("pause");
     this.audio.setGameplayMuted(true);
     this.audio.pauseMusic();
+    this.audio?.stopSound?.("vehicle_engine_loop");
+    this.audio?.stopSound?.("vehicle_warning");
     this.state.set(GameState.PAUSED);
   }
 
@@ -658,9 +725,11 @@ export class Game {
 
   onPlayerDied() {
     if (this.state.get() === GameState.PLAYER_DEAD) return;
+    forceVehicleSafeRestore(this);
     this.cancelActivePowers();
     this.bossEncounter?.onPlayerDied();
-    this.stats.deaths += 1;
+    this.scoreboard?.noteDeath();
+    this.scoreboard?.sync(this);
     this._deathOverlay = false;
     this.overlay = null;
     this.menuIndex = 0;
@@ -802,6 +871,16 @@ export class Game {
     if (row.kind === "cycle" && row.id === "difficulty") {
       this.settings = saveSettings({ difficulty: cycleDifficulty(this.settings.difficulty, dir || 1) });
       this.applySettings();
+      return;
+    }
+    if (row.kind === "cycle" && row.id === "screenShake") {
+      this.settings = saveSettings({ screenShake: cycleValue(SHAKE_CYCLE, this.settings.screenShake, dir || 1) });
+      this.applySettings();
+      return;
+    }
+    if (row.kind === "cycle" && row.id === "particleDensity") {
+      this.settings = saveSettings({ particleDensity: cycleValue(PARTICLE_CYCLE, this.settings.particleDensity, dir || 1) });
+      this.applySettings();
     }
   }
 
@@ -818,19 +897,20 @@ export class Game {
   }
 
   shakeEnabled() {
-    return this.settings.screenShake !== false && !this.settings.reducedMotion && !this.settings.reducedFlashes;
+    return shakeScale(this.settings) > 0;
   }
 
   beginHitStop(seconds, shake = 0) {
     if (this.settings.reducedMotion) return;
     const sec = Number(seconds) || 0;
     if (sec > 0) this._hitStop = Math.max(this._hitStop, sec);
-    if (shake > 0 && this.shakeEnabled()) this.camera.addShake(shake);
+    this.beginShake(shake);
   }
 
   beginShake(amount) {
-    if (!amount || !this.shakeEnabled()) return;
-    this.camera.addShake(amount);
+    const scale = shakeScale(this.settings);
+    if (!amount || scale <= 0) return;
+    this.camera.addShake(amount * scale);
   }
 
   _applyPlayerKnockback(dx) {
@@ -856,6 +936,10 @@ export class Game {
     }
   }
 
+  hurtVehicle(amount, opts = {}) {
+    return vehicleTakeDamage(this, amount, opts);
+  }
+
   isFullscreen() {
     return Boolean(document.fullscreenElement);
   }
@@ -871,8 +955,11 @@ export class Game {
 
   disposeLevel() {
     this.cancelActivePowers();
+    forceVehicleSafeRestore(this);
     resetHazardVfx(this);
     this.audio?.stopSound?.("env_ambience");
+    this.audio?.stopSound?.("vehicle_engine_loop");
+    this.audio?.stopSound?.("vehicle_warning");
     resetDestructibleFx(this);
     this.destroyWaves();
     this.bossEncounter?.destroy();
@@ -884,7 +971,7 @@ export class Game {
     this.enemies = [];
     this.projectiles = [];
     this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
-    this.effects = [];
+    this.fx?.clear?.();
     this.debris = [];
     this.checkpoint = null;
     this.completed = false;
@@ -898,6 +985,9 @@ export class Game {
     this._bossMusic = false;
     this.fade = 0;
     this.score = 0;
+    this.scoreboard?.reset?.();
+    this.results?.reset?.();
+    this._resultsOpened = false;
     this.input.clearTransient();
   }
 
@@ -911,6 +1001,7 @@ export class Game {
     this.audio.setGameplayMuted(false);
     this.select.leave();
     this.playMenuMusic();
+    this._uiFade = 0.4;
     this.state.set(GameState.START_SCREEN);
   }
 
@@ -956,21 +1047,26 @@ export class Game {
     const x = DESIGN_W * 0.22;
     const y = 22;
     const w = DESIGN_W * 0.56;
-    const ratio = view.maxHealth ? Math.max(0, Math.min(1, view.health / view.maxHealth)) : 0;
+    const ratio = view.maxHealth
+      ? Math.max(0, Math.min(1, (view.displayedHealth ?? view.health) / view.maxHealth))
+      : 0;
     ctx.save();
     ctx.fillStyle = "rgba(5, 7, 12, 0.78)";
-    ctx.fillRect(x, y, w, 72);
+    ctx.fillRect(x, y, w, 84);
     ctx.fillStyle = view.transitioning ? "#22d3ee" : "#e8b84a";
     ctx.font = "bold 16px sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(view.name, DESIGN_W / 2, y + 20);
-    ctx.fillStyle = view.phase === 2 ? "#67e8f9" : "#cbd5e1";
+    ctx.fillStyle = view.phase === 3 ? "#fb7185" : view.phase === 2 ? "#67e8f9" : "#cbd5e1";
     ctx.font = "bold 12px sans-serif";
     ctx.fillText(view.title || "", DESIGN_W / 2, y + 38);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "bold 11px sans-serif";
+    ctx.fillText(`PHASE ${view.phase || 1}`, DESIGN_W / 2, y + 54);
     ctx.fillStyle = "#1f2937";
-    ctx.fillRect(x + 18, y + 48, w - 36, 14);
-    ctx.fillStyle = view.transitioning ? "#22d3ee" : view.phase === 2 ? "#f97316" : "#ef4444";
-    ctx.fillRect(x + 18, y + 48, (w - 36) * ratio, 14);
+    ctx.fillRect(x + 18, y + 62, w - 36, 14);
+    ctx.fillStyle = view.transitioning ? "#22d3ee" : view.phase === 3 ? "#f97316" : view.phase === 2 ? "#fb7185" : "#ef4444";
+    ctx.fillRect(x + 18, y + 62, (w - 36) * ratio, 14);
     ctx.restore();
   }
 
@@ -1006,23 +1102,56 @@ export class Game {
   }
 
   drawComplete(ctx) {
-    const name = this.world?.name || "The Post Suite";
-    const ch = this.character?.displayName || this.character?.name || "—";
-    const time = formatClock(this.stats.time || this._playTime);
-    const title = this.world?.id === "studio_02" ? "PHASE 2 COMPLETE" : this.world?.id === "studio_01" ? "STUDIO 01 CLEAR" : "LEVEL COMPLETE";
-    const lines = [
-      `Time  ${time}`,
-      `Production tokens  ${this.stats.tokens}`,
-      `Enemies defeated  ${this.stats.kills}`,
-      `Character  ${ch}`,
-      `Deaths  ${this.stats.deaths}`,
-      `Crew rescued  ${this.stats.rescuesFound || 0} / ${this.stats.totalRescues || rescueHud(this.world).total}`,
-    ];
-    drawMenu(ctx, title, name, this.completeButtons(), { focus: this.menuIndex, titleY: 140 });
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#cbd5e1";
-    ctx.font = "22px sans-serif";
-    lines.forEach((line, i) => ctx.fillText(line, DESIGN_W / 2, 250 + i * 36));
+    this.results.draw(ctx, this.assets, { reducedFlash: Boolean(this.settings?.reducedFlashes || this.settings?.reducedMotion) });
+    const buttons = this.completeButtons();
+    for (const b of buttons) {
+      if (!b.disabled) continue;
+      ctx.save();
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeStyle = "#475569";
+      ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1);
+      ctx.fillStyle = "#64748b";
+      ctx.font = "bold 18px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2);
+      ctx.restore();
+    }
+    drawButtons(ctx, buttons.filter((b) => !b.disabled), { focus: this.menuIndex });
+  }
+
+  drawScoringHud(ctx) {
+    const board = this.scoreboard;
+    if (!board) return;
+    if (board.comboCount >= 1) {
+      ctx.save();
+      ctx.textAlign = "center";
+      const pulse = 1 + (board.comboPulse || 0) * 0.12;
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = "rgba(5, 7, 12, 0.55)";
+      const y0 = this.bossEncounter?.hudView?.() ? 118 : 92;
+      ctx.fillRect(DESIGN_W / 2 - 90, y0, 180, 52);
+      ctx.fillStyle = "#fbbf24";
+      ctx.font = `bold ${Math.round(22 * pulse)}px sans-serif`;
+      ctx.fillText(`COMBO ${board.comboCount}`, DESIGN_W / 2, y0 + 22);
+      ctx.fillStyle = "#f4f1ea";
+      ctx.font = "bold 16px sans-serif";
+      ctx.fillText(`×${board.comboMultiplier}`, DESIGN_W / 2, y0 + 42);
+      ctx.restore();
+    }
+    const notice = board.notices[board.notices.length - 1];
+    if (notice) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, 1 - notice.age / notice.life);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(5, 7, 12, 0.7)";
+      ctx.fillRect(DESIGN_W / 2 - 240, 148, 480, 40);
+      ctx.fillStyle = "#86efac";
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillText(notice.text, DESIGN_W / 2, 176);
+      ctx.restore();
+    }
   }
 
   confirmCharacter() {
@@ -1035,6 +1164,7 @@ export class Game {
     this.sfx("ui_confirm");
     this._selectConfirming = true;
     this.select.persist();
+    this._uiFade = 0.45;
     this.select.leave();
     this.beginLevel(this.select.selected);
     this._selectConfirming = false;
@@ -1042,8 +1172,9 @@ export class Game {
 
   beginLevel(character, opts = {}) {
     this.cancelActivePowers();
+    this.cinematic?.cancel();
     this.character = characterById(character?.id || character);
-    if (this.debug || DEBUG_COMBAT) validatePlayerWeapons(this.character, true);
+    validatePlayerWeapons(this.character, true);
     try {
       this.world = buildWorld(resolveLevel(this.levelId));
     } catch (err) {
@@ -1059,6 +1190,8 @@ export class Game {
     this.spawn = { ...this.world.spawn };
     const kit = this.assets.characterKit(this.character.id);
     this.player = new Player(this.character, this.spawn, kit);
+    this.player.host = this;
+    bindVehicle(this);
     this.checkpoint = opts.checkpoint || null;
     this.spawnEnemies();
     this.attachWaves();
@@ -1066,15 +1199,19 @@ export class Game {
     tickMovers(this, 0);
     this.projectiles = [];
     this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
-    this.effects = [];
+    this.fx?.clear?.();
     this.debris = [];
     this.resetCombatTimeScale();
     this.resetCombatFeel();
     this.combatHint = null;
+    this.scoreboard.reset();
+    this.results.reset();
+    this._resultsOpened = false;
     this.score = 0;
     this.camera.x = 0;
     this.camera.look = 0;
     this.fade = 0;
+    this._uiFade = 0.4;
     this.inputLocked = false;
     this.completed = false;
     this._studioClearAwarded = false;
@@ -1101,6 +1238,10 @@ export class Game {
     this._bossMusic = false;
     this._bossWarned = new Set();
     this.playLevelMusic();
+    if (!this._rcValidated) {
+      this._rcValidated = true;
+      validateStudio01Release({ level: this.world, audio: this.audio });
+    }
     this.state.set(GameState.PLAYING);
   }
 
@@ -1128,6 +1269,7 @@ export class Game {
       ammo: this.player.weapon.ammo,
       loadout: this.player.loadout?.snapshot?.(),
       score: this.score,
+      scoreboard: this.scoreboard?.snapshot?.(),
       keys: this.player.keys,
       abilityCool: this.player.ability?.cool || 0,
       pickups: Object.fromEntries(this.world.pickups.map((p) => [p.id, p.taken])),
@@ -1144,6 +1286,7 @@ export class Game {
       hazards: snapshotHazards(this.world),
       destructibles: snapshotDestructibles(this.world),
       rescues: snapshotRescues(this.world),
+      vehicles: snapshotVehicles(this.world),
       bossArena: Boolean(this.checkpoint?.bossArena || this.bossEncounter?.active),
       bossIntroWatched: Boolean(this.checkpoint?.bossIntroWatched || this.bossEncounter?.introPlayed),
       stats: { ...this.stats, time: this._playTime },
@@ -1185,20 +1328,18 @@ export class Game {
     this.player.baseJumpVelocity = BASE_JUMP_VELOCITY;
     this.player.jumpMultiplier = this.player.stats?.jumpMultiplier || this.player.character?.jumpMultiplier || 1;
     this.player.energy = this.player.energyMax;
-    this.score = Number.isFinite(snap.score) ? snap.score : 0;
+    const keepTime = this.scoreboard?.missionTime || this._playTime || 0;
+    const keepDeaths = this.scoreboard?.deaths || this.stats?.deaths || 0;
+    if (snap.scoreboard) this.scoreboard.applySnapshot(snap.scoreboard);
+    else this.score = Number.isFinite(snap.score) ? snap.score : 0;
+    this.scoreboard.missionTime = Math.max(keepTime, this.scoreboard.missionTime || 0);
+    this.scoreboard.deaths = Math.max(keepDeaths, this.scoreboard.deaths || 0);
+    this.scoreboard.clearCombo();
+    this.scoreboard.sync(this);
+    this._playTime = this.scoreboard.missionTime;
     if (snap.stats && typeof snap.stats === "object") {
-      this.stats = {
-        tokens: Number(snap.stats.tokens) || 0,
-        kills: Number(snap.stats.kills) || 0,
-        deaths: Number(snap.stats.deaths) || 0,
-        time: Number(snap.stats.time) || 0,
-        rescuesFound: Number(snap.stats.rescuesFound) || 0,
-        totalRescues: Number(snap.stats.totalRescues) || 0,
-        rescueScore: Number(snap.stats.rescueScore) || 0,
-        allRescuesBonus: Number(snap.stats.allRescuesBonus) || 0,
-        allRescuesAwarded: Boolean(snap.stats.allRescuesAwarded),
-      };
-      this._playTime = this.stats.time;
+      this.stats.tokens = Number(snap.stats.tokens) || this.stats.tokens || 0;
+      this.stats.totalRescues = Number(snap.stats.totalRescues) || this.stats.totalRescues || 0;
     }
     const safe = findSafeSpawn(this.world, snap.x, snap.y, this.enemies.filter((e) => e.alive).map((e) => e.bounds()));
     this.player.footX = safe.x;
@@ -1212,6 +1353,8 @@ export class Game {
     applyHazardSnapshot(this.world, snap.hazards);
     applyDestructibleSnapshot(this.world, snap.destructibles);
     applyRescueSnapshot(this.world, snap.rescues);
+    applyVehicleSnapshot(this, snap.vehicles);
+    clearVehicleProjectiles(this);
     for (const p of this.world.pickups) {
       if (p.respawn) p.taken = false;
       else p.taken = Boolean(snap.pickups && snap.pickups[p.id]);
@@ -1284,6 +1427,9 @@ export class Game {
     if (this.allowDebug && this.input.consume("debug")) this.debug = !this.debug;
     else this.input.consume("debug");
     this.update(dt);
+    if (this._uiFade > 0 && this.state.get() !== GameState.RESPAWNING) {
+      this._uiFade = Math.max(0, this._uiFade - dt * 3.4);
+    }
     this.render();
     this.input.endFrame();
     this._raf = requestAnimationFrame(this._loop);
@@ -1343,7 +1489,10 @@ export class Game {
       return;
     }
     if (st === GameState.LEVEL_COMPLETE) {
-      this.updateMenuNav(this.completeButtons(), (id) => this.handleComplete(id));
+      const cue = this.results.update(dt, this.input);
+      if (cue) this.sfx(cue);
+      const buttons = this.completeButtons().filter((b) => !b.disabled);
+      this.updateMenuNav(buttons, (id) => this.handleComplete(id));
       return;
     }
     if (st === GameState.RESPAWNING) {
@@ -1375,22 +1524,37 @@ export class Game {
       for (const enemy of this.enemies) {
         if (enemy.hitFlash > 0) enemy.hitFlash -= dt;
       }
+      this.scoreboard.update(dt, { frozen: false });
+      this._playTime = this.scoreboard.missionTime;
       this.updateEffects(dt);
       return;
     }
 
-    this._playTime += dt;
     this._worldTime += dt;
+    this.scoreboard.update(dt, { frozen: false });
+    this._playTime = this.scoreboard.missionTime;
+    for (const n of this.scoreboard.notices) {
+      if (!n.played && n.sfx) {
+        n.played = true;
+        this.sfx(n.sfx);
+      }
+    }
     this.waves?.update(dt);
     this.director?.update(dt);
     this.bossEncounter?.update(dt);
     this.inputLocked = Boolean(this.waves?.blocksInput) || Boolean(this.bossEncounter?.blocksInput);
     tickMovers(this, dt);
     this.player.update(dt, this.input, this.world, this.projectiles, this);
+    tickVehicles(this, dt);
     this.updateEncounters();
     this.updateDangerZones(dt);
     this.attackCoord?.configure(resolveDifficulty(this.settings?.difficulty));
-    this.camera.follow(this.player, this.world, dt, lockedArena(this));
+    this.camera.follow(
+      vehicleFollowTarget(this),
+      this.world,
+      dt,
+      vehicleCameraLock(this, lockedArena(this))
+    );
     for (const enemy of this.enemies) {
       enemy.update(dt, this.player, this.world, this.projectiles, this);
     }
@@ -1409,41 +1573,49 @@ export class Game {
 
   updateEnemyContact(dt) {
     if (!this.player?.alive) return;
+    const mounted = Boolean(this.player.mounted && this.vehicle);
+    const hitbox = mounted ? { x: this.vehicle.x, y: this.vehicle.y, w: this.vehicle.w, h: this.vehicle.h } : this.player.bounds();
     for (const enemy of this.enemies) {
       if (enemy.combatEnabled === false || enemy.hitboxEnabled === false) continue;
       const melee = Boolean(enemy.meleeActive);
+      const charging = Boolean(
+        enemy.isBoss && melee && (enemy.attackName === "barber_charge" || enemy.attackName === "double_charge")
+      );
       if (melee && enemy.meleeHitOnce) continue;
       const dmg = melee
-        ? enemy.state === "charge"
+        ? charging
           ? enemy.spec?.chargeDamage || enemy.spec?.damage || 0
           : enemy.spec?.damage || enemy.spec?.contactDamage || 0
         : enemy.spec?.contactDamage || 0;
       if (!enemy.alive || dmg <= 0) continue;
       if (!melee && enemy.contactCool > 0) continue;
       const box = melee && typeof enemy.meleeBounds === "function" ? enemy.meleeBounds() : enemy.bounds();
-      if (!aabb(this.player.bounds(), box)) continue;
-      const dir = Math.sign(this.player.footX - enemy.footX) || -1;
+      if (!aabb(hitbox, box)) continue;
+      const foot = mounted ? this.vehicle.footX : this.player.footX;
+      const dir = Math.sign(foot - enemy.footX) || -1;
       const knock = enemy.isBoss
         ? melee
-          ? enemy.cfg?.meleeKnockback || 320
-          : enemy.state === "charge"
+          ? charging
             ? enemy.cfg?.chargeKnockback || 380
-            : enemy.cfg?.knockback || 240
+            : enemy.cfg?.meleeKnockback || 320
+          : enemy.cfg?.knockback || 240
         : 220;
       const cool = enemy.isBoss
-        ? enemy.state === "charge"
+        ? charging
           ? enemy.cfg?.chargeContactCooldown || 0.55
           : enemy.cfg?.contactCooldown || 0.7
         : 0.75;
-      const dealt = this.player.takeDamage(dmg, { knockbackX: dir * knock });
+      const dealt = mounted
+        ? this.hurtVehicle(dmg, { knockbackX: dir * knock })
+        : this.player.takeDamage(dmg, { knockbackX: dir * knock });
       if (!dealt) continue;
       if (melee) enemy.meleeHitOnce = true;
       else enemy.contactCool = cool;
-      this._applyPlayerKnockback(dir * (enemy.isBoss ? 36 : 18));
-      if (this.shakeEnabled()) this.camera.addShake(enemy.isBoss ? SHAKE_HEAVY : 0.22);
+      if (!mounted) this._applyPlayerKnockback(dir * (enemy.isBoss ? 36 : 18));
+      if (this.shakeEnabled()) this.beginShake(enemy.isBoss ? SHAKE_HEAVY : SHAKE_MEDIUM);
       this.beginHitStop(enemy.isBoss ? HITSTOP_HEAVY_SEC : HITSTOP_LIGHT_SEC);
       this.hud.invalidate();
-      if (this.player.alive) this.sfx("player_hit");
+      if (this.player.alive && !mounted) this.sfx("player_hit");
     }
   }
 
@@ -1507,11 +1679,16 @@ export class Game {
   }
 
   completeLevel() {
-    if (this.completed || this.state.get() !== GameState.PLAYING) return;
+    if (this.completed) return;
+    if (this.state.get() !== GameState.PLAYING && this.state.get() !== GameState.LEVEL_COMPLETE) return;
     this.completed = true;
     this.waves?.destroy();
     this.inputLocked = true;
-    this.stats.time = this._playTime;
+    this.scoreboard.awardMissionComplete();
+    this.scoreboard.sync(this);
+    this.stats.time = this.scoreboard.missionTime;
+    this._playTime = this.scoreboard.missionTime;
+    this.openResults();
     this.overlay = null;
     this.menuIndex = 0;
     this.input.clearTransient();
@@ -1526,12 +1703,40 @@ export class Game {
       patch.completedLevels = [...done, this.world.id];
     }
     if (this.world?.id === "studio_02") patch.phase2Complete = true;
+    // PHASE 2 COMPLETE is reserved until Studio 02 ships; Studio 01 Continue stays disabled.
     if (Object.keys(patch).length) this.settings = saveSettings(patch);
     this.hud.invalidate();
     this.audio.setGameplayMuted(true);
+    this.sfx("studio_complete", { force: true });
     this.sfx("level_complete", { force: true });
-    this.audio.stopMusic(0.25);
+    this.playResultsMusic();
     this.state.set(GameState.LEVEL_COMPLETE);
+  }
+
+  playResultsMusic() {
+    this._bossMusic = false;
+    this.audio.stopMusic(0.2);
+    const id = this.audio.hasBuffer("music_results")
+      ? "music_results"
+      : this.audio.hasBuffer("music_studio_01")
+        ? "music_studio_01"
+        : "music_menu";
+    this.audio.unlock().then(() => this.audio.ensureMusic(id, musicPlayOpts(id)));
+  }
+
+  openResults() {
+    if (this._resultsOpened) return this.results.data;
+    this._resultsOpened = true;
+    const data = this.scoreboard.finalize({
+      levelId: this.world?.id || "studio_01",
+      difficulty: this.settings?.difficulty,
+      characterId: this.character?.id,
+      characterName: this.character?.displayName || this.character?.name,
+    });
+    this.results.begin(data);
+    this.sfx("rank_reveal");
+    if (Object.values(data.records?.improved || {}).some(Boolean)) this.sfx("new_record");
+    return data;
   }
 
   beginRespawn() {
@@ -1581,16 +1786,19 @@ export class Game {
       this.state.set(GameState.START_SCREEN);
       return;
     }
+    this.cinematic?.cancel();
     const kit = this.assets.characterKit(this.character.id);
     const spawn = snap ? { x: snap.x, y: snap.y } : this.world.spawn;
     this.player = new Player(this.character, spawn, kit);
+    this.player.host = this;
+    bindVehicle(this);
     this.spawnEnemies();
     this.attachWaves();
     this.attachBossEncounter();
     tickMovers(this, 0);
     this.projectiles = [];
     this.hostileProjectiles = this.hostilePool.clear(this.hostileProjectiles || []);
-    this.effects = [];
+    this.fx?.clear?.();
     this.debris = [];
     this.resetCombatTimeScale();
     this.resetCombatFeel();
@@ -1825,6 +2033,8 @@ export class Game {
       kind: opts.kind || "hazard",
       hit: false,
       age: 0,
+      outline: Boolean(opts.outline),
+      symbol: opts.symbol || "",
     });
   }
 
@@ -1833,6 +2043,7 @@ export class Game {
       this.dangerZones = this.dangerZones.filter((z) => (z.age += dt) < z.life + z.delay);
       return;
     }
+    const mounted = Boolean(this.player.mounted && this.vehicle);
     const next = [];
     for (const z of this.dangerZones) {
       z.age += dt;
@@ -1841,10 +2052,14 @@ export class Game {
         continue;
       }
       if (z.age > z.delay + z.life) continue;
-      if (!z.hit && aabb(this.player.bounds(), z)) {
-        const dealt = this.player.takeDamage(z.damage);
+      if (z.kind === "fall_mark" || !(z.damage > 0)) {
+        next.push(z);
+        continue;
+      }
+      if (!z.hit && aabb(mounted ? { x: this.vehicle.x, y: this.vehicle.y, w: this.vehicle.w, h: this.vehicle.h } : this.player.bounds(), z)) {
+        const dealt = mounted ? this.hurtVehicle(z.damage) : this.player.takeDamage(z.damage);
         if (dealt) {
-          this.sfx("player_hit");
+          if (!mounted) this.sfx("player_hit");
           this.hud.invalidate();
         }
         z.hit = true;
@@ -1855,9 +2070,8 @@ export class Game {
   }
 
   awardStudioClear() {
-    if (this._studioClearAwarded || this.completed) return;
+    if (this._studioClearAwarded) return;
     this._studioClearAwarded = true;
-    this.score += STUDIO_CLEAR_BONUS;
     const enc = (this.world?.encounters || []).find((e) => e.id === "enc_final");
     if (enc) {
       enc.activated = true;
@@ -1921,12 +2135,11 @@ export class Game {
   }
 
   spawnFx(opts) {
-    if (this.effects.length > 40) {
-      this.effects = this.effects.filter((fx) => fx.alive);
-    }
+    const reduced = Boolean(this.settings?.reducedFlashes || this.settings?.particleDensity === "low");
+    if (reduced && opts.kind === "extra") return null;
     const sheet = this.assets.sheet(opts.sheetKey || "effects");
-    this.effects.push(
-      new FxSprite({
+    return this.fx.spawn(
+      {
         sheet,
         frame: opts.frame || 0,
         frames: opts.frames || 1,
@@ -1938,13 +2151,44 @@ export class Game {
         loop: Boolean(opts.loop),
         screenSpace: Boolean(opts.screenSpace),
         flipX: Boolean(opts.flipX),
-      })
+        kind: opts.kind || "",
+      },
+      this.settings
     );
   }
 
   updateEffects(dt) {
-    for (const fx of this.effects) fx.update(dt);
-    this.effects = this.effects.filter((fx) => fx.alive);
+    this.fx.update(dt, this.camera);
+  }
+
+  applyConfirmedHit(shot, enemy) {
+    const cls = hitClassForShot(shot);
+    const feel = HIT_CLASS[cls];
+    if (cls !== "light") this.beginHitStop(feel.hitstop, enemy?.isBoss ? feel.shake * 0.65 : feel.shake);
+    const fx = shot.impactFx || COMBAT.player.impactFx;
+    const c = shot.center ? shot.center() : { x: shot.x + shot.w / 2, y: shot.y + shot.h / 2 };
+    this.spawnFx({
+      sheetKey: fx.sheetKey,
+      frame: fx.frame || 0,
+      frames: fx.frames || 1,
+      fps: fx.fps || 0,
+      x: c.x,
+      y: c.y,
+      size: feel.impactSize || fx.size || 56,
+      life: fx.life || 0.18,
+      kind: "impact",
+    });
+    if (cls === "special") {
+      this.spawnFx({
+        sheetKey: "effects",
+        frame: 4,
+        x: c.x,
+        y: c.y,
+        size: 96,
+        life: 0.16,
+        kind: "extra",
+      });
+    }
   }
 
   spawnImpact(shot, opts = {}) {
@@ -1965,6 +2209,8 @@ export class Game {
 
   _applySplash(shot, exclude) {
     if (!shot || shot.owner !== "player" || !(shot.splashRadius > 0) || !(shot.splashDamage > 0)) return;
+    if (shot._splashDone) return;
+    shot._splashDone = true;
     const c = shot.center ? shot.center() : { x: shot.x + shot.w / 2, y: shot.y + shot.h / 2 };
     const seen = new Set();
     for (const enemy of this.enemies) {
@@ -1972,7 +2218,7 @@ export class Game {
       if (enemy.hitboxEnabled === false) continue;
       if (typeof enemy.takeDamage !== "function") continue;
       if (seen.has(enemy)) continue;
-      const box = enemy.bounds();
+      const box = combatHitBox(enemy);
       const ex = box.x + box.w / 2;
       const ey = box.y + box.h / 2;
       const dist = Math.hypot(ex - c.x, ey - c.y);
@@ -1983,17 +2229,10 @@ export class Game {
       if (enemy.isBoss && shot.bossDamageMul && shot.bossDamageMul < 1) {
         dmg = Math.max(1, Math.round(dmg * shot.bossDamageMul));
       }
+      const wasAlive = enemy.alive;
       const wasDying = Boolean(enemy.deathStarted);
-      this.score += enemy.takeDamage(dmg, shot);
-      if (enemy.isBoss) {
-        if (enemy.deathStarted && !wasDying) this.sfx("enemy_death", { x: enemy.footX });
-        else if (!enemy.deathStarted) this.sfx("enemy_hit", { x: enemy.footX });
-      } else if (!enemy.alive) {
-        this.stats.kills += 1;
-        this.sfx("enemy_death", { x: enemy.footX });
-      } else {
-        this.sfx("enemy_hit", { x: enemy.footX });
-      }
+      enemy.takeDamage(dmg, shot);
+      notifyEnemyDamage(this, enemy, shot, { wasAlive, wasDying });
     }
     splashDestructibles(this, shot, exclude);
   }
@@ -2029,28 +2268,18 @@ export class Game {
     if (enemy.hitboxEnabled === false) return false;
     if (enemy === this.player) return false;
     const travel = typeof projectile.travelBounds === "function" ? projectile.travelBounds() : projectile.bounds();
-    if (!aabb(travel, enemy.bounds()) && !aabb(projectile.bounds(), enemy.bounds())) return false;
+    const targetBox = combatHitBox(enemy);
+    if (!aabb(travel, targetBox) && !aabb(projectile.bounds(), targetBox)) return false;
     projectile.hasHit = true;
     let damage = Number(projectile.damage ?? 1);
     if (enemy.isBoss && projectile.bossDamageMul && projectile.bossDamageMul !== 1) {
       damage = Math.max(1, Math.round(damage * projectile.bossDamageMul));
     }
+    const wasAlive = enemy.alive;
     const wasDying = Boolean(enemy.deathStarted);
-    this.score += enemy.takeDamage(damage, projectile);
-    if (enemy.isBoss) {
-      if (enemy.deathStarted && !wasDying) this.sfx("enemy_death", { x: enemy.footX });
-      else if (!enemy.deathStarted) this.sfx("enemy_hit", { x: enemy.footX });
-    } else if (!enemy.alive) {
-      this.stats.kills += 1;
-      this.sfx("enemy_death", { x: enemy.footX });
-    } else {
-      this.sfx("enemy_hit", { x: enemy.footX });
-    }
-    const stop = projectile.hitStop;
-    if (stop === "heavy") this.beginHitStop(HITSTOP_HEAVY_SEC, projectile.cameraShake || SHAKE_HEAVY);
-    else if (stop === "light") this.beginHitStop(HITSTOP_LIGHT_SEC, projectile.cameraShake || SHAKE_LIGHT);
-    else if (enemy.isBoss) this.beginHitStop(HITSTOP_LIGHT_SEC, SHAKE_LIGHT);
-    this.spawnImpact(projectile);
+    enemy.takeDamage(damage, projectile);
+    notifyEnemyDamage(this, enemy, projectile, { wasAlive, wasDying });
+    this.applyConfirmedHit(projectile, enemy);
     this._applySplash(projectile, enemy);
     projectile.disable();
     this.hud.invalidate();
@@ -2090,21 +2319,52 @@ export class Game {
       }
       return;
     }
-    if (shot.owner === "enemy") {
+      if (shot.owner === "enemy") {
       if (shot.faction === "boss") {
         const st = this.bossEncounter?.boss?.state;
-        if (st === "spawning" || st === "death" || st === "complete" || this.bossEncounter?.phase === "intro") {
+        const phase = this.bossEncounter?.phase;
+        if (
+          st === "ready" ||
+          st === "spawning" ||
+          st === "death" ||
+          st === "completed" ||
+          st === "complete" ||
+          phase === "intro" ||
+          phase === "dying" ||
+          phase === "defeat_cinematic"
+        ) {
+          shot.disable();
+          return;
+        }
+        const arena = this.bossEncounter?.arenaBox?.();
+        if (arena && (shot.x + shot.w < arena.left - 8 || shot.x > arena.right + 8)) {
           shot.disable();
           return;
         }
       }
-      if (this.player.alive && (aabb(travel, this.player.bounds()) || aabb(shot.bounds(), this.player.bounds()))) {
+      const target =
+        this.player.mounted && this.vehicle
+          ? { x: this.vehicle.x, y: this.vehicle.y, w: this.vehicle.w, h: this.vehicle.h }
+          : this.player.bounds();
+      if (this.player.alive && (aabb(travel, target) || aabb(shot.bounds(), target))) {
+        if (shot.hitGroup) {
+          this._projGroupHit = this._projGroupHit || {};
+          const last = this._projGroupHit[shot.hitGroup] || 0;
+          if (this._worldTime - last < 0.18) {
+            this.spawnImpact(shot);
+            shot.disable();
+            return;
+          }
+          this._projGroupHit[shot.hitGroup] = this._worldTime;
+        }
         const dir = Math.sign(shot.vx) || Math.sign(this.player.footX - shot.x) || 1;
         const knock = shot.interruptMove ? dir * 280 : dir * 70;
-        const dealt = this.player.takeDamage(shot.damage, { knockbackX: knock });
+        const dealt = this.player.mounted
+          ? this.hurtVehicle(shot.damage, { knockbackX: knock })
+          : this.player.takeDamage(shot.damage, { knockbackX: knock });
         if (dealt) {
-          this.sfx("player_hit");
-          this._applyPlayerKnockback(dir * (shot.interruptMove ? 32 : 10));
+          if (!this.player.mounted) this.sfx("player_hit");
+          if (!this.player.mounted) this._applyPlayerKnockback(dir * (shot.interruptMove ? 32 : 10));
           this.beginHitStop(shot.interruptMove ? HITSTOP_HEAVY_SEC : HITSTOP_LIGHT_SEC, shot.interruptMove ? SHAKE_HEAVY : SHAKE_LIGHT);
           this.hud.invalidate();
         }
@@ -2135,6 +2395,10 @@ export class Game {
       }
       if (e.alive) {
         if (this.world && e.footY > (this.world.height || DESIGN_H) + 24) {
+          e.health = 0;
+          e.alive = false;
+          e.hitboxEnabled = false;
+          e.meleeActive = false;
           e.notifyWaveExit?.("invalid");
           return false;
         }
@@ -2204,9 +2468,10 @@ export class Game {
       drawForegroundSilhouettes(ctx, this);
     }
     drawDebris(ctx, this);
-    for (const fx of this.effects) fx.draw(ctx, this.camera, drawSheetFrame);
-    if (this.fade > 0) {
-      ctx.fillStyle = `rgba(5, 7, 12, ${this.fade})`;
+    for (const fx of this.fx.live) fx.draw(ctx, this.camera, drawSheetFrame);
+    const fade = Math.max(this.fade || 0, this._uiFade || 0);
+    if (fade > 0) {
+      ctx.fillStyle = `rgba(5, 7, 12, ${fade})`;
       ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
     }
     if (this.player && this.state.is(GameState.PLAYING, GameState.RESPAWNING) && !this._cinematicActive) {
@@ -2219,10 +2484,15 @@ export class Game {
         objective: currentObjective(this.world, this.player),
         wave,
         crew,
+        vehicle: vehicleHud(this.vehicle),
+        combo: this.scoreboard?.comboCount || 0,
+        comboMul: this.scoreboard?.comboMultiplier || 1,
       });
+      drawVehicleHud(ctx, { vehicle: vehicleHud(this.vehicle), assets: this.assets });
       this.drawBossHud(ctx);
       this.drawWaveBanner(ctx);
       this.drawCombatHint(ctx);
+      this.drawScoringHud(ctx);
       drawRescueHud(ctx, this);
     }
     if (this.debug || DEBUG_COMBAT) {
@@ -2230,6 +2500,7 @@ export class Game {
       drawEnvDebug(ctx, this);
       drawDestructibleDebug(ctx, this);
       drawRescueDebug(ctx, this);
+      drawVehicleDebug(ctx, this);
     }
 
     if (st === GameState.PAUSED && this.overlay !== "settings" && this.overlay !== "confirm" && this.overlay !== "howto") {
@@ -2300,6 +2571,7 @@ export class Game {
         "S / ↓             crouch",
         "SPACE             shoot",
         "Q                 special",
+        "F / ENTER         rescue / vehicle",
         "ESC               pause",
         "ENTER             confirm",
       ];
@@ -2349,32 +2621,47 @@ export class Game {
     drawProgression(ctx, this.assets, this.world, cam);
     drawRescues(ctx, this, "back");
     drawDestructibles(ctx, this);
+    drawVehicles(ctx, this);
     drawRescues(ctx, this, "front");
     drawPickups(ctx, this.assets, this.world.pickups, cam, this._worldTime * 1000);
     drawHazards(ctx, this.assets, this.world.hazards, cam);
     drawHazardFx(ctx, this);
     this.drawDangerZones(ctx);
+    const g = ctx.createRadialGradient(DESIGN_W * 0.5, DESIGN_H * 0.45, 280, DESIGN_W * 0.5, DESIGN_H * 0.5, 1100);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, "rgba(5, 7, 12, 0.28)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, DESIGN_W, DESIGN_H);
   }
 
   drawDangerZones(ctx) {
     const cam = this.camera;
     for (const z of this.dangerZones || []) {
       const s = cam.worldToScreen(z.x, z.y);
-      const warning = z.age < z.delay;
+      const warning = z.age < z.delay || z.kind === "fall_mark";
       ctx.save();
-      ctx.globalAlpha = warning ? 0.45 : 0.72;
+      ctx.globalAlpha = warning ? 0.5 : 0.72;
       ctx.fillStyle = warning ? "#fbbf24" : "#ef4444";
       ctx.fillRect(s.x, s.y, z.w, z.h);
-      ctx.strokeStyle = warning ? "#fde68a" : "#fecaca";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#f8fafc";
+      ctx.lineWidth = z.outline || z.kind === "fall_mark" ? 4 : 2;
+      ctx.setLineDash(warning ? [6, 4] : []);
       ctx.strokeRect(s.x, s.y, z.w, z.h);
+      const mark = z.symbol || (warning ? "!" : "");
+      if (mark) {
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#0f172a";
+        ctx.font = "bold 18px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(mark, s.x + z.w / 2, s.y - 6);
+      }
       ctx.restore();
     }
   }
 
   drawDebug(ctx) {
     ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(DESIGN_W - 380, 24, 356, 168);
+    ctx.fillRect(DESIGN_W - 380, 24, 356, 210);
     ctx.fillStyle = "#86efac";
     ctx.font = "14px monospace";
     ctx.textAlign = "left";
@@ -2387,7 +2674,9 @@ export class Game {
       `cam ${this.camera.x.toFixed(0)}`,
       `enemies ${this.enemies.filter((e) => e.alive).length}`,
       `shots ${this.projectiles.length}`,
-      `fx ${this.effects.length}`,
+      `fx ${this.fx.length}`,
+      `score ${this.scoreboard?.currentScore ?? this.score} combo ${this.scoreboard?.comboCount || 0}x${this.scoreboard?.comboMultiplier || 1}`,
+      `run ${this.scoreboard?.runId || "—"}`,
     ];
     lines.forEach((l, i) => ctx.fillText(l, DESIGN_W - 364, 50 + i * 22));
     ctx.strokeStyle = "#38bdf8";
@@ -2427,5 +2716,6 @@ export class Game {
       ctx.font = "12px monospace";
       ctx.fillText(enc.id, s.x + 6, 96);
     }
+    drawBossDebug(ctx, this);
   }
 }

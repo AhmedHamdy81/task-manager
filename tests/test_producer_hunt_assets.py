@@ -69,6 +69,14 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("CONFIRM", select)
         self.assertIn("BACK", select)
         self.assertIn("drawContainedImage", select)
+        self.assertIn("SELECT CHARACTER", select)
+        self.assertIn("SPECIAL POWER", select)
+        self.assertIn("STATISTICS", select)
+        self.assertIn("LOCKED", select)
+        self.assertIn("COMING SOON", select)
+        self.assertIn("previewAnimation", select)
+        self.assertIn("loadOptionalImage", select)
+        self.assertIn("isCharacterUnlocked", select)
         settings = (js_root / "settings.js").read_text()
         self.assertIn("bigbangadmin.producer_hunt", settings)
         self.assertIn("LEGACY_SETTINGS_KEY", settings)
@@ -104,7 +112,9 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("The Post Suite", level)
         self.assertIn('type: "post_producer"', level)
         self.assertNotIn("assistant_producer", level)
-        self.assertEqual(level.count('type: "post_producer"'), 5)
+        self.assertGreaterEqual(level.count('type: "post_producer"'), 5)
+        self.assertIn("STUDIO_01_WAVES", level)
+        self.assertIn("STUDIO_01_ENCOUNTERS", level)
         self.assertIn("enc_final", level)
         self.assertIn("studio_01_gate", level)
         self.assertIn("studio_01_exit", level)
@@ -266,7 +276,8 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         game = (js_root / "game.js").read_text()
         self.assertIn('shot.owner === "enemy"', game)
         self.assertIn("spawnImpact", game)
-        self.assertIn("this.effects.filter", game)
+        self.assertIn("this.fx.spawn", game)
+        self.assertIn("export class FxPool", (js_root / "fx.js").read_text())
         self.assertNotIn("ENEMY_TYPES.assistant_producer", game)
 
         catalog = (js_root / "asset-catalog.js").read_text()
@@ -292,7 +303,8 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("PICKUP_HIT = 36", pickups)
         self.assertIn("canCollectPickup", pickups)
         self.assertIn("applyPickup", pickups)
-        self.assertIn('effect: "ammo"', pickups)
+        self.assertIn('effect: "energy"', pickups)
+        self.assertIn('pickup.effect === "ammo"', pickups)
 
         hud = (js_root / "hud.js").read_text()
         self.assertIn("portraitImage", hud)
@@ -318,6 +330,7 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
 
         level = (js_root / "levels" / "studio-01.js").read_text()
         self.assertIn("studio_01_health_post", level)
+        self.assertIn("studio_01_health_pre_boss", level)
         self.assertIn("studio_01_key", level)
         self.assertIn('kind: "energy"', level)
         self.assertIn('kind: "production_token"', level)
@@ -378,7 +391,7 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("studio_01_cable_intro", level)
         self.assertIn('kind: "live_cable"', level)
         self.assertIn("CAMERA", (js_root / "config.js").read_text())
-        self.assertIn("followY: 5.2", (js_root / "config.js").read_text())
+        self.assertIn("followY: 5.8", (js_root / "config.js").read_text())
         catalog = (js_root / "asset-catalog.js").read_text()
         self.assertIn("factor: 0.1", catalog)
         self.assertIn("factor: 0.3", catalog)
@@ -396,14 +409,30 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
             with Image.open(path) as img:
                 self.assertEqual(img.size, size, msg=rel)
 
+    def test_special_power_images(self):
+        names = (
+            "editor_timeline_freeze.png",
+            "assistant_production_rush.png",
+            "colorist_color_blast.png",
+            "vfx_supervisor_particle_storm.png",
+        )
+        for name in names:
+            path = ROOT / "abilities" / name
+            self.assertTrue(path.is_file(), str(path))
+            with Image.open(path) as img:
+                self.assertEqual(img.size, (256, 256), msg=name)
+                self.assertEqual(img.mode, "RGBA", msg=name)
+
     def test_pause_death_completion_and_settings(self):
         js_root = Path(__file__).resolve().parents[1] / "producer_hunt" / "static" / "producer_hunt" / "js"
         settings = (js_root / "settings.js").read_text()
         self.assertIn("SETTINGS_DEFAULTS", settings)
-        self.assertIn("masterVolume: 1", settings)
-        self.assertIn("musicVolume: 0.8", settings)
-        self.assertIn("effectsVolume: 1", settings)
-        self.assertIn("screenShake: true", settings)
+        self.assertIn("masterVolume: MIX.masterVolume", settings)
+        self.assertIn("musicVolume: MIX.musicVolume", settings)
+        self.assertIn("effectsVolume: MIX.effectsVolume", settings)
+        self.assertIn("voiceVolume: MIX.voiceVolume", settings)
+        self.assertIn('screenShake: "full"', settings)
+        self.assertIn('particleDensity: "medium"', settings)
         self.assertIn("reducedMotion: false", settings)
         self.assertIn("bigbangadmin.producer_hunt", settings)
         self.assertIn("LEGACY_SETTINGS_KEY", settings)
@@ -426,8 +455,8 @@ class ProducerHuntAssetPipelineTests(unittest.TestCase):
         self.assertIn("onVisibility", game)
         self.assertIn("clearTransient", game)
         self.assertIn("toggleFullscreen", game)
-        self.assertIn("LEVEL COMPLETE", game)
-        self.assertIn("The Post Suite", game)
+        self.assertIn("STUDIO 01 COMPLETE", (js_root / "results.js").read_text())
+        self.assertIn("The Post Suite", (js_root / "levels" / "studio-01.js").read_text())
         self.assertIn("NEXT LEVEL", game)
         self.assertIn("nextPlayableLevel", game)
         self.assertNotIn("assistant_producer/", game)

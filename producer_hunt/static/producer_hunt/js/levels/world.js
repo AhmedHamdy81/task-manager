@@ -9,6 +9,7 @@ import {
 } from "../progression.js";
 import { instantiateDestructible, injectDestructibleSolids } from "../destructibles.js";
 import { instantiateRescue } from "../rescues.js";
+import { instantiateVehicle } from "../vehicles.js";
 
 export const TILE = 64;
 export const t = (n) => n * TILE;
@@ -37,8 +38,10 @@ export function validateLevel(level) {
 
   const cpIds = (level.checkpoints || []).map((c) => c.id).filter(Boolean);
   if (new Set(cpIds).size !== cpIds.length) errors.push("Checkpoint IDs must be unique.");
-  const pkIds = (level.pickups || []).map((p) => p.id).filter(Boolean);
-  if (new Set(pkIds).size !== pkIds.length) errors.push("Persistent pickup IDs must be unique.");
+    const pkIds = (level.pickups || []).map((p) => p.id).filter(Boolean);
+    if (new Set(pkIds).size !== pkIds.length) errors.push("Persistent pickup IDs must be unique.");
+    const vehIds = (level.vehicles || []).map((v) => v.id).filter(Boolean);
+    if (new Set(vehIds).size !== vehIds.length) errors.push("Vehicle IDs must be unique.");
   const doorIds = new Set((level.doors || []).map((d) => d.id));
   for (const door of level.doors || []) {
     for (const id of door.requireDoors || []) {
@@ -118,6 +121,48 @@ export function validateLevel(level) {
     if (!(solid.w > 0 && solid.h > 0)) errors.push("A collidable platform has invalid dimensions.");
   }
 
+  const rescueIds = new Set();
+  const destructibleIds = new Set((level.destructibles || []).map((d) => d.id).filter(Boolean));
+  for (const rescue of level.rescues || []) {
+    if (!rescue.id) errors.push("A rescue is missing an id.");
+    else if (rescueIds.has(rescue.id)) errors.push(`Duplicate rescue id "${rescue.id}".`);
+    else rescueIds.add(rescue.id);
+    if (rescue.containerId && !destructibleIds.has(rescue.containerId)) {
+      errors.push(`Rescue "${rescue.id}" references missing container "${rescue.containerId}".`);
+    }
+  }
+  const hazardIds = new Set();
+  for (const hz of level.hazards || []) {
+    if (!hz.id) warnings.push("A hazard is missing an id.");
+    else if (hazardIds.has(hz.id)) errors.push(`Duplicate hazard id "${hz.id}".`);
+    else hazardIds.add(hz.id);
+    if (width && (hz.x < -64 || hz.x > width + 64)) {
+      warnings.push(`Hazard "${hz.id || "?"}" is outside level bounds.`);
+    }
+  }
+  if (level.bossArena) {
+    const a = level.bossArena;
+    if (!(Number.isFinite(a.left) && Number.isFinite(a.right) && a.left < a.right)) {
+      errors.push("Boss arena bounds are invalid (expected left < right).");
+    } else if (width && (a.left < 0 || a.right > width)) {
+      warnings.push("Boss arena extends outside the world width.");
+    }
+  }
+  for (const enc of level.encounters || []) {
+    if (!enc.scripted || enc.boss) continue;
+    if (enc.arenaLeft != null && enc.arenaRight != null && !(enc.arenaLeft < enc.arenaRight)) {
+      errors.push(`Encounter "${enc.id}" has invalid arena bounds.`);
+    }
+    for (const p of enc.spawnPoints || []) {
+      if (width && (p.x < 0 || p.x > width)) {
+        warnings.push(`Encounter "${enc.id}" spawn x=${p.x} is outside the world.`);
+      }
+    }
+  }
+  if (level.music && typeof level.music !== "string") {
+    warnings.push("Level music id should be a string catalog key.");
+  }
+
   const spawn = level.playerSpawn;
   if (spawn) {
     if (width && (spawn.x < 0 || spawn.x > width || spawn.y < 0 || spawn.y > height)) {
@@ -172,6 +217,7 @@ export function buildWorld(level) {
     hazards: (level.hazards || []).map((h, i) => instantiateHazard(h, i, level.id)),
     destructibles: (level.destructibles || []).map((d, i) => instantiateDestructible(d, i, level.id)),
     rescues: (level.rescues || []).map((r, i) => instantiateRescue(r, i, level.id)),
+    vehicles: (level.vehicles || []).map((v, i) => instantiateVehicle(v, i, level.id)),
     ambients: (level.ambients || []).map((a) => ({ ...a })),
     hazardQuietX: level.hazardQuietX,
     moverSolids: [],

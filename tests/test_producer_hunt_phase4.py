@@ -39,7 +39,7 @@ class ProducerHuntPhase4Tests(unittest.TestCase):
         self.assertIn("studio_01_cable_intro", self.s1)
         self.assertIn('kind: "live_cable"', self.s1)
         self.assertIn("enc_final", self.s1)
-        self.assertIn("activateX: t(98)", self.s1)
+        self.assertIn("activateX: t(96)", self.s1)
         self.assertIn("barber_light", self.s1)
         self.assertIn("studio_01_barber_approach", self.s1)
 

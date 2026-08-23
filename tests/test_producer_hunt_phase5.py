@@ -118,7 +118,7 @@ class ProducerHuntPhase5Tests(unittest.TestCase):
         self.assertIn('kind: "electrical_control_box"', self.s1)
         self.assertIn('kind: "barber_supply_case"', self.s1)
         self.assertIn("x: t(92)", self.s1)
-        self.assertIn("activateX: t(98)", self.s1)
+        self.assertIn("activateX: t(96)", self.s1)
         self.assertNotIn("destructibles:", self.s2)
 
     def test_drops_and_checkpoint_rules(self):

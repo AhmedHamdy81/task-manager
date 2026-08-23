@@ -53,6 +53,19 @@ export function hitsSolid(box, solids) {
   return Boolean(solids && solids.some((s) => aabb(box, s)));
 }
 
+/** Apply a horizontal knockback impulse and stop at walls. */
+export function resolveKnockback(actor, solids, dx) {
+  if (!actor || !dx) return;
+  actor.x += dx;
+  for (const s of solids || []) {
+    if (!aabb(actor, s)) continue;
+    if (dx > 0) actor.x = s.x - actor.w;
+    else actor.x = s.x + s.w;
+    actor.vx = 0;
+  }
+  if (typeof actor._syncFeet === "function") actor._syncFeet();
+}
+
 /** Expand the box over this frame's travel so fast shots cannot skip thin solids. */
 export function sweptHitsSolid(box, dx, dy, solids) {
   const moved = {

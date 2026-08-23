@@ -1,5 +1,6 @@
 import { dist } from "./collision.js";
 import { damageDestructiblesInRadius } from "./destructibles.js";
+import { BOSS_01 } from "./combat.js";
 
 export const SPECIAL_POWER_ALIASES = {
   cut: "timeline_freeze",
@@ -28,10 +29,19 @@ function nearbyEnemies(ctx, radius) {
 
 function applyEnemyDamage(ctx, enemy, amount) {
   if (!enemy?.alive || typeof enemy.takeDamage !== "function") return 0;
-  const dealt = enemy.takeDamage(amount);
+  let dmg = amount;
+  if (enemy.isBoss) dmg = Math.min(dmg, BOSS_01.specialBossCap || 80);
+  const wasAlive = enemy.alive;
+  const wasDying = Boolean(enemy.deathStarted);
+  const dealt = enemy.takeDamage(dmg);
   const n = Number(dealt) || 0;
-  if (n > 0) ctx.score = (ctx.score || 0) + n;
-  if (n > 0) ctx.beginHitStop?.(0.085, 0.22);
+  if (wasAlive && !enemy.alive && !enemy.isBoss) {
+    ctx.scoreboard?.awardEnemyDefeat(enemy, { weaponId: "special" });
+    ctx.scoreboard?.sync(ctx);
+  } else if (n > 0 && !enemy.isBoss) {
+    /* hit only */
+  }
+  if (n > 0) ctx.beginHitStop?.(0.07, 0.18);
   if (enemy.isBoss) {
     ctx.audio?.playSound?.(enemy.deathStarted ? "enemy_death" : "enemy_hit", { x: enemy.footX, camera: ctx.camera });
   } else {
@@ -284,6 +294,7 @@ export class SpecialAbility {
     this.active = this.duration || 0.05;
     this.cool = this.cooldown;
     this.def.activate(ctx, this);
+    ctx.scoreboard?.noteAbilityUse(this.id);
     ctx.hud?.invalidate?.();
     return { ok: true };
   }

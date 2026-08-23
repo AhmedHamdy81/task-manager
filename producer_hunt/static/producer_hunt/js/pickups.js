@@ -9,6 +9,7 @@ export const PICKUP_VALUES = {
   production_token: 100,
   access_key: 1,
   bonus: 250,
+  vehicle_repair: 40,
 };
 
 export const PICKUP_COLLECT_FX = {
@@ -38,7 +39,7 @@ export const PICKUP_DEFS = {
     sprite_frame: 1,
     collision_width: PICKUP_HIT,
     collision_height: PICKUP_HIT,
-    effect: "ammo",
+    effect: "energy",
     value: PICKUP_VALUES.energy,
     persistence: "persist",
     respawn: false,
@@ -105,13 +106,74 @@ export const PICKUP_DEFS = {
     persistence: "persist",
     respawn: false,
   },
+  vehicle_repair: {
+    id: "vehicle_repair",
+    sprite_frame: 0,
+    collision_width: PICKUP_HIT,
+    collision_height: PICKUP_HIT,
+    effect: "vehicle_repair",
+    value: PICKUP_VALUES.vehicle_repair,
+    persistence: "persist",
+    respawn: false,
+    label: "DOLLY REPAIR",
+  },
+  ammo: {
+    id: "ammo",
+    sprite_frame: 1,
+    collision_width: PICKUP_HIT,
+    collision_height: PICKUP_HIT,
+    effect: "ammo",
+    value: 40,
+    persistence: "persist",
+    respawn: false,
+    label: "AMMO",
+  },
+  machine_gun: {
+    id: "machine_gun",
+    sprite_frame: 3,
+    collision_width: PICKUP_HIT,
+    collision_height: PICKUP_HIT,
+    effect: "weapon",
+    weaponId: "machine_gun",
+    value: 0,
+    persistence: "persist",
+    respawn: false,
+    label: "MACHINE GUN",
+  },
+  shotgun: {
+    id: "shotgun",
+    sprite_frame: 6,
+    collision_width: PICKUP_HIT,
+    collision_height: PICKUP_HIT,
+    effect: "weapon",
+    weaponId: "shotgun",
+    value: 0,
+    persistence: "persist",
+    respawn: false,
+    label: "SHOTGUN",
+  },
+  heavy_blaster: {
+    id: "heavy_blaster",
+    sprite_frame: 2,
+    sheetKey: "player_weapons",
+    collision_width: PICKUP_HIT,
+    collision_height: PICKUP_HIT,
+    effect: "weapon",
+    weaponId: "heavy_blaster",
+    value: 0,
+    persistence: "persist",
+    respawn: false,
+    label: "HEAVY BLASTER",
+  },
 };
 
 const KIND_ALIAS = {
-  ammo: "energy",
   token: "production_token",
   key: "access_key",
   crystal: "ability_charge",
+  weapon_machine_gun: "machine_gun",
+  weapon_shotgun: "shotgun",
+  weapon_heavy_blaster: "heavy_blaster",
 };
 
 export function pickupDef(kind) {
@@ -139,6 +201,9 @@ export function instantiatePickup(raw, index, levelId) {
     respawn: Boolean(def.respawn),
     value: def.value,
     effect: def.effect,
+    weaponId: def.weaponId || raw.weaponId || "",
+    label: def.label || raw.label || "",
+    sheetKey: def.sheetKey || raw.sheetKey || "pickups",
   };
 }
 
@@ -148,10 +213,18 @@ export function canCollectPickup(pickup, player) {
   if (pickup.effect === "none") return false;
   if (pickup.effect === "health") return player.health < player.maxHealth;
   if (pickup.effect === "ammo") {
-    const w = player.weapon;
-    return w && w.ammo >= 0 && w.ammo < w.maxAmmo;
+    return Boolean(player.loadout?.canAcceptAmmo?.());
+  }
+  if (pickup.effect === "weapon") {
+    return Boolean(player.loadout && pickup.weaponId);
+  }
+  if (pickup.effect === "energy") {
+    const needsEnergy = (player.energy || 0) < (player.energyMax || 0);
+    const needsAmmo = Boolean(player.loadout?.canAcceptAmmo?.());
+    return needsEnergy || needsAmmo;
   }
   if (pickup.effect === "ability") return Boolean(player.ability) && !player.ability.ready;
+  if (pickup.effect === "vehicle_repair") return false;
   return true;
 }
 
@@ -160,8 +233,23 @@ export function applyPickup(pickup, player, game) {
   pickup.taken = true;
   const v = pickup.value;
   if (pickup.effect === "health") player.heal(v);
-  else if (pickup.effect === "ammo") player.weapon.addAmmo(v);
-  else if (pickup.effect === "score") game.score += v;
+  else if (pickup.effect === "ammo") {
+    const gained = player.loadout?.addGenericAmmo?.(v) || 0;
+    if (gained > 0) player.setNotice?.("AMMO", 1.2);
+  }
+  else if (pickup.effect === "weapon") {
+    const msg = player.loadout?.collectWeapon?.(pickup.weaponId) || pickup.label || "WEAPON";
+    player._syncWeaponRef?.();
+    player.setNotice?.(msg, 1.6);
+  }
+  else if (pickup.effect === "energy") {
+    player.addEnergy?.(v);
+    player.loadout?.addGenericAmmo?.(v);
+  }
+  else if (pickup.effect === "score") {
+    game.scoreboard?.award(`pickup:${pickup.id}`, v, { source: "pickup", bucket: "bonus" });
+    game.scoreboard?.sync(game);
+  }
   else if (pickup.effect === "key") player.keys += v;
   else if (pickup.effect === "ability") player.ability.cool = 0;
   return true;

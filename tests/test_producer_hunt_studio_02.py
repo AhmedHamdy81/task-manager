@@ -74,7 +74,10 @@ class ProducerHuntStudio02Tests(unittest.TestCase):
 
     def test_validation_covers_bounds_and_types(self):
         self.assertIn("outside level bounds", self.world)
-        self.assertIn('ALLOWED_ENEMIES = new Set(["post_producer", "client"])', self.world)
+        self.assertIn("post_producer", self.world)
+        self.assertIn("colorist", self.world)
+        self.assertIn("vfx_supervisor", self.world)
+        self.assertIn("ALLOWED_ENEMIES", self.world)
         self.assertIn("references missing encounter", self.world)
 
 

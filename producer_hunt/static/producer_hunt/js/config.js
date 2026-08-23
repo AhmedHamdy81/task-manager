@@ -21,21 +21,22 @@ export const PLAYER_INVULN_SEC = 0.85;
 export const PLAYER_HIT_FLASH_SEC = 0.12;
 export const ENEMY_HIT_FLASH_SEC = 0.1;
 export const HITSTOP_LIGHT_SEC = 0.045;
-export const HITSTOP_HEAVY_SEC = 0.085;
+export const HITSTOP_HEAVY_SEC = 0.07;
 export const SHAKE_LIGHT = 0.1;
+export const SHAKE_MEDIUM = 0.22;
 export const SHAKE_HEAVY = 0.38;
 export const DEBUG_JUMP = false;
 
 export const CAMERA = {
-  look: 140,
-  lookLerp: 4.2,
-  followX: 9.5,
-  followY: 6.4,
+  look: 110,
+  lookLerp: 5.2,
+  followX: 8.6,
+  followY: 5.8,
   focusX: 0.38,
   focusY: 0.7,
   airFocusY: 0.58,
-  deadY: 64,
-  shakeDecay: 4.4,
+  deadY: 72,
+  shakeDecay: 5.2,
 };
 /** Sprite frame / collision / muzzle overlay. Disabled in production. */
 export const DEBUG_QUERY = "debug";

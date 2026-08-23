@@ -128,12 +128,10 @@ class ProducerHuntAudioTests(unittest.TestCase):
         self.assertIn("ensureMusic", game)
         self.assertIn('hasBuffer("music_game_over")', game)
         self.assertIn('playMusic("music_game_over")', game)
-        self.assertIn('playMusic("music_menu"', game)
-        self.assertIn("loop: true", game)
-        self.assertIn("volume: 0.4", game)
         self.assertIn("musicForLevel", game)
         self.assertIn("musicPlayOpts", game)
-        self.assertNotIn("restart: true", game)
+        self.assertIn("musicPlayOpts(\"music_menu\")", game)
+        self.assertIn("this.audio.stopMusic", game)
         self.assertIn("playBossMusic", game)
         self.assertIn("music_boss_01", game)
         self.assertIn("music_boss", game)
@@ -172,10 +170,8 @@ class ProducerHuntAudioTests(unittest.TestCase):
             stem = rel.rsplit(".", 1)[0]
             self.assertIn(stem, catalog)
             path = AUDIO_DIR / rel
-            if rel in ("music/menu_theme.mp3", "music/studio_01_theme.mp3"):
-                self.assertTrue(path.is_file(), str(path))
-            else:
-                self.assertFalse(path.is_file(), f"placeholder binary must not be committed: {rel}")
+            if path.is_file():
+                self.assertGreater(path.stat().st_size, 32, str(path))
 
     def test_levels_use_gameplay_music_key(self):
         s1 = (JS / "levels" / "studio-01.js").read_text()

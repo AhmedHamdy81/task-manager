@@ -23,7 +23,9 @@ export class SpriteAnimator {
 
   _clip(name) {
     const anims = (this.kit && this.kit.animations) || {};
-    return anims[name] || anims.idle || {
+    const aliases = { run_shoot: "run", land: "crouch", special: "shoot" };
+    const resolved = anims[name] ? name : aliases[name] || name;
+    return anims[resolved] || anims.idle || {
       frames: 1,
       fps: 8,
       loop: true,
@@ -36,21 +38,32 @@ export class SpriteAnimator {
   }
 
   _applyClip(clip) {
+    const kitW = this.kit?.frameWidth || clip.frameWidth || 256;
+    const kitH = this.kit?.frameHeight || clip.frameHeight || 256;
+    const fw = clip.frameWidth || kitW;
+    const fh = clip.frameHeight || kitH;
+    const compatible = fw === kitW && fh === kitH;
     this.clip = clip;
     this.frames = Math.max(1, clip.frames || 1);
     this.fps = clip.fps || 8;
     this.loop = Boolean(clip.loop);
-    this.image = clip.image || null;
-    this.frameWidth = clip.frameWidth || this.kit?.frameWidth || 256;
-    this.frameHeight = clip.frameHeight || this.kit?.frameHeight || 256;
-    this.renderWidth = clip.renderWidth || this.kit?.renderWidth || this.frameWidth;
-    this.renderHeight = clip.renderHeight || this.kit?.renderHeight || this.frameHeight;
+    this.image = compatible ? clip.image || null : null;
+    this.frameWidth = kitW;
+    this.frameHeight = kitH;
+    this.renderWidth = this.kit?.renderWidth || kitW;
+    this.renderHeight = this.kit?.renderHeight || kitH;
   }
 
   play(name, opts = {}) {
     if (!name) return false;
     const restart = Boolean(opts.restart);
     if (this.name === name && !restart) return false;
+    const aliases = { run_shoot: "run", land: "crouch", special: "shoot" };
+    const same = (aliases[this.name] || this.name) === (aliases[name] || name);
+    if (same && !restart) {
+      this.name = name;
+      return false;
+    }
     this.name = name;
     this.frame = 0;
     this.time = 0;

@@ -261,8 +261,8 @@ export function grantReward(game, spec) {
     }
     if (reward.kind === "score") {
       const amt = Math.max(0, Number(reward.amount) || 0);
-      game.score += amt;
-      game.stats.rescueScore = (game.stats.rescueScore || 0) + amt;
+      game.scoreboard?.award(`rescue-fallback:${spec.id}`, amt, { source: "rescue_fallback", bucket: "rescue" });
+      game.scoreboard?.sync(game);
       granted.push("score");
       return amt > 0;
     }
@@ -275,11 +275,6 @@ export function grantReward(game, spec) {
     for (const row of spec.fallback || []) {
       if (tryOne(row)) break;
     }
-  }
-  const score = Math.max(0, Number(spec.score) || 0);
-  if (score) {
-    game.score += score;
-    game.stats.rescueScore = (game.stats.rescueScore || 0) + score;
   }
   return { granted, usedFallback };
 }
@@ -294,15 +289,12 @@ function showMessage(game, rescue) {
 }
 
 function awardAllBonus(game) {
-  if (game.stats.allRescuesAwarded) return;
   const hud = rescueHud(game.world);
   game.stats.rescuesFound = hud.found;
   game.stats.totalRescues = hud.total;
-  if (hud.found < hud.total || hud.total <= 0) return;
-  game.stats.allRescuesAwarded = true;
-  game.stats.allRescuesBonus = ALL_RESCUES_BONUS;
-  game.score += ALL_RESCUES_BONUS;
-  game.combatHint = { text: "ALL CREW RESCUED — 2000 BONUS", until: (game._worldTime || 0) + 2.6 };
+  game.scoreboard?.awardAllRescues(hud.found, hud.total);
+  game.scoreboard?.sync(game);
+  game.stats.allRescuesAwarded = Boolean(game.stats.allRescuesAwarded);
 }
 
 function beginRescue(game, r) {
@@ -319,6 +311,8 @@ function finishReward(game, r) {
   if (r.rewarded) return;
   r.rewarded = true;
   grantReward(game, r.def);
+  game.scoreboard?.awardRescue(r.kind, r.id);
+  game.scoreboard?.sync(game);
   showMessage(game, r);
   game.sfx("rescue_reward", { x: r.footX });
   const hud = rescueHud(game.world);
@@ -355,7 +349,7 @@ export function tickRescues(game, dt) {
     if (r.state === "available") {
       r.anim.play("idle");
       r.anim.update(dt);
-      if (!p?.alive) continue;
+      if (!p?.alive || p.mounted) continue;
       const inside = aabb(p.bounds(), zoneBox(r));
       const clear = areaClear(game, r);
       if (inside && !clear) {

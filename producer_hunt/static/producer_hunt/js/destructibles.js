@@ -5,6 +5,7 @@ import { instantiatePickup } from "./pickups.js";
 import { resolveDifficulty } from "./difficulty.js";
 import { DEBUG_COMBAT, HITSTOP_LIGHT_SEC, SHAKE_HEAVY, SHAKE_LIGHT } from "./config.js";
 import { syncDoorSolids } from "./progression.js";
+import { COMBAT_DESTRUCTIBLE_KINDS } from "./score-manager.js";
 
 const HP = 10;
 const MISSING = new Set();
@@ -61,7 +62,7 @@ export const DESTRUCTIBLE_DEFS = {
     enemyDamage: false,
     hitSfx: "destruct_wood",
     destroySfx: "destruct_break",
-    scoreOnBreak: 15,
+    scoreOnBreak: 25,
     dropTable: [
       { kind: null, weight: 45 },
       { kind: "ammo", weight: 25 },
@@ -83,7 +84,7 @@ export const DESTRUCTIBLE_DEFS = {
     enemyDamage: false,
     hitSfx: "destruct_glass",
     destroySfx: "destruct_glass",
-    scoreOnBreak: 25,
+    scoreOnBreak: 40,
     sparks: true,
     dropTable: [{ kind: null, weight: 70 }, { kind: "bonus", weight: 30 }],
   }),
@@ -118,7 +119,7 @@ export const DESTRUCTIBLE_DEFS = {
     enemyDamage: false,
     hitSfx: "destruct_wood",
     destroySfx: "destruct_break",
-    scoreOnBreak: 20,
+    scoreOnBreak: 50,
     dropTable: [
       { kind: null, weight: 50 },
       { kind: "ammo", weight: 30 },
@@ -144,7 +145,7 @@ export const DESTRUCTIBLE_DEFS = {
     hitSfx: "destruct_metal",
     destroySfx: "destruct_overload",
     warningSfx: "destruct_overload",
-    scoreOnBreak: 40,
+    scoreOnBreak: 75,
     dropTable: [{ kind: null, weight: 80 }, { kind: "ammo", weight: 20 }],
   }),
   compressed_air_canister: visual("compressed_air_canister", {
@@ -166,7 +167,7 @@ export const DESTRUCTIBLE_DEFS = {
     hitSfx: "destruct_metal",
     destroySfx: "destruct_boom",
     warningSfx: "destruct_hiss",
-    scoreOnBreak: 35,
+    scoreOnBreak: 100,
     dropTable: [{ kind: null, weight: 100 }],
   }),
   barber_supply_case: visual("barber_supply_case", {
@@ -249,6 +250,23 @@ export const DESTRUCTIBLE_DEFS = {
     h: 100,
     color: "#eab308",
     damagedColor: "#a16207",
+    explosive: false,
+    blocksMovement: true,
+    enemyDamage: false,
+    chain: true,
+    hitSfx: "destruct_metal",
+    destroySfx: "destruct_break",
+    scoreOnBreak: 10,
+    dropTable: [{ kind: null, weight: 100 }],
+  }),
+  dolly_barricade: visual("security_barrier", {
+    id: "dolly_barricade",
+    displayName: "Dolly Barricade",
+    maxHealth: 3 * HP,
+    w: 72,
+    h: 88,
+    color: "#64748b",
+    damagedColor: "#334155",
     explosive: false,
     blocksMovement: true,
     enemyDamage: false,
@@ -519,7 +537,8 @@ function finishDestroy(game, d) {
   const cy = d.y + d.h * 0.5;
   if (!d.def.explosive) game.sfx(d.def.destroySfx || "destruct_break", { x: cx });
   spawnDebris(game, d, d.kind === "film_reel_container" ? 9 : 6);
-  if (d.def.scoreOnBreak) game.score += d.def.scoreOnBreak;
+  game.scoreboard?.awardDestructible(d.kind, d.id, { fallback: d.def.scoreOnBreak || 0, combat: Boolean(d.def.explosive) });
+  game.scoreboard?.sync(game);
   const kind = d.dropKind || rollDrop(d.def, game.settings);
   spawnDrop(game, d, kind);
   if (d.def.collapse) d.state = "rubble";
@@ -580,12 +599,13 @@ export function applyExplosion(game, origin, spec) {
         if (dmg <= 0) return;
         const wasAlive = enemy.alive;
         const wasDying = Boolean(enemy.deathStarted);
-        game.score += enemy.takeDamage(dmg);
+        enemy.takeDamage(dmg);
         if (enemy.isBoss) {
           if (enemy.deathStarted && !wasDying) game.sfx("enemy_death", { x: enemy.footX });
           else if (!enemy.deathStarted) game.sfx("enemy_hit", { x: enemy.footX });
         } else if (wasAlive && !enemy.alive) {
-          game.stats.kills += 1;
+          game.scoreboard?.awardEnemyDefeat(enemy, { weaponId: spec.weaponId || "" });
+          game.scoreboard?.sync(game);
           game.sfx("enemy_death", { x: enemy.footX });
         } else game.sfx("enemy_hit", { x: enemy.footX });
       });
@@ -660,6 +680,9 @@ export function tryHitDestructible(game, shot) {
       return true;
     }
     shot.hasHit = true;
+    if (playerShot && shot.volleyId && COMBAT_DESTRUCTIBLE_KINDS.has(d.kind)) {
+      game.scoreboard?.noteAttackHit(shot.volleyId, d.id);
+    }
     damageDestructible(game, d, shot.damage || 10);
     const stop = shot.hitStop;
     if (stop === "heavy") game.beginHitStop(0.085, shot.cameraShake || SHAKE_HEAVY);
@@ -688,6 +711,9 @@ export function splashDestructibles(game, shot, excludeBox) {
     seen.add(d.id);
     const falloff = 1 - dist / shot.splashRadius;
     const dmg = Math.max(1, Math.round(shot.splashDamage * (0.4 + 0.6 * falloff)));
+    if (shot.volleyId && COMBAT_DESTRUCTIBLE_KINDS.has(d.kind)) {
+      game.scoreboard?.noteAttackHit(shot.volleyId, d.id);
+    }
     damageDestructible(game, d, dmg);
   }
 }

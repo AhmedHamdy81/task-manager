@@ -29,7 +29,7 @@ export class HUD {
     this._sig = "";
   }
 
-  signature({ player, score, assets, objective = "", wave = null, crew = null }) {
+  signature({ player, score, assets, objective = "", wave = null, crew = null, vehicle = null, combo = 0, comboMul = 1 }) {
     const w = player.weapon;
     const ab = player.ability;
     const kit = assets?.characterKit(player.character.id);
@@ -58,6 +58,10 @@ export class HUD {
       wave?.living ?? 0,
       crew?.found ?? 0,
       crew?.total ?? 0,
+      vehicle?.health ?? -1,
+      vehicle?.spotlight ?? -1,
+      combo,
+      comboMul,
     ].join("|");
   }
 
@@ -70,7 +74,7 @@ export class HUD {
     ctx.drawImage(this._layer, 0, 0);
   }
 
-  _compose(ctx, { player, score, assets, objective = "", wave = null, crew = null }) {
+  _compose(ctx, { player, score, assets, objective = "", wave = null, crew = null, vehicle = null }) {
     ctx.clearRect(0, 0, this._layer.width, this._layer.height);
 
     const keys = player.keys || 0;
@@ -127,26 +131,40 @@ export class HUD {
     ctx.fillStyle = "#f4f1ea";
     ctx.fillText(`${score}`, textX + 28, MARGIN + 102);
 
-    icon(ctx, sheet, HUD_FRAMES.ammo, textX + 140, MARGIN + 84);
-    const ammoLabel = player.weapon.ammo < 0 ? "∞" : `${player.weapon.ammo} / ${player.weapon.maxAmmo}`;
-    ctx.fillText(ammoLabel, textX + 168, MARGIN + 102);
+    if (vehicle) {
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 13px sans-serif";
+      ctx.fillText("BATTLE DOLLY CANNON  ∞", textX, MARGIN + 128);
+    } else {
+      icon(ctx, sheet, HUD_FRAMES.ammo, textX + 140, MARGIN + 84);
+      const ammoLabel = player.weapon.ammo < 0 ? "∞" : `${player.weapon.ammo} / ${player.weapon.maxAmmo}`;
+      ctx.fillText(ammoLabel, textX + 168, MARGIN + 102);
 
-    const weapons = assets?.sheet("player_weapons");
-    const wdef = player.loadout?.def?.() || {};
-    drawSheetFrame(ctx, weapons, wdef.hudIcon ?? player.weapon.weaponFrame ?? 0, textX, MARGIN + 108, 28, 28);
-    ctx.fillStyle = "#f4f1ea";
-    ctx.font = "bold 13px sans-serif";
-    ctx.fillText((wdef.displayName || player.weapon.name || "Pistol").toUpperCase(), textX + 34, MARGIN + 128);
+      const weapons = assets?.sheet("player_weapons");
+      const wdef = player.loadout?.def?.() || {};
+      drawSheetFrame(ctx, weapons, wdef.hudIcon ?? player.weapon.weaponFrame ?? 0, textX, MARGIN + 108, 28, 28);
+      ctx.fillStyle = "#f4f1ea";
+      ctx.font = "bold 13px sans-serif";
+      ctx.fillText((wdef.displayName || player.weapon.name || "Pistol").toUpperCase(), textX + 34, MARGIN + 128);
+    }
     if (player.notice?.text) {
       ctx.fillStyle = player.notice.text === "EMPTY" ? "#f87171" : "#e8b84a";
       ctx.fillText(player.notice.text, textX + 250, MARGIN + 128);
     }
 
-    const spec = player.ability;
-    ctx.fillStyle = "#94a3b8";
-    ctx.fillText(spec.name, textX, MARGIN + 152);
-    ctx.fillStyle = spec.ready ? "#e8b84a" : "#64748b";
-    ctx.fillText(spec.ready ? "READY" : `CD ${Math.max(0, spec.cool).toFixed(1)}s`, textX + 160, MARGIN + 152);
+    if (vehicle) {
+      const specReady = vehicle.spotlight <= 0;
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillText("SPOTLIGHT BLAST", textX, MARGIN + 152);
+      ctx.fillStyle = specReady ? "#e8b84a" : "#64748b";
+      ctx.fillText(specReady ? "READY" : `CD ${Math.max(0, vehicle.spotlight).toFixed(1)}s`, textX + 160, MARGIN + 152);
+    } else {
+      const spec = player.ability;
+      ctx.fillStyle = "#94a3b8";
+      ctx.fillText(spec.name, textX, MARGIN + 152);
+      ctx.fillStyle = spec.ready ? "#e8b84a" : "#64748b";
+      ctx.fillText(spec.ready ? "READY" : `CD ${Math.max(0, spec.cool).toFixed(1)}s`, textX + 160, MARGIN + 152);
+    }
 
     icon(ctx, sheet, HUD_FRAMES.objective, textX, MARGIN + 162);
     ctx.fillStyle = "#f4f1ea";
@@ -162,7 +180,7 @@ export class HUD {
     if (crew && crew.total > 0) {
       ctx.fillStyle = "#e8b84a";
       ctx.font = "bold 13px sans-serif";
-      ctx.fillText(`CREW ${crew.found}/${crew.total}`, textX + 300, MARGIN + 204);
+      ctx.fillText(`Crew rescued ${crew.found}/${crew.total}`, textX + 300, MARGIN + 204);
     }
   }
 }

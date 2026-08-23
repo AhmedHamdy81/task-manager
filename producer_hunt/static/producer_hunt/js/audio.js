@@ -13,7 +13,7 @@ import {
   soundDef,
 } from "./audio-catalog.js";
 
-const BUS = { music: 1, effects: 1, ui: 1 };
+const BUS = { music: 1, effects: 1, ui: 1, voice: 1, ambience: 1 };
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
@@ -56,6 +56,8 @@ export class AudioManager {
       music: DEFAULT_MIX.musicVolume,
       effects: DEFAULT_MIX.effectsVolume,
       ui: DEFAULT_MIX.effectsVolume,
+      voice: DEFAULT_MIX.voiceVolume,
+      ambience: DEFAULT_MIX.ambienceVolume,
       master: DEFAULT_MIX.masterVolume,
     };
     this.muted = false;
@@ -140,10 +142,14 @@ export class AudioManager {
     const master = clamp(Number(settings?.masterVolume), 0, 1);
     const music = clamp(Number(settings?.musicVolume), 0, 1);
     const fx = clamp(Number(settings?.effectsVolume), 0, 1);
+    const voice = clamp(Number(settings?.voiceVolume), 0, 1);
+    const ambience = clamp(Number(settings?.ambienceVolume), 0, 1);
     this.volumes.master = Number.isFinite(master) ? master : DEFAULT_MIX.masterVolume;
     this.volumes.music = Number.isFinite(music) ? music : DEFAULT_MIX.musicVolume;
     this.volumes.effects = Number.isFinite(fx) ? fx : DEFAULT_MIX.effectsVolume;
     this.volumes.ui = this.volumes.effects;
+    this.volumes.voice = Number.isFinite(voice) ? voice : DEFAULT_MIX.voiceVolume;
+    this.volumes.ambience = Number.isFinite(ambience) ? ambience : DEFAULT_MIX.ambienceVolume;
     this.muted = Boolean(settings?.muted);
     this._applyBusGains();
   }
@@ -160,6 +166,8 @@ export class AudioManager {
     if (this._buses.music) this._buses.music.gain.value = this.volumes.music;
     if (this._buses.effects) this._buses.effects.gain.value = this.volumes.effects;
     if (this._buses.ui) this._buses.ui.gain.value = this.volumes.ui;
+    if (this._buses.voice) this._buses.voice.gain.value = this.volumes.voice;
+    if (this._buses.ambience) this._buses.ambience.gain.value = this.volumes.ambience;
   }
 
   async unlock() {
@@ -234,8 +242,47 @@ export class AudioManager {
   }
 
   outputVolume(def) {
-    const cat = def.category === "music" ? "music" : def.category === "ui" ? "ui" : "effects";
+    const cat =
+      def.category === "music"
+        ? "music"
+        : def.category === "ui"
+          ? "ui"
+          : def.category === "voice"
+            ? "voice"
+            : def.category === "ambience"
+              ? "ambience"
+              : "effects";
     return clamp(this.volumes.master * this.volumes[cat] * def.volume, 0, 1);
+  }
+
+  _busName(def) {
+    if (def.category === "ui") return "ui";
+    if (def.category === "ambience") return "ambience";
+    if (def.category === "voice") return "voice";
+    return "effects";
+  }
+
+  _liveVoiceCount() {
+    let n = 0;
+    for (const list of this._voices.values()) n += list.filter((v) => v.alive).length;
+    return n;
+  }
+
+  _stealLowestPriority() {
+    let worst = null;
+    let worstPri = 99;
+    for (const [id, list] of this._voices) {
+      const def = soundDef(id);
+      const pri = def?.priority ?? 2;
+      for (const voice of list) {
+        if (!voice.alive) continue;
+        if (pri < worstPri) {
+          worst = voice;
+          worstPri = pri;
+        }
+      }
+    }
+    if (worst) this._stopVoice(worst);
   }
 
   _spatial(def, opts) {
@@ -275,6 +322,7 @@ export class AudioManager {
     const now = performance.now() / 1000;
     const last = this._lastPlay.get(def.id) || 0;
     if (def.cooldown && now - last < def.cooldown) return false;
+    if (this._liveVoiceCount() >= 18) this._stealLowestPriority();
     const voices = this._voices.get(def.id) || [];
     const live = voices.filter((v) => v.alive);
     if (live.length >= def.maxInstances) {
@@ -296,7 +344,7 @@ export class AudioManager {
   }
 
   _startVoice(def, opts) {
-    if (!this._ctx || !this._buses[def.category === "ui" ? "ui" : "effects"]) return false;
+    if (!this._ctx || !this._buses[this._busName(def)]) return false;
     const buffer = this._buffers.get(def.id);
     if (!buffer) return false;
     try {
@@ -308,7 +356,7 @@ export class AudioManager {
       gain.gain.value = clamp(def.volume * atten, 0, 1);
       const panner = this._ctx.createStereoPanner();
       panner.pan.value = pan;
-      const bus = this._buses[def.category === "ui" ? "ui" : "effects"];
+      const bus = this._buses[this._busName(def)];
       src.connect(gain);
       gain.connect(panner);
       panner.connect(bus);
@@ -346,6 +394,20 @@ export class AudioManager {
       for (const voice of list) this._stopVoice(voice);
       this._voices.set(id, []);
     }
+  }
+
+  isPlaying(id) {
+    return (this._voices.get(id) || []).some((v) => v.alive);
+  }
+
+  ensureLoop(id, opts = {}) {
+    if (this.isPlaying(id)) return true;
+    return this.playSound(id, opts);
+  }
+
+  stopSound(id) {
+    for (const voice of this._voices.get(id) || []) this._stopVoice(voice);
+    this._voices.set(id, []);
   }
 
   setGameplayMuted(muted) {

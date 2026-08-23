@@ -145,6 +145,34 @@ export class AssetLoader {
     return pending;
   }
 
+  async loadOptionalImage(key, rel) {
+    if (this.images.has(key)) return this.images.get(key);
+    const src = this.url(rel);
+    if (!src) return null;
+    const img = await new Promise((resolve) => {
+      const el = new Image();
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(null), this.loadTimeoutMs);
+      el.onload = () => {
+        clearTimeout(timer);
+        finish(el);
+      };
+      el.onerror = () => {
+        clearTimeout(timer);
+        finish(null);
+      };
+      el.src = src;
+    });
+    this.images.set(key, img || null);
+    if (!img) this._warnOnce(`[Producer Hunt] Missing optional menu asset: ${rel}`);
+    return img || null;
+  }
+
   get(key) {
     return this.images.get(key) || null;
   }
