@@ -1,0 +1,664 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · Working Hours · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/project-working-hours.css') }}">
+{% endblock %}
+{% block content %}
+<div class="project-detail-page project-working-hours-page" id="project-working-hours-root">
+{% include 'partials/project_page_head.html' %}
+
+<header class="project-working-hours-intro">
+  <div>
+    <h2 class="project-working-hours-title">Working Hours</h2>
+    <p class="muted project-working-hours-lead">
+      {% if can_manage %}Actual, billable, and booked time across every department on this project.
+      {% else %}Your actual and billable time on this project.{% endif %}
+    </p>
+  </div>
+  <div class="project-working-hours-intro__actions">
+    <button type="button" class="btn btn--primary btn--small" id="working-hours-add-btn" aria-haspopup="dialog" aria-controls="working-hours-manual-dialog">Add Manual Hours</button>
+    {% if can_manage %}
+    <button type="button" class="btn btn--small btn--ghost" id="working-hours-rate-card-btn" aria-haspopup="dialog" aria-controls="working-hours-rate-card-dialog">Rate Card</button>
+    {% endif %}
+    <a class="btn btn--small btn--ghost" href="{{ export_url }}">Export CSV</a>
+    {% if can_manage and daily_worksheet_export_url %}
+    <button type="button" class="btn btn--small btn--ghost" id="working-hours-worksheet-btn" aria-haspopup="dialog" aria-controls="working-hours-worksheet-dialog" data-worksheet-url="{{ daily_worksheet_export_url }}">Export Daily Worksheet PDF</button>
+    {% endif %}
+  </div>
+</header>
+{% if can_manage %}
+<p class="muted project-working-hours-worksheet-note">Worksheet uses approved/billable hours and the current Rate Card.</p>
+{% endif %}
+
+<form class="project-working-hours-filters" id="working-hours-filters" method="get" action="{{ url_for('project_working_hours', project_id=project.id) }}">
+  <input type="hidden" name="sort" value="{{ filters.sort or 'date' }}">
+  <input type="hidden" name="dir" value="{{ filters.dir or 'desc' }}">
+  <div class="project-working-hours-filters-grid">
+    <label class="field">
+      <span class="field-label">From</span>
+      <input type="date" name="date_from" value="{{ filters.date_from or '' }}" data-open-picker>
+    </label>
+    <label class="field">
+      <span class="field-label">To</span>
+      <input type="date" name="date_to" value="{{ filters.date_to or '' }}" data-open-picker>
+    </label>
+    {% if can_manage %}
+    <label class="field">
+      <span class="field-label">User</span>
+      <select name="user_id">
+        <option value="">Anyone</option>
+        {% for m in members %}
+        <option value="{{ m.id }}"{% if filters.user_id == m.id %} selected{% endif %}>{{ m.name or m.email }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <label class="field">
+      <span class="field-label">Department</span>
+      <select name="department_key">
+        <option value="">All departments</option>
+        {% for key in department_keys %}
+        <option value="{{ key }}"{% if filters.department_key == key %} selected{% endif %}>{{ department_labels[key] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Work type</span>
+      <select name="work_type">
+        <option value="">All work types</option>
+        {% for item in rate_card_work_types %}
+        <option value="{{ item.key }}"{% if filters.work_type == item.key %} selected{% endif %}>{{ item.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Status</span>
+      <select name="status">
+        <option value="">All statuses</option>
+        {% for key in statuses %}
+        <option value="{{ key }}"{% if filters.status == key %} selected{% endif %}>{{ status_labels[key] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Source</span>
+      <select name="source_type">
+        <option value="">All sources</option>
+        {% for key in source_types %}
+        <option value="{{ key }}"{% if filters.source_type == key %} selected{% endif %}>{{ source_type_labels[key] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="field-label">Per page</span>
+      <select name="per_page">
+        {% for n in page_sizes %}
+        <option value="{{ n }}"{% if per_page == n %} selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+  <div class="project-working-hours-filters-actions">
+    <noscript><button type="submit" class="btn btn--primary btn--small">Apply filters</button></noscript>
+    <a class="btn btn--small btn--ghost" href="{{ clear_url }}">Clear Filters</a>
+  </div>
+</form>
+
+{% macro hours_card(label, minutes, hint='', modifier='') %}
+<div class="project-working-hours-card{% if modifier %} project-working-hours-card--{{ modifier }}{% endif %}">
+  <span class="project-working-hours-card__label">{{ label }}</span>
+  <strong class="project-working-hours-card__value tabular-nums">{{ format_minutes(minutes) }}</strong>
+  {% if hint %}<span class="project-working-hours-card__hint muted">{{ hint }}</span>{% endif %}
+</div>
+{% endmacro %}
+
+<div class="project-working-hours-cards" role="group" aria-label="Working hours summary">
+  {{ hours_card('Actual Hours', summary.actual_minutes, summary.counted_entries ~ ' entries', 'actual') }}
+  {{ hours_card('Billable Hours', summary.billable_minutes, '', 'billable') }}
+  {{ hours_card('Estimated Hours', summary.estimated_minutes, '', 'estimated') }}
+  {{ hours_card('Booked Hours', booked_minutes, 'Planned room time', 'booked') }}
+  {{ hours_card('This Week', summary.this_week_minutes, '', 'week') }}
+  {{ hours_card('Pending Approval', summary.pending_minutes, summary.pending_count ~ ' waiting', 'pending') }}
+</div>
+
+<p class="project-working-hours-difference muted">
+  Booked {{ format_minutes(booked_minutes) }} · Actual {{ format_minutes(summary.actual_minutes) }} ·
+  Difference <strong class="tabular-nums {% if difference_minutes < 0 %}is-under{% else %}is-over{% endif %}">{{ format_minutes(difference_minutes) }}</strong>
+</p>
+
+{% if can_manage and pending_rows %}
+<section class="panel admin-card project-working-hours-approvals" aria-label="Pending Approval">
+  <h3 class="panel-title">Pending Approval <span class="muted">({{ pending_rows|length }})</span></h3>
+  <ul class="project-working-hours-approvals__list">
+    {% for row in pending_rows %}
+    <li class="project-working-hours-approvals__row">
+      <span class="project-working-hours-approvals__info">
+        <span class="project-working-hours-approvals__who">{{ row.user_name }}</span>
+        <span class="project-working-hours-approvals__meta">{{ row.work_date }} · {{ row.department_label }} · {{ row.work_type_label }}</span>
+      </span>
+      <strong class="project-working-hours-approvals__hours tabular-nums">{{ row.actual_label }}</strong>
+      <span class="project-working-hours-approvals__actions">
+        <button type="button" class="btn btn--small btn--ghost"
+                data-pending-edit="{{ row.id }}"
+                data-pending-url="{{ url_for('project_working_hours_edit', project_id=project.id, ledger_id=row.id) }}"
+                data-pending-title="{{ row.title }}"
+                data-pending-who="{{ row.user_name }}"
+                data-pending-meta="{{ row.work_date }} · {{ row.department_label }} · {{ row.work_type_label }}"
+                data-pending-actual="{{ row.actual_minutes }}"
+                data-pending-billable="{{ row.billable_minutes }}">Edit</button>
+        <form method="post" action="{{ url_for('project_working_hours_approve', project_id=project.id, ledger_id=row.id) }}" class="inline">
+          <button type="submit" class="btn btn--small btn--primary">Approve</button>
+        </form>
+        <form method="post" action="{{ url_for('project_working_hours_reject', project_id=project.id, ledger_id=row.id) }}" class="inline">
+          <button type="submit" class="btn btn--small btn--ghost" data-confirm="Reject these working hours?">Reject</button>
+        </form>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if can_manage and (media_hours.total_minutes or media_hours.rows) %}
+<section class="panel admin-card project-working-hours-media" aria-label="Copy and Convert hours">
+  <h3 class="panel-title">Copy &amp; Convert</h3>
+  <p class="muted project-working-hours-media__hint">Machine Room hours already on the log. They are not waiting for approval.</p>
+  <div class="project-working-hours-media-summary">
+    <span class="project-working-hours-media-summary__label">Totals</span>
+    <span class="project-working-hours-media-summary__pill">Copy Media <strong class="tabular-nums">{{ media_hours.copy_label }}</strong></span>
+    <span class="project-working-hours-media-summary__pill">Convert / Transcode <strong class="tabular-nums">{{ media_hours.convert_label }}</strong></span>
+    <span class="project-working-hours-media-summary__total muted">Total <strong class="tabular-nums">{{ media_hours.total_label }}</strong></span>
+  </div>
+  {% if media_hours.rows %}
+  <ul class="project-working-hours-approvals__list project-working-hours-approvals__list--media">
+    {% for row in media_hours.rows %}
+    <li class="project-working-hours-approvals__row project-working-hours-approvals__row--media">
+      <span class="project-working-hours-approvals__info">
+        <span class="project-working-hours-approvals__who">{{ row.user_name }}</span>
+        <span class="project-working-hours-approvals__meta">{{ row.work_date }} · {{ row.source_type_label }}{% if row.linked_entity %} · {{ row.linked_entity }}{% endif %}</span>
+      </span>
+      <strong class="project-working-hours-approvals__hours tabular-nums">{{ row.actual_label }}</strong>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="project-working-hours-log" aria-label="Work log">
+  <hr class="project-working-hours-log__rule" aria-hidden="true">
+  <div class="project-working-hours-log__head">
+    <h3 class="project-working-hours-log__title">Work Log</h3>
+    {% if log_approved_only %}
+    <span class="project-working-hours-log__hint">Approved hours only &middot; use the Status filter for pending or rejected entries</span>
+    {% endif %}
+    <div class="project-working-hours-group-by{% if filters.group_by %} is-active{% endif %}">
+      <label class="project-working-hours-group-by__label" for="working-hours-group-by">Group by</label>
+      <select id="working-hours-group-by" class="project-working-hours-group-by__select" name="group_by" form="working-hours-filters" aria-label="Group work log by">
+        <option value=""{% if not filters.group_by %} selected{% endif %}>None</option>
+        {% for key in group_keys %}
+        <option value="{{ key }}"{% if filters.group_by == key %} selected{% endif %}>{{ group_labels[key] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  {% if not rows %}
+  <p class="muted project-working-hours-empty">
+    {% if log_approved_only %}No approved working hours match these filters.{% else %}No working hours match these filters.{% endif %}
+  </p>
+  {% else %}
+  <div class="admin-table-wrap project-working-hours-table-wrap">
+    <table class="admin-table admin-table--working-hours">
+      <thead>
+        <tr>
+          <th>
+            <a class="th-sort"{% if sort_aria.date %} aria-sort="{{ sort_aria.date }}"{% endif %} href="{{ sort_urls.date }}">
+              Date
+              {% if sort_aria.date %}<span class="sort-indicator" aria-hidden="true">{% if sort_aria.date == 'ascending' %}↑{% else %}↓{% endif %}</span>{% endif %}
+            </a>
+          </th>
+          <th>
+            <a class="th-sort"{% if sort_aria.user %} aria-sort="{{ sort_aria.user }}"{% endif %} href="{{ sort_urls.user }}">
+              User
+              {% if sort_aria.user %}<span class="sort-indicator" aria-hidden="true">{% if sort_aria.user == 'ascending' %}↑{% else %}↓{% endif %}</span>{% endif %}
+            </a>
+          </th>
+          <th>
+            <a class="th-sort"{% if sort_aria.department %} aria-sort="{{ sort_aria.department }}"{% endif %} href="{{ sort_urls.department }}">
+              Department
+              {% if sort_aria.department %}<span class="sort-indicator" aria-hidden="true">{% if sort_aria.department == 'ascending' %}↑{% else %}↓{% endif %}</span>{% endif %}
+            </a>
+          </th>
+          <th>
+            <a class="th-sort"{% if sort_aria.work_type %} aria-sort="{{ sort_aria.work_type }}"{% endif %} href="{{ sort_urls.work_type }}">
+              Work Type
+              {% if sort_aria.work_type %}<span class="sort-indicator" aria-hidden="true">{% if sort_aria.work_type == 'ascending' %}↑{% else %}↓{% endif %}</span>{% endif %}
+            </a>
+          </th>
+          <th>Source</th>
+          <th>Title</th>
+          <th class="is-numeric">Actual</th>
+          <th class="is-numeric">
+            <a class="th-sort"{% if sort_aria.billable %} aria-sort="{{ sort_aria.billable }}"{% endif %} href="{{ sort_urls.billable }}">
+              Billable
+              {% if sort_aria.billable %}<span class="sort-indicator" aria-hidden="true">{% if sort_aria.billable == 'ascending' %}↑{% else %}↓{% endif %}</span>{% endif %}
+            </a>
+          </th>
+          <th>
+            <a class="th-sort"{% if sort_aria.status %} aria-sort="{{ sort_aria.status }}"{% endif %} href="{{ sort_urls.status }}">
+              Status
+              {% if sort_aria.status %}<span class="sort-indicator" aria-hidden="true">{% if sort_aria.status == 'ascending' %}↑{% else %}↓{% endif %}</span>{% endif %}
+            </a>
+          </th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in display_rows %}
+        {% if item.kind == 'group' %}
+        <tr class="project-working-hours-group-row">
+          <th colspan="10" scope="colgroup">
+            <span class="project-working-hours-group-row__label">{{ item.label }}</span>
+          </th>
+        </tr>
+        {% elif item.kind == 'group_summary' %}
+        <tr class="project-working-hours-group-summary">
+          <td colspan="6">
+            <span class="project-working-hours-group-summary__meta">
+              Total{% if item.label %} · {{ item.label }}{% endif %}
+              · {{ item.count }} {{ 'entry' if item.count == 1 else 'entries' }}
+            </span>
+          </td>
+          <td class="is-numeric tabular-nums">{{ item.actual_label }}</td>
+          <td class="is-numeric tabular-nums">{{ item.billable_label }}</td>
+          <td colspan="2"></td>
+        </tr>
+        {% else %}
+        {% set row = item.row %}
+        <tr class="project-working-hours-row project-working-hours-row--{{ row.status }}">
+          <td class="tabular-nums">{{ row.work_date }}</td>
+          <td>{{ row.user_name }}</td>
+          <td>{{ row.department_label }}</td>
+          <td>{{ row.work_type_label }}</td>
+          <td><span class="project-working-hours-pill project-working-hours-pill--{{ row.source_type }}">{{ row.source_type_label }}</span></td>
+          <td>
+            {{ row.title }}
+            {% if row.linked_entity %}<span class="muted project-working-hours-linked">{{ row.linked_entity }}</span>{% endif %}
+          </td>
+          <td class="is-numeric tabular-nums">{{ row.actual_label }}</td>
+          <td class="is-numeric tabular-nums">{{ row.billable_label }}</td>
+          <td><span class="project-working-hours-status project-working-hours-status--{{ row.status }}">{{ row.status_label }}</span></td>
+          <td class="project-working-hours-actions">
+            <div class="project-working-hours-actions__group">
+            {% if row.can_approve %}
+            <form method="post" action="{{ url_for('project_working_hours_approve', project_id=project.id, ledger_id=row.id) }}" class="inline">
+              <button type="submit" class="btn btn--small btn--primary">Approve</button>
+            </form>
+            <form method="post" action="{{ url_for('project_working_hours_reject', project_id=project.id, ledger_id=row.id) }}" class="inline">
+              <button type="submit" class="btn btn--small btn--ghost" data-confirm="Reject these working hours?">Reject</button>
+            </form>
+            {% endif %}
+            {% if row.can_edit_billable %}
+            <form method="post"
+                  action="{{ url_for('project_working_hours_update_billable', project_id=project.id, ledger_id=row.id) }}"
+                  class="inline project-working-hours-billable-toggle">
+              <input type="hidden" name="billable_toggle" value="1">
+              <label class="project-working-hours-billable-check" title="{{ 'Billable' if row.billable_minutes else 'Not billable' }}">
+                <input type="checkbox"
+                       name="is_billable"
+                       value="1"
+                       {% if row.billable_minutes > 0 %}checked{% endif %}
+                       onchange="this.form.submit()"
+                       aria-label="Billable">
+                <span>Billable</span>
+              </label>
+            </form>
+            <button type="button" class="btn btn--small btn--ghost"
+                    data-billable-edit="{{ row.id }}"
+                    data-billable-minutes="{{ row.billable_minutes if row.billable_minutes > 0 else row.actual_minutes }}"
+                    data-billable-url="{{ url_for('project_working_hours_update_billable', project_id=project.id, ledger_id=row.id) }}"
+                    data-billable-title="{{ row.title }}"
+                    title="Edit billable amount">Amount</button>
+            {% endif %}
+            {% if row.can_delete %}
+            <form method="post" action="{{ url_for('project_working_hours_delete', project_id=project.id, ledger_id=row.id) }}" class="inline">
+              <button type="submit" class="btn btn--small btn--danger" data-confirm="Delete this working hours entry? This cannot be undone.">Delete</button>
+            </form>
+            {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+
+<nav class="project-working-hours-pager" aria-label="Working hours pagination">
+  <span class="muted">Page {{ page }} of {{ pages }} · {{ total }} entries</span>
+  <span class="project-working-hours-pager__links">
+    {% if prev_url %}<a class="btn btn--small btn--ghost" href="{{ prev_url }}">Previous</a>{% endif %}
+    {% if next_url %}<a class="btn btn--small btn--ghost" href="{{ next_url }}">Next</a>{% endif %}
+  </span>
+</nav>
+
+{% macro duration_wheel(id, label, hours_name, minutes_name, hint='', minutes_step=15) %}
+<div class="field project-working-hours-duration">
+  <span class="field-label" id="{{ id }}-label">{{ label }}{% if hint %} <span class="muted">{{ hint }}</span>{% endif %}</span>
+  <div class="dts project-working-hours-dts" id="{{ id }}" data-dts
+       data-dts-hours-max="24" data-dts-minutes-step="{{ minutes_step }}"
+       role="group" aria-labelledby="{{ id }}-label">
+    <p class="dts__preview" aria-live="polite">0 hr 0 min</p>
+    <div class="dts__columns">
+      <div class="dts__col">
+        <span class="dts__col-label">Hours</span>
+        <div class="dts__viewport" data-dts-wheel="hours" tabindex="0" role="listbox" aria-label="{{ label }} hours">
+          <ul class="dts__list" data-dts-list="hours"></ul>
+          <div class="dts__shade" aria-hidden="true"></div>
+          <div class="dts__selection" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="dts__col">
+        <span class="dts__col-label">Minutes</span>
+        <div class="dts__viewport" data-dts-wheel="minutes" tabindex="0" role="listbox" aria-label="{{ label }} minutes">
+          <ul class="dts__list" data-dts-list="minutes"></ul>
+          <div class="dts__shade" aria-hidden="true"></div>
+          <div class="dts__selection" aria-hidden="true"></div>
+        </div>
+      </div>
+    </div>
+    <input type="hidden" name="{{ hours_name }}" value="0" data-dts-hours-input>
+    <input type="hidden" name="{{ minutes_name }}" value="0" data-dts-minutes-input>
+  </div>
+</div>
+{% endmacro %}
+
+<dialog class="project-edit-modal project-working-hours-dialog" id="working-hours-manual-dialog" aria-label="Add manual hours">
+  <form method="post" action="{{ url_for('project_working_hours_manual', project_id=project.id) }}" class="project-edit-modal__card">
+    <header class="project-edit-modal__head">
+      <h2 class="project-edit-modal__title">Add Manual Hours</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-close-manual aria-label="Close">Close</button>
+    </header>
+    <div class="project-working-hours-dialog__body">
+      <div class="project-working-hours-form-grid">
+        <label class="field">
+          <span class="field-label">Work date</span>
+          <input type="date" name="work_date" value="{{ today.isoformat() }}" required data-open-picker>
+        </label>
+        {% if can_manage %}
+        <label class="field">
+          <span class="field-label">User</span>
+          <select name="user_id">
+            <option value="">Myself</option>
+            {% for m in members %}
+            <option value="{{ m.id }}">{{ m.name or m.email }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% endif %}
+        <label class="field">
+          <span class="field-label">Work type</span>
+          <select name="work_type" required>
+            {% for item in rate_card_work_types %}
+            <option value="{{ item.key }}">{{ item.label }}</option>
+            {% else %}
+            <option value="" disabled selected>Add services in Rate Card first</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="project-working-hours-duration-row">
+        {{ duration_wheel('working-hours-duration', 'Hours worked', 'duration_hours', 'duration_minutes') }}
+        {{ duration_wheel('working-hours-manual-billable', 'Billable', 'billable_hours', 'billable_minutes', '(optional · defaults to hours worked)') }}
+      </div>
+      <label class="field">
+        <span class="field-label">Title</span>
+        <input type="text" name="title" maxlength="200" placeholder="What was the work?">
+      </label>
+      <label class="field">
+        <span class="field-label">Description</span>
+        <textarea name="description" rows="3" maxlength="4000" placeholder="Optional detail"></textarea>
+      </label>
+      <details class="project-working-hours-links">
+        <summary>Link to project items <span class="muted">(optional)</span></summary>
+        <div class="project-working-hours-form-grid">
+          <label class="field">
+            <span class="field-label">Editing item</span>
+            <select name="episode_id">
+              <option value="">None</option>
+              {% for item in editing_items %}
+              <option value="{{ item.id }}">{{ item.code }} · {{ item.title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Shooting day</span>
+            <select name="shooting_day_id">
+              <option value="">None</option>
+              {% for day in shooting_days %}
+              <option value="{{ day.id }}">{{ day.day_name or ('Day ' ~ day.id) }} · Unit {{ day.unit_number }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">VFX shot</span>
+            <select name="vfx_shot_id">
+              <option value="">None</option>
+              {% for shot in vfx_shots %}
+              <option value="{{ shot.id }}">{{ shot.shot_code }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+      </details>
+    </div>
+    <footer class="project-edit-modal__foot">
+      <button type="button" class="btn btn--ghost" data-close-manual>Cancel</button>
+      <button type="submit" class="btn btn--primary">Save hours</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog class="project-edit-modal project-working-hours-dialog" id="working-hours-billable-dialog" aria-label="Update billable hours">
+  <form method="post" action="" class="project-edit-modal__card" id="working-hours-billable-form">
+    <header class="project-edit-modal__head">
+      <h2 class="project-edit-modal__title">Billable Hours</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-close-billable aria-label="Close">Close</button>
+    </header>
+    <div class="project-working-hours-dialog__body">
+      <p class="muted" id="working-hours-billable-context"></p>
+      <div class="project-working-hours-duration-row">
+        {{ duration_wheel('working-hours-billable-wheel', 'Billable time', 'billable_hours', 'billable_minutes') }}
+      </div>
+    </div>
+    <footer class="project-edit-modal__foot">
+      <button type="button" class="btn btn--ghost" data-close-billable>Cancel</button>
+      <button type="submit" class="btn btn--primary">Save</button>
+    </footer>
+  </form>
+</dialog>
+
+<dialog class="project-edit-modal project-working-hours-dialog" id="working-hours-pending-edit-dialog" aria-label="Edit pending hours">
+  <form method="post" action="" class="project-edit-modal__card" id="working-hours-pending-edit-form">
+    <header class="project-edit-modal__head">
+      <h2 class="project-edit-modal__title">Edit Hours</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-close-pending-edit aria-label="Close">Close</button>
+    </header>
+    <div class="project-working-hours-dialog__body">
+      <p class="project-working-hours-pending-edit__who" id="working-hours-pending-edit-who"></p>
+      <p class="muted" id="working-hours-pending-edit-meta"></p>
+      <div class="project-working-hours-duration-row">
+        {{ duration_wheel('working-hours-pending-actual', 'Hours worked', 'duration_hours', 'duration_minutes') }}
+        {{ duration_wheel('working-hours-pending-billable', 'Billable', 'billable_hours', 'billable_minutes', '(optional · defaults to hours worked)') }}
+      </div>
+      <label class="field">
+        <span class="field-label">Title</span>
+        <input type="text" name="title" id="working-hours-pending-edit-title" maxlength="200" placeholder="What was the work?">
+      </label>
+    </div>
+    <footer class="project-edit-modal__foot">
+      <button type="button" class="btn btn--ghost" data-close-pending-edit>Cancel</button>
+      <button type="submit" class="btn btn--primary">Save</button>
+    </footer>
+  </form>
+</dialog>
+
+{% if can_manage %}
+{% macro rate_card_item_row(item=None) %}
+{% set key = item.service_key if item else '' %}
+{% set name = item.service_name if item else '' %}
+{% set unit = item.billing_unit if item else 'Hour' %}
+{% set hour = item.rate_hour_input if item else '' %}
+{% set day = item.rate_day_input if item else '' %}
+{% set include = item.include_in_pdf if item else true %}
+{% set item_id = item.id if item and item.id else '' %}
+{% set locked = item.is_default if item else false %}
+            <tr class="project-working-hours-rate-card-row{% if locked %} is-default{% endif %}"{% if locked %} data-rate-card-locked="1"{% endif %}>
+              <td>
+                <label class="project-working-hours-rate-card-field">
+                  <span class="field-label">Service</span>
+                  <input type="hidden" name="service_key" value="{{ key|e }}">
+                  <input type="text" name="service_name" class="input input--sm" value="{{ name|e }}" maxlength="160" required autocomplete="off" spellcheck="false" title="{% if locked %}Studio default — cannot be renamed{% else %}{{ name|e }}{% endif %}" aria-label="Service"{% if locked %} readonly{% endif %}>
+                </label>
+              </td>
+              <td>
+                <label class="project-working-hours-rate-card-field">
+                  <span class="field-label">Unit</span>
+                  {% if locked %}
+                  <input type="hidden" name="billing_unit" value="{{ unit|e }}">
+                  <select class="input input--sm" aria-label="Unit" disabled>
+                    <option value="Hour"{% if unit != 'Fee' %} selected{% endif %}>Hour</option>
+                    <option value="Fee"{% if unit == 'Fee' %} selected{% endif %}>Fee</option>
+                  </select>
+                  {% else %}
+                  <select name="billing_unit" class="input input--sm" aria-label="Unit">
+                    <option value="Hour"{% if unit != 'Fee' %} selected{% endif %}>Hour</option>
+                    <option value="Fee"{% if unit == 'Fee' %} selected{% endif %}>Fee</option>
+                  </select>
+                  {% endif %}
+                </label>
+              </td>
+              <td>
+                <label class="project-working-hours-rate-card-field">
+                  <span class="field-label">Rate / Hour</span>
+                  <input type="text" name="rate_hour" class="input input--sm is-numeric" value="{{ hour }}" inputmode="numeric" pattern="[0-9]*" placeholder="—" autocomplete="off" data-rate-card-number aria-label="Rate per hour">
+                </label>
+              </td>
+              <td>
+                <label class="project-working-hours-rate-card-field">
+                  <span class="field-label">Rate / Day</span>
+                  <input type="text" name="rate_day" class="input input--sm is-numeric" value="{{ day }}" inputmode="numeric" pattern="[0-9]*" placeholder="—" autocomplete="off" data-rate-card-number aria-label="Rate per day">
+                </label>
+              </td>
+              <td class="project-working-hours-rate-card-table__actions">
+                <div class="project-working-hours-rate-card-actions">
+                  <span class="field-label project-working-hours-rate-card-include-label">PDF</span>
+                  <div class="project-working-hours-rate-card-actions__btns">
+                    <input type="hidden" name="include_in_pdf" value="{{ '1' if include else '0' }}">
+                    <label class="check check--select-btn project-working-hours-rate-card-include{% if include %} is-selected{% endif %}" data-rate-card-include>
+                      <input type="checkbox"{% if include %} checked{% endif %} tabindex="-1" aria-hidden="true">
+                      <span class="check-select-btn__text">Include</span>
+                    </label>
+                    {% if not locked %}
+                    <button
+                      type="button"
+                      class="btn btn--small btn--icon btn--danger project-working-hours-rate-card-remove"
+                      data-rate-card-remove
+                      aria-label="Remove service"
+                      title="Remove service"
+                      {% if item_id %}data-entity-id="{{ item_id }}" data-delete-url="{{ url_for('project_working_hours_rate_card_item_delete', project_id=project.id, item_id=item_id) }}"{% endif %}
+                    >
+                      <span class="btn__icon" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
+                    </button>
+                    {% endif %}
+                  </div>
+                </div>
+              </td>
+            </tr>
+{% endmacro %}
+<dialog class="project-edit-modal project-working-hours-dialog project-working-hours-rate-card-dialog" id="working-hours-rate-card-dialog" aria-label="Edit rate card">
+  <form method="post" action="{{ rate_card_save_url }}" class="project-edit-modal__card" id="working-hours-rate-card-form" data-project-id="{{ project.id }}">
+    <header class="project-edit-modal__head">
+      <div>
+        <h2 class="project-edit-modal__title">Rate Card</h2>
+        <p class="muted project-working-hours-rate-card-dialog__lead">Studio defaults cannot be renamed or removed. Add custom services, then save or export PDF</p>
+      </div>
+      <button type="button" class="btn btn--small btn--ghost" data-close-rate-card aria-label="Close">Close</button>
+    </header>
+    <div class="project-working-hours-dialog__body project-working-hours-rate-card-dialog__body">
+      <div class="project-working-hours-rate-card-toolbar">
+        <label class="project-working-hours-rate-card-field project-working-hours-rate-card-currency">
+          <span class="field-label">Currency</span>
+          <select name="currency" class="input input--sm" id="working-hours-rate-card-currency" required>
+            {% for code in rate_card_currencies %}
+            <option value="{{ code }}"{% if code == rate_card_currency %} selected{% endif %}>{{ code }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="admin-table-wrap project-working-hours-rate-card-table-wrap">
+        <table class="admin-table project-working-hours-rate-card-table" id="working-hours-rate-card-table">
+          <thead>
+            <tr>
+              <th scope="col">Service</th>
+              <th scope="col">Unit</th>
+              <th scope="col">Rate / Hour</th>
+              <th scope="col">Rate / Day</th>
+              <th scope="col">PDF</th>
+            </tr>
+          </thead>
+          <tbody id="working-hours-rate-card-rows">
+            {% for item in rate_card_items %}
+            {{ rate_card_item_row(item) }}
+            {% else %}
+            {{ rate_card_item_row() }}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <button type="button" class="btn btn--small project-working-hours-rate-card-add" id="working-hours-rate-card-add-row">Add service</button>
+    </div>
+    <footer class="project-edit-modal__foot project-working-hours-rate-card-dialog__foot">
+      <a class="btn btn--ghost" id="working-hours-rate-card-export" href="{{ rate_card_export_url }}" data-export-base="{{ rate_card_export_url }}" download>Export PDF</a>
+      <span class="project-working-hours-rate-card-dialog__foot-spacer"></span>
+      <button type="button" class="btn btn--ghost" data-close-rate-card>Cancel</button>
+      <button type="submit" class="btn btn--primary">Save</button>
+    </footer>
+  </form>
+</dialog>
+
+{% if can_manage and daily_worksheet_export_url %}
+<dialog class="project-edit-modal project-working-hours-dialog project-working-hours-worksheet-dialog" id="working-hours-worksheet-dialog" aria-label="Daily Worksheet preview">
+  <div class="project-edit-modal__card">
+    <header class="project-edit-modal__head">
+      <div>
+        <h2 class="project-edit-modal__title">Daily Worksheet</h2>
+        <p class="muted project-working-hours-worksheet-dialog__lead">Preview · approved/billable hours + Rate Card</p>
+      </div>
+      <button type="button" class="btn btn--small btn--ghost" data-close-worksheet aria-label="Close">Close</button>
+    </header>
+    <div class="project-working-hours-dialog__body project-working-hours-worksheet-dialog__body">
+      <p class="muted project-working-hours-worksheet-dialog__status" id="working-hours-worksheet-status" hidden></p>
+      <iframe class="project-working-hours-worksheet-dialog__frame" id="working-hours-worksheet-frame" title="Daily Worksheet PDF preview" hidden></iframe>
+    </div>
+    <footer class="project-edit-modal__foot project-working-hours-worksheet-dialog__foot">
+      <a class="btn btn--primary" id="working-hours-worksheet-download" href="{{ daily_worksheet_export_url }}" download hidden>Download PDF</a>
+      <span class="project-working-hours-worksheet-dialog__foot-spacer"></span>
+      <button type="button" class="btn btn--ghost" data-close-worksheet>Close</button>
+    </footer>
+  </div>
+</dialog>
+{% endif %}
+
+<template id="working-hours-rate-card-row-template">
+{{ rate_card_item_row() }}
+</template>
+{% endif %}
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/project_working_hours.js') }}" defer></script>
+{% endblock %}

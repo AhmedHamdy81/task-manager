@@ -1,0 +1,1219 @@
+/* Project Working Hours — ledger reporting page */
+
+.project-working-hours-intro {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.project-working-hours-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+.project-working-hours-lead {
+  margin: 0.25rem 0 0;
+}
+
+.project-working-hours-intro__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.project-working-hours-worksheet-note {
+  margin: -0.35rem 0 1rem;
+  font-size: 0.85rem;
+}
+
+/* --- Daily Worksheet preview modal --- */
+
+.project-working-hours-worksheet-dialog.project-edit-modal {
+  width: min(72rem, calc(100vw - 1.5rem));
+  max-width: calc(100vw - 1.5rem);
+  max-height: min(94vh, 56rem);
+}
+
+.project-working-hours-worksheet-dialog .project-edit-modal__card {
+  width: 100%;
+  max-width: none;
+  max-height: min(94vh, 56rem);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.project-working-hours-worksheet-dialog .project-edit-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 0.75rem;
+  flex: 0 0 auto;
+}
+
+.project-working-hours-worksheet-dialog__lead {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+}
+
+.project-working-hours-worksheet-dialog__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.project-working-hours-worksheet-dialog__status {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.project-working-hours-worksheet-dialog__status.is-error {
+  color: #f0a8a8;
+}
+
+.project-working-hours-worksheet-dialog__frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: min(70vh, 42rem);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: #1a1a1a;
+}
+
+.project-working-hours-worksheet-dialog__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.85rem;
+}
+
+.project-working-hours-worksheet-dialog__foot-spacer {
+  flex: 1 1 auto;
+}
+
+/* --- Summary cards --- */
+
+.project-working-hours-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.project-working-hours-card {
+  --wh-accent: 148, 163, 184;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 3px solid rgba(var(--wh-accent), 0.7);
+  border-radius: 8px;
+  background: rgba(var(--wh-accent), 0.06);
+}
+
+.project-working-hours-card--actual {
+  --wh-accent: 52, 211, 153;
+}
+
+.project-working-hours-card--billable {
+  --wh-accent: 56, 189, 248;
+}
+
+.project-working-hours-card--estimated {
+  --wh-accent: 167, 139, 250;
+}
+
+.project-working-hours-card--booked {
+  --wh-accent: 251, 191, 36;
+}
+
+.project-working-hours-card--week {
+  --wh-accent: 129, 140, 248;
+}
+
+.project-working-hours-card--pending {
+  --wh-accent: 244, 114, 182;
+}
+
+.project-working-hours-card__label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.75;
+}
+
+.project-working-hours-card__value {
+  font-size: 1.35rem;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.project-working-hours-card__hint {
+  font-size: 0.72rem;
+}
+
+.project-working-hours-difference {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+}
+
+.project-working-hours-difference .is-over {
+  color: rgb(251, 191, 36);
+}
+
+.project-working-hours-difference .is-under {
+  color: rgb(52, 211, 153);
+}
+
+/* --- Filters --- */
+
+.project-working-hours-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.6rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  margin-bottom: 1rem;
+}
+
+.project-working-hours-filters-grid {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.project-working-hours-filters-grid .field {
+  flex: 1 1 7.5rem;
+  min-width: 0;
+}
+
+.project-working-hours-filters-grid .field input,
+.project-working-hours-filters-grid .field select {
+  width: 100%;
+  min-width: 0;
+}
+
+.project-working-hours-filters-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+  margin-top: 0;
+}
+
+.project-working-hours-page input[type="date"],
+.project-working-hours-page input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+}
+
+/* --- Approval panel --- */
+
+.project-working-hours-approvals {
+  margin-bottom: 1.25rem;
+}
+
+.project-working-hours-media {
+  margin-bottom: 1.25rem;
+}
+
+.project-working-hours-media__hint {
+  margin: 0 0 0.75rem;
+}
+
+.project-working-hours-media-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.project-working-hours-media-summary__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(147, 197, 253, 0.95);
+}
+
+.project-working-hours-media-summary__pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.project-working-hours-media-summary__pill strong {
+  color: #fff;
+  font-weight: 650;
+}
+
+.project-working-hours-media-summary__total {
+  margin-left: auto;
+  font-size: 0.78rem;
+}
+
+.project-working-hours-media-summary__total strong {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.project-working-hours-pending-edit__who {
+  margin: 0;
+  font-weight: 650;
+  font-size: 0.95rem;
+}
+
+.project-working-hours-approvals__list--media {
+  margin-bottom: 0.75rem;
+}
+
+.project-working-hours-approvals__row--media {
+  --wh-accent: 96, 165, 250;
+}
+
+.project-working-hours-approvals__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.project-working-hours-approvals__row {
+  --wh-accent: 244, 114, 182;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.9rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 3px solid rgba(var(--wh-accent), 0.7);
+  border-radius: 8px;
+  background: rgba(var(--wh-accent), 0.05);
+}
+
+.project-working-hours-approvals__info {
+  display: flex;
+  flex: 1 1 16rem;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.project-working-hours-approvals__who {
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.project-working-hours-approvals__meta {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  color: var(--text-secondary);
+}
+
+.project-working-hours-approvals__hours {
+  padding: 0.15rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.project-working-hours-approvals__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.project-working-hours-approvals__actions .inline {
+  display: inline-flex;
+  margin: 0;
+}
+
+/* Shell buttons carry card-footer spacing; these sit inline in a centred row. */
+body.app--shell .project-working-hours-approvals__actions .btn,
+.project-working-hours-approvals__actions .btn {
+  align-self: center;
+  margin-top: 0;
+  min-height: 32px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.78rem;
+}
+
+/* --- Log table --- */
+
+.project-working-hours-log__rule {
+  margin: 0 0 0.85rem;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.project-working-hours-log__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.85rem;
+  margin-bottom: 0.65rem;
+}
+
+.project-working-hours-log__title {
+  margin: 0;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+}
+
+.project-working-hours-log__hint {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  opacity: 0.55;
+  min-width: 0;
+}
+
+.project-working-hours-group-by {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 0 0;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+.project-working-hours-group-by.is-active {
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+.project-working-hours-group-by__label {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+}
+
+.project-working-hours-group-by.is-active .project-working-hours-group-by__label {
+  color: rgba(186, 230, 253, 0.9);
+}
+
+.project-working-hours-group-by__select {
+  min-width: 9.5rem;
+  margin: 0;
+  padding: 0.35rem 1.85rem 0.35rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background-color: rgba(0, 0, 0, 0.28);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.82rem;
+  font-weight: 550;
+  line-height: 1.2;
+  cursor: pointer;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.55) 50%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.55) 50%, transparent 50%);
+  background-position:
+    calc(100% - 13px) 55%,
+    calc(100% - 8px) 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.project-working-hours-group-by__select:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background-color: rgba(0, 0, 0, 0.4);
+}
+
+.project-working-hours-group-by__select:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.18);
+}
+
+.project-working-hours-group-by.is-active .project-working-hours-group-by__select {
+  border-color: rgba(56, 189, 248, 0.4);
+  background-color: rgba(8, 24, 36, 0.55);
+}
+
+.admin-table--working-hours .th-sort {
+  text-decoration: none;
+}
+
+.admin-table--working-hours th.is-numeric .th-sort {
+  margin-left: auto;
+}
+
+.project-working-hours-group-row th {
+  padding: 0.55rem 1rem;
+  font-weight: 650;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.04);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.project-working-hours-group-row__label {
+  letter-spacing: 0.03em;
+}
+
+.project-working-hours-group-summary td {
+  padding: 0.45rem 1rem;
+  background: rgba(56, 189, 248, 0.1);
+  border-top: 1px solid rgba(56, 189, 248, 0.18);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.project-working-hours-group-summary td.is-numeric {
+  text-align: right;
+  font-weight: 650;
+}
+
+.project-working-hours-group-summary__meta {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(186, 230, 253, 0.95);
+  font-variant-numeric: tabular-nums;
+}
+
+body.app--shell .admin-table--working-hours th,
+body.app--shell .admin-table--working-hours td,
+.admin-table--working-hours th,
+.admin-table--working-hours td {
+  padding: 0.6rem 1rem;
+  vertical-align: middle;
+}
+
+.admin-table--working-hours .is-numeric {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin-table--working-hours td:first-child {
+  white-space: nowrap;
+}
+
+/* .muted carries a paragraph bottom margin that would stretch the row. */
+.project-working-hours-linked {
+  display: block;
+  margin: 0.1rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.project-working-hours-pill,
+.project-working-hours-status {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.project-working-hours-pill--work_session {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.project-working-hours-pill--manual {
+  border-color: rgba(129, 140, 248, 0.5);
+  background: rgba(129, 140, 248, 0.12);
+}
+
+.project-working-hours-pill--media_copy,
+.project-working-hours-pill--media_convert {
+  border-color: rgba(167, 139, 250, 0.5);
+  background: rgba(167, 139, 250, 0.12);
+}
+
+.project-working-hours-status--approved,
+.project-working-hours-status--auto_approved {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.14);
+}
+
+.project-working-hours-status--submitted {
+  border-color: rgba(251, 191, 36, 0.5);
+  background: rgba(251, 191, 36, 0.14);
+}
+
+.project-working-hours-status--rejected,
+.project-working-hours-status--failed {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.14);
+}
+
+.project-working-hours-status--cancelled,
+.project-working-hours-status--started,
+.project-working-hours-status--draft {
+  opacity: 0.8;
+}
+
+.project-working-hours-row--cancelled td,
+.project-working-hours-row--failed td {
+  opacity: 0.6;
+}
+
+/* The cell stays a table cell so the row keeps one baseline; the buttons sit
+   in an inner flex group. */
+.project-working-hours-actions {
+  white-space: nowrap;
+}
+
+.project-working-hours-actions__group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.project-working-hours-actions__group .inline {
+  display: inline-flex;
+  margin: 0;
+}
+
+.project-working-hours-billable-toggle {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+}
+
+.project-working-hours-billable-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 30px;
+  padding: 0 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.project-working-hours-billable-check:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.project-working-hours-billable-check input {
+  width: 0.95rem;
+  height: 0.95rem;
+  margin: 0;
+  accent-color: rgb(52, 211, 153);
+  cursor: pointer;
+}
+
+.project-working-hours-billable-check:has(input:not(:checked)) {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+body.app--shell .project-working-hours-actions__group .btn,
+.project-working-hours-actions__group .btn {
+  align-self: center;
+  margin-top: 0;
+  min-height: 30px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.76rem;
+}
+
+.project-working-hours-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 1rem 0 0.5rem;
+}
+
+.project-working-hours-pager__links {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.project-working-hours-empty {
+  padding: 1.5rem;
+  text-align: center;
+}
+
+/* --- Dialogs --- */
+
+.project-working-hours-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.25rem 0;
+}
+
+.project-working-hours-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.6rem;
+}
+
+.project-working-hours-duration-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+
+.project-working-hours-duration {
+  gap: 0.4rem;
+}
+
+.project-working-hours-duration .dts__preview {
+  font-size: 0.95rem;
+}
+
+.project-working-hours-links summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.35rem 0;
+}
+
+/* --- Dashboard Today Work --- */
+
+.shell-widget-today-work {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.6rem;
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.shell-widget-today-work__stats {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.shell-widget-today-work__stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+
+.shell-widget-today-work__label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted, rgba(255, 255, 255, 0.55));
+}
+
+.shell-widget-today-work__stat strong {
+  font-weight: 650;
+  color: var(--text-primary, #fff);
+}
+
+.shell-widget-today-work__links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+/* Shell buttons carry margin-top/align-self for card footers — this strip
+   centres its own compact secondary actions instead. */
+body.app--shell.dashboard-overview .shell-widget-today-work__links .btn {
+  align-self: center;
+  margin-top: 0;
+  min-height: 28px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.shell-widget-today-work__reminder {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-basis: 100%;
+  color: rgb(251, 191, 36);
+}
+
+.shell-widget-today-work__reminder::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+/* Keep the primary session action centred on the widget row and both states
+   the same height. */
+body.app--shell.dashboard-overview .shell-widget-session-actions .btn {
+  align-self: center;
+  margin-top: 0;
+  min-height: 40px;
+  padding: 0.5rem 0.9rem;
+}
+
+/* --- Rate card modal --- */
+
+.project-working-hours-rate-card-dialog.project-edit-modal {
+  width: min(58rem, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  max-height: min(92vh, 52rem);
+}
+
+.project-working-hours-rate-card-dialog .project-edit-modal__card {
+  width: 100%;
+  max-width: none;
+  max-height: min(92vh, 52rem);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.project-working-hours-rate-card-dialog .project-edit-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 0.85rem;
+  flex: 0 0 auto;
+}
+
+.project-working-hours-rate-card-dialog .project-edit-modal__title {
+  margin: 0;
+}
+
+.project-working-hours-rate-card-dialog__lead {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+}
+
+.project-working-hours-rate-card-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+}
+
+.project-working-hours-rate-card-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex: 0 0 auto;
+}
+
+.project-working-hours-rate-card-currency {
+  width: auto;
+  min-width: 7.5rem;
+  max-width: 9rem;
+}
+
+.project-working-hours-rate-card-currency select.input {
+  width: 100%;
+  min-width: 7.5rem;
+  cursor: pointer;
+}
+
+.project-working-hours-rate-card-table-wrap {
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  overflow: visible;
+}
+
+.project-working-hours-rate-card-table {
+  width: 100%;
+  margin: 0;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.project-working-hours-rate-card-table.admin-table th,
+.project-working-hours-rate-card-table.admin-table td {
+  padding: 0.4rem 0.5rem;
+  vertical-align: middle;
+}
+
+.project-working-hours-rate-card-table.admin-table thead th {
+  padding: 0.45rem 0.5rem 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  white-space: nowrap;
+}
+
+.project-working-hours-rate-card-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.project-working-hours-rate-card-table td:nth-child(1) {
+  width: auto;
+  min-width: 0;
+}
+
+.project-working-hours-rate-card-table td:nth-child(2),
+.project-working-hours-rate-card-table th:nth-child(2) {
+  width: 7.25rem;
+}
+
+.project-working-hours-rate-card-table td:nth-child(3),
+.project-working-hours-rate-card-table td:nth-child(4),
+.project-working-hours-rate-card-table th:nth-child(3),
+.project-working-hours-rate-card-table th:nth-child(4) {
+  width: 7.25rem;
+}
+
+.project-working-hours-rate-card-table td:nth-child(5),
+.project-working-hours-rate-card-table th:nth-child(5) {
+  width: 11.25rem;
+}
+
+.project-working-hours-rate-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.project-working-hours-rate-card-table .project-working-hours-rate-card-field {
+  gap: 0;
+}
+
+.project-working-hours-rate-card-table .field-label,
+.project-working-hours-rate-card-table .project-working-hours-rate-card-include-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.project-working-hours-rate-card-table .input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: 2.35rem;
+  box-sizing: border-box;
+  padding: 0.4rem 0.65rem;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto !important;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.project-working-hours-rate-card-table select.input {
+  cursor: pointer;
+  text-overflow: clip;
+  padding-inline-end: 1.6rem;
+}
+
+.project-working-hours-rate-card-table input[name="service_name"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.project-working-hours-rate-card-row.is-default input[name="service_name"],
+.project-working-hours-rate-card-row.is-default select.input {
+  cursor: default;
+  opacity: 0.92;
+  box-shadow: none;
+}
+
+.project-working-hours-rate-card-row.is-default select.input {
+  pointer-events: none;
+}
+
+.project-working-hours-rate-card-table input[name="rate_hour"],
+.project-working-hours-rate-card-table input[name="rate_day"] {
+  width: 100%;
+  min-width: 6.5ch;
+  text-align: right;
+  padding-inline: 0.55rem;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  letter-spacing: 0.02em;
+}
+
+.project-working-hours-rate-card-table__actions {
+  white-space: nowrap;
+  text-align: left;
+  vertical-align: top;
+}
+
+.project-working-hours-rate-card-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.project-working-hours-rate-card-actions__btns {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.project-working-hours-rate-card-include.check.check--select-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  justify-content: center;
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  height: 2.35rem;
+  min-height: 2.35rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(232, 237, 242, 0.62);
+  cursor: pointer;
+  overflow: hidden;
+  isolation: isolate;
+  box-sizing: border-box;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.project-working-hours-rate-card-remove {
+  flex: 0 0 2.35rem;
+  width: 2.35rem;
+  min-width: 2.35rem;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 0;
+  height: 2.35rem;
+  min-height: 2.35rem;
+  padding: 0;
+  border-radius: 8px;
+  line-height: 1;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
+.project-working-hours-rate-card-remove .btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+}
+
+.project-working-hours-rate-card-remove .btn__icon svg {
+  display: block;
+}
+
+.project-working-hours-rate-card-remove:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: rgba(248, 113, 113, 0.7);
+  color: #fee2e2;
+}
+
+.project-working-hours-rate-card-remove:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.project-working-hours-rate-card-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 2.5rem;
+  margin: 0;
+  padding: 0.55rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid #60a5fa;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 650;
+}
+
+body.app--shell .project-working-hours-rate-card-add {
+  background: #2563eb;
+  border-color: #60a5fa;
+  color: #fff;
+}
+
+body.app--shell .project-working-hours-rate-card-add:hover {
+  background: #3b82f6;
+  border-color: #93c5fd;
+  color: #fff;
+  transform: none;
+}
+
+body.app--shell .project-working-hours-rate-card-remove.btn--danger {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
+body.app--shell .project-working-hours-rate-card-remove.btn--danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: rgba(248, 113, 113, 0.7);
+  color: #fee2e2;
+}
+
+.project-working-hours-rate-card-include.check.check--select-btn input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.project-working-hours-rate-card-include .check-select-btn__text {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.65rem;
+  pointer-events: none;
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.project-working-hours-rate-card-include.check.check--select-btn:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.project-working-hours-rate-card-include.is-selected,
+.project-working-hours-rate-card-include.check.check--select-btn:has(input:checked) {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: rgba(16, 185, 129, 0.18);
+  color: rgb(167, 243, 208);
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.18);
+}
+
+.project-working-hours-rate-card-include.is-selected:hover,
+.project-working-hours-rate-card-include.check.check--select-btn:has(input:checked):hover {
+  border-color: rgba(52, 211, 153, 0.7);
+  background: rgba(16, 185, 129, 0.26);
+  color: rgb(209, 250, 229);
+}
+
+.project-working-hours-rate-card-include.check.check--select-btn:not(.is-selected):not(:has(input:checked)) {
+  border-color: rgba(248, 113, 113, 0.28);
+  background: rgba(127, 29, 29, 0.18);
+  color: rgba(254, 202, 202, 0.78);
+}
+
+.project-working-hours-rate-card-include.check.check--select-btn:not(.is-selected):not(:has(input:checked)):hover {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(127, 29, 29, 0.28);
+  color: rgb(254, 226, 226);
+}
+
+.project-working-hours-rate-card-dialog__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  margin: 0.85rem 0 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.project-working-hours-rate-card-dialog__foot-spacer {
+  flex: 1 1 auto;
+  min-width: 0.5rem;
+  max-width: none;
+}
+
+.project-working-hours-rate-card-dialog__foot [data-close-rate-card] {
+  margin-left: 0;
+}
