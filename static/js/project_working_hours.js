@@ -21,7 +21,11 @@
   var worksheetFrame = document.getElementById("working-hours-worksheet-frame");
   var worksheetStatus = document.getElementById("working-hours-worksheet-status");
   var worksheetDownload = document.getElementById("working-hours-worksheet-download");
-  var worksheetObjectUrl = null;
+  var quotationDialog = document.getElementById("working-hours-quotation-dialog");
+  var quotationBtn = document.getElementById("working-hours-quotation-btn");
+  var quotationFrame = document.getElementById("working-hours-quotation-frame");
+  var quotationStatus = document.getElementById("working-hours-quotation-status");
+  var quotationDownload = document.getElementById("working-hours-quotation-download");
   var durationWheel = document.getElementById("working-hours-duration");
   var manualBillableWheel = document.getElementById("working-hours-manual-billable");
   var billableWheel = document.getElementById("working-hours-billable-wheel");
@@ -47,71 +51,82 @@
     else dialog.removeAttribute("open");
   }
 
-  function revokeWorksheetPreview() {
-    if (worksheetObjectUrl) {
-      try {
-        URL.revokeObjectURL(worksheetObjectUrl);
-      } catch (err) {}
-      worksheetObjectUrl = null;
-    }
-    if (worksheetFrame) {
-      worksheetFrame.onload = null;
-      worksheetFrame.onerror = null;
-      worksheetFrame.removeAttribute("src");
-      worksheetFrame.hidden = true;
-    }
-    if (worksheetDownload) {
-      worksheetDownload.hidden = true;
-    }
-  }
-
-  function setWorksheetStatus(message, isError) {
-    if (!worksheetStatus) return;
-    if (!message) {
-      worksheetStatus.hidden = true;
-      worksheetStatus.textContent = "";
-      worksheetStatus.classList.remove("is-error");
-      return;
-    }
-    worksheetStatus.hidden = false;
-    worksheetStatus.textContent = message;
-    worksheetStatus.classList.toggle("is-error", !!isError);
-  }
-
   function withPreviewParam(url) {
     var next = String(url || "");
     if (!next) return next;
     return next + (next.indexOf("?") >= 0 ? "&" : "?") + "preview=1";
   }
 
-  function openWorksheetPreview() {
-    if (!worksheetDialog || !worksheetBtn) return;
-    var exportUrl = worksheetBtn.getAttribute("data-worksheet-url") || "";
-    if (!exportUrl) return;
-    revokeWorksheetPreview();
-    setWorksheetStatus("Loading worksheet preview…", false);
-    open(worksheetDialog);
+  function bindPdfPreview(opts) {
+    var objectUrl = null;
+    var dialog = opts.dialog;
+    var btn = opts.btn;
+    var frame = opts.frame;
+    var statusEl = opts.status;
+    var download = opts.download;
 
-    var previewUrl = withPreviewParam(exportUrl);
-    if (worksheetDownload) {
-      worksheetDownload.href = exportUrl;
+    function revoke() {
+      if (objectUrl) {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch (err) {}
+        objectUrl = null;
+      }
+      if (frame) {
+        frame.onload = null;
+        frame.onerror = null;
+        frame.removeAttribute("src");
+        frame.hidden = true;
+      }
+      if (download) download.hidden = true;
     }
 
-    // Load a server-rendered HTML preview (page images). Raw PDF blobs stay
-    // blank in browsers without a built-in PDF viewer (e.g. Cursor preview).
-    if (worksheetFrame) {
-      worksheetFrame.onload = function () {
-        setWorksheetStatus("", false);
-        if (worksheetDownload) worksheetDownload.hidden = false;
-        worksheetFrame.hidden = false;
-      };
-      worksheetFrame.onerror = function () {
-        revokeWorksheetPreview();
-        setWorksheetStatus("Could not load Daily Worksheet preview.", true);
-      };
-      worksheetFrame.src = previewUrl;
-      worksheetFrame.hidden = false;
+    function setStatus(message, isError) {
+      if (!statusEl) return;
+      if (!message) {
+        statusEl.hidden = true;
+        statusEl.textContent = "";
+        statusEl.classList.remove("is-error");
+        return;
+      }
+      statusEl.hidden = false;
+      statusEl.textContent = message;
+      statusEl.classList.toggle("is-error", !!isError);
     }
+
+    function openPreview() {
+      if (!dialog || !btn) return;
+      var exportUrl = btn.getAttribute("data-export-url") || btn.getAttribute("data-worksheet-url") || "";
+      if (!exportUrl) return;
+      revoke();
+      setStatus(opts.loading, false);
+      open(dialog);
+      if (download) download.href = exportUrl;
+      if (frame) {
+        frame.onload = function () {
+          setStatus("", false);
+          if (download) download.hidden = false;
+          frame.hidden = false;
+        };
+        frame.onerror = function () {
+          revoke();
+          setStatus(opts.error, true);
+        };
+        frame.src = withPreviewParam(exportUrl);
+        frame.hidden = false;
+      }
+    }
+
+    if (btn) {
+      btn.addEventListener("click", openPreview);
+    }
+    if (dialog) {
+      dialog.addEventListener("close", function () {
+        revoke();
+        setStatus("", false);
+      });
+    }
+    return { dialog: dialog };
   }
 
   var addBtn = document.getElementById("working-hours-add-btn");
@@ -151,18 +166,24 @@
     });
   }
 
-  if (worksheetBtn) {
-    worksheetBtn.addEventListener("click", function () {
-      openWorksheetPreview();
-    });
-  }
-
-  if (worksheetDialog) {
-    worksheetDialog.addEventListener("close", function () {
-      revokeWorksheetPreview();
-      setWorksheetStatus("", false);
-    });
-  }
+  bindPdfPreview({
+    dialog: worksheetDialog,
+    btn: worksheetBtn,
+    frame: worksheetFrame,
+    status: worksheetStatus,
+    download: worksheetDownload,
+    loading: "Loading worksheet preview…",
+    error: "Could not load Daily Worksheet preview.",
+  });
+  bindPdfPreview({
+    dialog: quotationDialog,
+    btn: quotationBtn,
+    frame: quotationFrame,
+    status: quotationStatus,
+    download: quotationDownload,
+    loading: "Loading quotation preview…",
+    error: "Could not load Quotation preview.",
+  });
 
   var rateCardAddRow = document.getElementById("working-hours-rate-card-add-row");
 
@@ -300,6 +321,12 @@
     if (closeWorksheet) {
       event.preventDefault();
       close(worksheetDialog);
+      return;
+    }
+    var closeQuotation = event.target.closest("[data-close-quotation]");
+    if (closeQuotation) {
+      event.preventDefault();
+      close(quotationDialog);
       return;
     }
 

@@ -21,8 +21,15 @@
     <button type="button" class="btn btn--small btn--ghost" id="working-hours-rate-card-btn" aria-haspopup="dialog" aria-controls="working-hours-rate-card-dialog">Rate Card</button>
     {% endif %}
     <a class="btn btn--small btn--ghost" href="{{ export_url }}">Export CSV</a>
-    {% if can_manage and daily_worksheet_export_url %}
-    <button type="button" class="btn btn--small btn--ghost" id="working-hours-worksheet-btn" aria-haspopup="dialog" aria-controls="working-hours-worksheet-dialog" data-worksheet-url="{{ daily_worksheet_export_url }}">Export Daily Worksheet PDF</button>
+    {% if can_manage and (daily_worksheet_export_url or quotation_export_url) %}
+    <div class="project-working-hours-intro__pdf-exports">
+      {% if daily_worksheet_export_url %}
+    <button type="button" class="btn btn--small btn--ghost" id="working-hours-worksheet-btn" aria-haspopup="dialog" aria-controls="working-hours-worksheet-dialog" data-export-url="{{ daily_worksheet_export_url }}">Export Daily Worksheet PDF</button>
+      {% endif %}
+      {% if quotation_export_url %}
+    <button type="button" class="btn btn--small btn--ghost" id="working-hours-quotation-btn" aria-haspopup="dialog" aria-controls="working-hours-quotation-dialog" data-export-url="{{ quotation_export_url }}">Export QUOTATION</button>
+      {% endif %}
+    </div>
     {% endif %}
   </div>
 </header>
@@ -156,32 +163,6 @@
     </li>
     {% endfor %}
   </ul>
-</section>
-{% endif %}
-
-{% if can_manage and (media_hours.total_minutes or media_hours.rows) %}
-<section class="panel admin-card project-working-hours-media" aria-label="Copy and Convert hours">
-  <h3 class="panel-title">Copy &amp; Convert</h3>
-  <p class="muted project-working-hours-media__hint">Machine Room hours already on the log. They are not waiting for approval.</p>
-  <div class="project-working-hours-media-summary">
-    <span class="project-working-hours-media-summary__label">Totals</span>
-    <span class="project-working-hours-media-summary__pill">Copy Media <strong class="tabular-nums">{{ media_hours.copy_label }}</strong></span>
-    <span class="project-working-hours-media-summary__pill">Convert / Transcode <strong class="tabular-nums">{{ media_hours.convert_label }}</strong></span>
-    <span class="project-working-hours-media-summary__total muted">Total <strong class="tabular-nums">{{ media_hours.total_label }}</strong></span>
-  </div>
-  {% if media_hours.rows %}
-  <ul class="project-working-hours-approvals__list project-working-hours-approvals__list--media">
-    {% for row in media_hours.rows %}
-    <li class="project-working-hours-approvals__row project-working-hours-approvals__row--media">
-      <span class="project-working-hours-approvals__info">
-        <span class="project-working-hours-approvals__who">{{ row.user_name }}</span>
-        <span class="project-working-hours-approvals__meta">{{ row.work_date }} · {{ row.source_type_label }}{% if row.linked_entity %} · {{ row.linked_entity }}{% endif %}</span>
-      </span>
-      <strong class="project-working-hours-approvals__hours tabular-nums">{{ row.actual_label }}</strong>
-    </li>
-    {% endfor %}
-  </ul>
-  {% endif %}
 </section>
 {% endif %}
 
@@ -648,6 +629,29 @@
       <a class="btn btn--primary" id="working-hours-worksheet-download" href="{{ daily_worksheet_export_url }}" download hidden>Download PDF</a>
       <span class="project-working-hours-worksheet-dialog__foot-spacer"></span>
       <button type="button" class="btn btn--ghost" data-close-worksheet>Close</button>
+    </footer>
+  </div>
+</dialog>
+{% endif %}
+
+{% if can_manage and quotation_export_url %}
+<dialog class="project-edit-modal project-working-hours-dialog project-working-hours-worksheet-dialog" id="working-hours-quotation-dialog" aria-label="Quotation preview">
+  <div class="project-edit-modal__card">
+    <header class="project-edit-modal__head">
+      <div>
+        <h2 class="project-edit-modal__title">Quotation</h2>
+        <p class="muted project-working-hours-worksheet-dialog__lead">Preview · Offline Editing includes Selection · Copy &amp; Convert includes Copy Media and Convert / Transcode</p>
+      </div>
+      <button type="button" class="btn btn--small btn--ghost" data-close-quotation aria-label="Close">Close</button>
+    </header>
+    <div class="project-working-hours-dialog__body project-working-hours-worksheet-dialog__body">
+      <p class="muted project-working-hours-worksheet-dialog__status" id="working-hours-quotation-status" hidden></p>
+      <iframe class="project-working-hours-worksheet-dialog__frame" id="working-hours-quotation-frame" title="Quotation PDF preview" hidden></iframe>
+    </div>
+    <footer class="project-edit-modal__foot project-working-hours-worksheet-dialog__foot">
+      <a class="btn btn--primary" id="working-hours-quotation-download" href="{{ quotation_export_url }}" download hidden>Download PDF</a>
+      <span class="project-working-hours-worksheet-dialog__foot-spacer"></span>
+      <button type="button" class="btn btn--ghost" data-close-quotation>Close</button>
     </footer>
   </div>
 </dialog>

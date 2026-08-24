@@ -356,6 +356,20 @@ WORK_TYPE_CANONICAL: dict[str, str] = {
     "online": "online_editing",
 }
 
+# Filter-only expansion: the Rate Card "Copy & Convert & Sync" choice should
+# match Machine Room log rows, which are stored as distinct work types.
+WORK_TYPE_FILTER_GROUPS: dict[str, frozenset[str]] = {
+    "copy_convert_sync": frozenset(
+        {
+            "copy_convert_sync",
+            "copy_convert",
+            "copy_media",
+            "convert_transcode",
+            "sync",
+        }
+    ),
+}
+
 
 def canonical_work_type(value: Any, *, fallback: str = "other") -> str:
     slug = normalize_work_type(value, fallback=fallback)
@@ -372,6 +386,9 @@ def work_type_equivalent_keys(value: Any) -> tuple[str, ...]:
     for alias, target in WORK_TYPE_CANONICAL.items():
         if target == canon:
             keys.add(alias)
+    group = WORK_TYPE_FILTER_GROUPS.get(canon) or WORK_TYPE_FILTER_GROUPS.get(slug)
+    if group:
+        keys.update(group)
     return tuple(sorted(keys))
 
 
@@ -403,11 +420,13 @@ def set_extra_work_type_labels(labels: dict[str, str] | None) -> None:
 def work_type_label(key: Any) -> str:
     slug = slugify_key(key, fallback="other", max_len=64)
     canon = canonical_work_type(slug)
+    if slug in WORK_TYPE_LABELS:
+        return WORK_TYPE_LABELS[slug]
+    if canon in WORK_TYPE_LABELS:
+        return WORK_TYPE_LABELS[canon]
     return (
         _extra_work_type_labels.get(slug)
         or _extra_work_type_labels.get(canon)
-        or WORK_TYPE_LABELS.get(canon)
-        or WORK_TYPE_LABELS.get(slug)
         or slug.replace("_", " ").title()
     )
 
@@ -1630,58 +1649,3 @@ def ensure_project_media_ledger(
             report["errors"] += 1
             db.session.rollback()
     return report
-
-
-def list_media_hours(
-    *,
-    project_id: int,
-    model: Any = None,
-    date_from: date | None = None,
-    date_to: date | None = None,
-) -> dict[str, Any]:
-    """Return Copy / Convert ledger rows and totals for the Machine Room strip."""
-    Model = resolve_model(model)
-    empty = {
-        "rows": [],
-        "copy_minutes": 0,
-        "convert_minutes": 0,
-        "total_minutes": 0,
-        "copy_label": format_minutes_label(0),
-        "convert_label": format_minutes_label(0),
-        "total_label": format_minutes_label(0),
-    }
-    if Model is None or project_id is None:
-        return empty
-    q = Model.query.filter(
-        Model.project_id == int(project_id),
-        Model.source_type.in_((SOURCE_MEDIA_COPY, SOURCE_MEDIA_CONVERT)),
-        Model.status.in_(
-            tuple(COUNTED_STATUSES | APPROVED_STATUSES | {STATUS_STARTED})
-        ),
-    )
-    if date_from is not None:
-        q = q.filter(Model.work_date >= date_from)
-    if date_to is not None:
-        q = q.filter(Model.work_date <= date_to)
-    rows = q.order_by(Model.work_date.asc(), Model.id.asc()).limit(100).all()
-    copy_minutes = 0
-    convert_minutes = 0
-    serialized = []
-    for row in rows:
-        payload = serialize_row(row)
-        serialized.append(payload)
-        mins = int(row.actual_minutes or 0)
-        if row.source_type == SOURCE_MEDIA_CONVERT:
-            convert_minutes += mins
-        else:
-            copy_minutes += mins
-    total = copy_minutes + convert_minutes
-    return {
-        "rows": serialized,
-        "copy_minutes": copy_minutes,
-        "convert_minutes": convert_minutes,
-        "total_minutes": total,
-        "copy_label": format_minutes_label(copy_minutes),
-        "convert_label": format_minutes_label(convert_minutes),
-        "total_label": format_minutes_label(total),
-    }

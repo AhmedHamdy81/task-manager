@@ -62,40 +62,83 @@
                 <li class="control-task-row">
                   <span class="control-task-title">{{ pt.title }}</span>
                   {% if pt.description %}<span class="control-task-desc">{{ pt.description }}</span>{% endif %}
-                  <form method="post" action="{{ url_for('control_title_delete', title_id=pt.id) }}" class="inline" data-confirm="{{ ('Remove the task title “' ~ pt.title ~ '” from this scope? Tasks already created from this title are not deleted.')|e }}">
+                  <form method="post" action="{{ url_for('control_title_delete', title_id=pt.id) }}" class="inline control-task-row__remove" data-confirm="{{ ('Remove the task title “' ~ pt.title ~ '” from this scope? Tasks already created from this title are not deleted.')|e }}">
                     <button type="submit" class="btn btn--small btn--danger">Remove</button>
                   </form>
                 </li>
                 {% endfor %}
               </ul>
               {% else %}
-              <p class="empty empty--tight">No task titles yet. Add one below.</p>
+              <p class="empty empty--tight">No task titles yet. Add one with Add title.</p>
               {% endif %}
 
               {% if scope_group %}
-              <form method="post" action="{{ url_for('control_scope_titles_restore_scope', scope_key=key) }}" class="inline control-scope-restore">
-                <button type="submit" class="btn btn--small btn--ghost" data-confirm="Add missing default titles for {{ label }}? Custom titles are kept.">Restore defaults for this scope</button>
-              </form>
-              <form class="form-stack control-add-task" method="post" action="{{ url_for('control_title_new') }}">
-                <input type="hidden" name="post_scope_key" value="{{ key }}">
-                <h4 class="control-single-title">Add a task title</h4>
-                <div class="form-row form-row--tight">
-                  <label class="field field--grow">
-                    <span class="field-label">Task title</span>
-                    <input type="text" name="title" required maxlength="200" placeholder="Task name">
-                  </label>
+              <div class="control-scope-title-actions">
+                <div class="control-scope-title-actions__left">
+                  <form method="post" action="{{ url_for('control_scope_titles_restore_scope', scope_key=key) }}" class="inline control-scope-restore" data-confirm="Add missing default titles for {{ label }}? Custom titles are kept.">
+                    <button type="submit" class="btn btn--small btn--ghost">Restore defaults for this scope</button>
+                  </form>
+                  <button type="button" class="btn btn--small btn--ghost" data-title-status data-scope-label="{{ label }}" data-status='{{ title_status_by_scope.get(key, {}) | tojson }}' aria-haspopup="dialog" aria-controls="control-title-status-dialog">Title status</button>
                 </div>
-                <label class="field">
-                  <span class="field-label">Description (optional)</span>
-                  <textarea name="description" rows="2" placeholder="Default notes when this title is used"></textarea>
-                </label>
-                <button type="submit" class="btn btn--ghost">Add title</button>
-              </form>
+                <button type="button" class="btn btn--small btn--primary" data-add-task-title data-scope-key="{{ key }}" data-scope-label="{{ label }}" aria-haspopup="dialog" aria-controls="control-add-task-dialog">Add title</button>
+              </div>
               {% endif %}
             </div>
           </details>
         </section>
         {% endfor %}
+
+        <dialog class="project-edit-modal" id="control-add-task-dialog" aria-labelledby="control-add-task-dialog-title">
+          <form method="post" action="{{ url_for('control_title_new') }}" class="project-edit-modal__card form-stack" id="control-add-task-form">
+            <h2 class="project-edit-modal__title" id="control-add-task-dialog-title">Add a task title</h2>
+            <p class="muted control-add-task-dialog__scope" id="control-add-task-dialog-scope"></p>
+            <input type="hidden" name="post_scope_key" id="control-add-task-scope-key" value="">
+            <label class="field">
+              <span class="field-label">Task title</span>
+              <input type="text" name="title" id="control-add-task-title" required maxlength="200" placeholder="Task name">
+            </label>
+            <label class="field">
+              <span class="field-label">Description (optional)</span>
+              <textarea name="description" id="control-add-task-description" rows="3" placeholder="Default notes when this title is used"></textarea>
+            </label>
+            <div class="project-edit-modal__actions">
+              <button type="button" class="btn btn--ghost" id="control-add-task-cancel">Cancel</button>
+              <button type="submit" class="btn btn--primary">Add title</button>
+            </div>
+          </form>
+        </dialog>
+
+        <dialog class="project-edit-modal control-title-status-dialog" id="control-title-status-dialog" aria-labelledby="control-title-status-dialog-title">
+          <div class="project-edit-modal__card">
+            <h2 class="project-edit-modal__title" id="control-title-status-dialog-title">Title status</h2>
+            <p class="muted control-add-task-dialog__scope" id="control-title-status-scope"></p>
+            <div class="control-title-status-grid">
+              <section class="control-title-status-col" data-status-kind="default">
+                <h3>Default <span data-count>0</span></h3>
+                <p class="muted control-title-status-col__hint">Factory catalog for this scope</p>
+                <ul></ul>
+              </section>
+              <section class="control-title-status-col" data-status-kind="added">
+                <h3>Added <span data-count>0</span></h3>
+                <p class="muted control-title-status-col__hint">Custom titles, not in the catalog</p>
+                <ul></ul>
+              </section>
+              <section class="control-title-status-col" data-status-kind="existed">
+                <h3>Existed <span data-count>0</span></h3>
+                <p class="muted control-title-status-col__hint">Catalog titles already in this scope</p>
+                <ul></ul>
+              </section>
+              <section class="control-title-status-col" data-status-kind="missing">
+                <h3>Missing <span data-count>0</span></h3>
+                <p class="muted control-title-status-col__hint">Catalog titles Restore defaults would add</p>
+                <ul></ul>
+              </section>
+            </div>
+            <div class="project-edit-modal__actions">
+              <button type="button" class="btn btn--ghost" id="control-title-status-close">Close</button>
+            </div>
+          </div>
+        </dialog>
       </div>
 
       {% if current_account_is_admin %}
@@ -156,11 +199,11 @@
             </label>
             <label class="field admin-tasks-filter-field admin-tasks-filter-field--date">
               <span class="field-label">Due from</span>
-              <input type="date" id="due-from-filter" class="admin-tasks-filter-select">
+              <input type="date" id="due-from-filter" class="admin-tasks-filter-select admin-date-input">
             </label>
             <label class="field admin-tasks-filter-field admin-tasks-filter-field--date">
               <span class="field-label">Due to</span>
-              <input type="date" id="due-to-filter" class="admin-tasks-filter-select">
+              <input type="date" id="due-to-filter" class="admin-tasks-filter-select admin-date-input">
             </label>
             <label class="admin-tasks-filter-field admin-tasks-filter-toggle">
               <span class="field-label">Completed</span>

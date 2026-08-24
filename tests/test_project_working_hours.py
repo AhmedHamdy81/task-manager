@@ -44,6 +44,12 @@ class WorkLedgerServiceUnitTests(unittest.TestCase):
         self.assertEqual(pwls.canonical_work_type("offline"), "offline_editing")
         self.assertEqual(pwls.canonical_work_type("Offline"), "offline_editing")
         self.assertIn("offline", pwls.work_type_equivalent_keys("offline_editing"))
+        grouped = pwls.work_type_equivalent_keys("copy_convert_sync")
+        self.assertIn("copy_media", grouped)
+        self.assertIn("convert_transcode", grouped)
+        self.assertIn("sync", grouped)
+        self.assertNotIn("copy_media", pwls.work_type_equivalent_keys("sync"))
+        self.assertEqual(pwls.canonical_work_type("copy_media"), "copy_media")
         self.assertEqual(pwls.normalize_department_key("color_grading"), "color")
         self.assertEqual(pwls.normalize_status("bogus"), "submitted")
 
@@ -467,9 +473,10 @@ class WorkLedgerDatabaseTests(unittest.TestCase):
         resp = client.get(f"/projects/{self.project.id}/working-hours")
         self.assertEqual(resp.status_code, 200)
         body = resp.data.decode("utf-8")
-        self.assertIn('aria-label="Copy and Convert hours"', body)
-        self.assertIn("not waiting for approval", body)
+        self.assertNotIn('aria-label="Copy and Convert hours"', body)
+        self.assertNotIn("not waiting for approval", body)
         self.assertNotIn('aria-label="Pending Approval"', body)
+        self.assertIn("Copy Media", body)
 
     # -- summaries ---------------------------------------------------------
 
@@ -752,6 +759,74 @@ class WorkLedgerDatabaseTests(unittest.TestCase):
         self.assertIn("project-working-hours-group-summary", user_body)
         self.assertNotIn("project-working-hours-group-row", user_body)
         self.assertIn("Total", user_body)
+
+    def test_copy_convert_sync_filter_includes_media_and_sync_rows(self):
+        db.session.add_all(
+            [
+                self.Ledger(
+                    project_id=self.project.id,
+                    user_id=self.editor_user.id,
+                    work_date=date.today(),
+                    source_type="media_copy",
+                    department_key="machine_room",
+                    work_type="copy_media",
+                    title="Copy Media",
+                    actual_minutes=12,
+                    billable_minutes=12,
+                    status=pwls.STATUS_AUTO_APPROVED,
+                ),
+                self.Ledger(
+                    project_id=self.project.id,
+                    user_id=self.editor_user.id,
+                    work_date=date.today(),
+                    source_type="media_convert",
+                    department_key="machine_room",
+                    work_type="convert_transcode",
+                    title="Convert / Transcode",
+                    actual_minutes=99,
+                    billable_minutes=99,
+                    status=pwls.STATUS_AUTO_APPROVED,
+                ),
+                self.Ledger(
+                    project_id=self.project.id,
+                    user_id=self.editor_user.id,
+                    work_date=date.today(),
+                    source_type="manual",
+                    department_key="machine_room",
+                    work_type="sync",
+                    title="Sync",
+                    actual_minutes=30,
+                    billable_minutes=30,
+                    status=pwls.STATUS_APPROVED,
+                ),
+                self.Ledger(
+                    project_id=self.project.id,
+                    user_id=self.editor_user.id,
+                    work_date=date.today(),
+                    source_type="manual",
+                    department_key="editorial",
+                    work_type="offline_editing",
+                    title="Offline Editing",
+                    actual_minutes=60,
+                    billable_minutes=60,
+                    status=pwls.STATUS_APPROVED,
+                ),
+            ]
+        )
+        db.session.commit()
+        client = app.test_client()
+        self._login(client, self.producer_acc)
+        resp = client.get(
+            f"/projects/{self.project.id}/working-hours?work_type=copy_convert_sync"
+        )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.data.decode("utf-8")
+        self.assertIn("Copy Media", body)
+        self.assertIn("Convert / Transcode", body)
+        self.assertIn(">Sync<", body)
+        self.assertIn("Page 1 of 1 · 3 entries", body)
+        log = body.split("Work Log", 1)[-1].split("</table>", 1)[0]
+        self.assertNotIn("Offline Editing", log)
 
     def test_member_adds_own_manual_hours(self):
         client = app.test_client()

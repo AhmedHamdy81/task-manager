@@ -128,5 +128,113 @@
       }
     }
     show(initial);
+
+    var addDlg = document.getElementById("control-add-task-dialog");
+    var addForm = document.getElementById("control-add-task-form");
+    var addKey = document.getElementById("control-add-task-scope-key");
+    var addScopeLabel = document.getElementById("control-add-task-dialog-scope");
+    var addTitle = document.getElementById("control-add-task-title");
+    var addDesc = document.getElementById("control-add-task-description");
+
+    function closeAddTaskDialog() {
+      if (addDlg && addDlg.open) addDlg.close();
+    }
+
+    function openAddTaskDialog(btn) {
+      if (!addDlg || !addForm || !addKey) return;
+      var key = btn.getAttribute("data-scope-key") || "";
+      var label = btn.getAttribute("data-scope-label") || "";
+      addForm.reset();
+      addKey.value = key;
+      if (addDesc) addDesc.value = "";
+      if (addScopeLabel) addScopeLabel.textContent = label ? "Scope: " + label : "";
+      if (typeof addDlg.showModal === "function") addDlg.showModal();
+      else addDlg.setAttribute("open", "open");
+      if (addTitle) addTitle.focus();
+    }
+
+    document.querySelectorAll("[data-add-task-title]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openAddTaskDialog(btn);
+      });
+    });
+    var addCancel = document.getElementById("control-add-task-cancel");
+    if (addCancel) addCancel.addEventListener("click", closeAddTaskDialog);
+    if (addDlg) {
+      addDlg.addEventListener("click", function (evt) {
+        if (evt.target === addDlg) closeAddTaskDialog();
+      });
+    }
+
+    var statusDlg = document.getElementById("control-title-status-dialog");
+    var statusScope = document.getElementById("control-title-status-scope");
+
+    function closeTitleStatusDialog() {
+      if (statusDlg && statusDlg.open) statusDlg.close();
+    }
+
+    function fillStatusList(col, items) {
+      var ul = col.querySelector("ul");
+      var countEl = col.querySelector("[data-count]");
+      if (!ul) return;
+      ul.textContent = "";
+      var list = Array.isArray(items) ? items : [];
+      if (countEl) countEl.textContent = String(list.length);
+      if (!list.length) {
+        var empty = document.createElement("li");
+        empty.className = "is-empty";
+        empty.textContent = "None";
+        ul.appendChild(empty);
+        return;
+      }
+      list.forEach(function (title) {
+        var li = document.createElement("li");
+        li.textContent = String(title || "");
+        ul.appendChild(li);
+      });
+    }
+
+    function openTitleStatusDialog(btn) {
+      if (!statusDlg) return;
+      var payload = {};
+      try {
+        payload = JSON.parse(btn.getAttribute("data-status") || "{}") || {};
+      } catch (err) {
+        payload = {};
+      }
+      var label = btn.getAttribute("data-scope-label") || "";
+      if (statusScope) statusScope.textContent = label ? "Scope: " + label : "";
+      statusDlg.querySelectorAll("[data-status-kind]").forEach(function (col) {
+        var kind = col.getAttribute("data-status-kind") || "";
+        fillStatusList(col, payload[kind]);
+      });
+      if (typeof statusDlg.showModal === "function") statusDlg.showModal();
+      else statusDlg.setAttribute("open", "open");
+    }
+
+    document.querySelectorAll("[data-title-status]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        openTitleStatusDialog(btn);
+      });
+    });
+    var statusClose = document.getElementById("control-title-status-close");
+    if (statusClose) statusClose.addEventListener("click", closeTitleStatusDialog);
+    if (statusDlg) {
+      statusDlg.addEventListener("click", function (evt) {
+        if (evt.target === statusDlg) closeTitleStatusDialog();
+      });
+    }
+
+    document.querySelectorAll(".admin-date-input").forEach(function (input) {
+      input.addEventListener("click", function () {
+        if (typeof input.showPicker === "function") {
+          try {
+            input.showPicker();
+          } catch (err) {
+            /* Already open or not allowed. */
+          }
+        }
+      });
+    });
   });
 })();

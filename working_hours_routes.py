@@ -204,15 +204,6 @@ def register_working_hours_routes(app: Any, ctx: dict[str, Any]) -> None:
         )
 
         pending_rows = []
-        media_hours = {
-            "rows": [],
-            "copy_minutes": 0,
-            "convert_minutes": 0,
-            "total_minutes": 0,
-            "copy_label": pwls.format_minutes_label(0),
-            "convert_label": pwls.format_minutes_label(0),
-            "total_label": pwls.format_minutes_label(0),
-        }
         if can_manage:
             pending_rows = [
                 pwls.serialize_row(r)
@@ -223,12 +214,6 @@ def register_working_hours_routes(app: Any, ctx: dict[str, Any]) -> None:
                 .limit(50)
                 .all()
             ]
-            media_hours = pwls.list_media_hours(
-                project_id=int(project.id),
-                model=ProjectWorkLedger,
-                date_from=filters.get("date_from"),
-                date_to=filters.get("date_to"),
-            )
 
         def _nav(target_page: int) -> str:
             return pwls.page_url(
@@ -258,7 +243,6 @@ def register_working_hours_routes(app: Any, ctx: dict[str, Any]) -> None:
             display_rows=display_rows,
             log_approved_only=log_approved_only,
             pending_rows=pending_rows,
-            media_hours=media_hours,
             filters=filters,
             summary=summary,
             booked_minutes=booked_minutes,
@@ -308,6 +292,12 @@ def register_working_hours_routes(app: Any, ctx: dict[str, Any]) -> None:
             ),
             daily_worksheet_export_url=pwls.page_url(
                 "project_working_hours_export_daily_worksheet",
+                filters,
+                url_for=url_for,
+                project_id=project.id,
+            ),
+            quotation_export_url=pwls.page_url(
+                "project_working_hours_export_quotation",
                 filters,
                 url_for=url_for,
                 project_id=project.id,
@@ -573,7 +563,6 @@ def register_working_hours_routes(app: Any, ctx: dict[str, Any]) -> None:
         entry.updated_at = now_local()
         pah.log_working_hours_approved(entry)
         db.session.commit()
-        flash("Working hours approved.", "success")
         return _redirect_back(project.id)
 
     @app.route("/projects/<int:project_id>/working-hours/<int:ledger_id>/reject", methods=["POST"])
@@ -883,6 +872,93 @@ def register_working_hours_routes(app: Any, ctx: dict[str, Any]) -> None:
         if wants_preview:
             return Response(
                 dws.render_daily_worksheet_preview_html(pdf_bytes),
+                mimetype="text/html; charset=utf-8",
+            )
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    @app.route("/projects/<int:project_id>/working-hours/export-quotation.pdf")
+    def project_working_hours_export_quotation(project_id: int):
+        """Managers-only quotation PDF (approved/billable hours + Rate Card)."""
+        import daily_worksheet_pdf_service as dws
+        import quotation_pdf_service as qps
+
+        project, acc, can_manage = _load_project(project_id)
+        if project is None:
+            flash("You do not have access to that project.", "error")
+            return redirect(url_for("projects_list"))
+        if not can_manage:
+            flash("Only managers can export the quotation PDF.", "error")
+            return redirect(url_for("project_working_hours", project_id=project.id))
+
+        filters = pwls.parse_filters(request.args)
+        q = ProjectWorkLedger.query.filter(ProjectWorkLedger.project_id == int(project.id))
+        q = pwls.apply_filters(q, ProjectWorkLedger, filters)
+        if not filters.get("status"):
+            q = q.filter(
+                ProjectWorkLedger.status.in_(tuple(sorted(pwls.APPROVED_STATUSES)))
+            )
+        rows = q.order_by(
+            ProjectWorkLedger.work_date.asc(), ProjectWorkLedger.id.asc()
+        ).all()
+
+        rate_rows = []
+        if StudioRateCardItem is not None:
+            created = rcs.ensure_defaults(db, StudioRateCardItem)
+            created += rcs.ensure_worksheet_defaults(db, StudioRateCardItem)
+            created += rcs.align_canonical_service_keys(db, StudioRateCardItem)
+            if created:
+                db.session.commit()
+            rate_rows = rcs.list_items(StudioRateCardItem)
+
+        quote_rows = qps.build_quotation_rows(rows, rate_items=rate_rows)
+        wants_preview = str(request.args.get("preview") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if not quote_rows:
+            message = "No approved billable hours match the current filters for the quotation."
+            if wants_preview:
+                return Response(
+                    qps.render_quotation_preview_error_html(message),
+                    mimetype="text/html; charset=utf-8",
+                    status=404,
+                )
+            if _wants_json():
+                return jsonify({"ok": False, "error": message}), 404
+            flash(message, "error")
+            return redirect(
+                pwls.page_url(
+                    "project_working_hours",
+                    filters,
+                    url_for=url_for,
+                    project_id=project.id,
+                )
+            )
+
+        attention = (request.args.get("attention") or request.args.get("contact") or "").strip()
+        quote_date = pwls.parse_date(request.args.get("quote_date")) or now_local().date()
+        header = qps.build_quotation_header(
+            project,
+            attention=attention,
+            quote_date=quote_date,
+        )
+        currency = rcs.card_currency(rate_rows)
+        pdf_bytes = qps.render_quotation_pdf(
+            header=header,
+            rows=quote_rows,
+            currency=currency,
+        )
+        safe = dws.sanitize_filename(project.name or "project")
+        filename = f"{safe}_Quotation_{quote_date.isoformat()}.pdf"
+        if wants_preview:
+            return Response(
+                qps.render_quotation_preview_html(pdf_bytes),
                 mimetype="text/html; charset=utf-8",
             )
         return Response(

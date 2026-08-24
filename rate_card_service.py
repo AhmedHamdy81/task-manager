@@ -348,9 +348,11 @@ def work_type_label_map(items: list[Any] | None) -> dict[str, str]:
 
     mapping: dict[str, str] = {}
     for row in work_type_choices(items):
-        mapping[row["key"]] = row["label"]
-        for alias in pwls.work_type_equivalent_keys(row["key"]):
-            mapping[alias] = row["label"]
+        key = row["key"]
+        mapping[key] = row["label"]
+        for alias, target in pwls.WORK_TYPE_CANONICAL.items():
+            if target == key:
+                mapping[alias] = row["label"]
     return mapping
 
 

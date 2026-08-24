@@ -33659,6 +33659,13 @@ def create_app() -> Flask:
 
         post_scope_fields, scope_groups, presets_by_group = load_post_scope_task_context()
         task_preset_scope_fields = tps.TASK_PRESET_SCOPE_FIELDS
+        title_status_by_scope: dict[str, dict[str, list[str]]] = {}
+        for key, _, _ in task_preset_scope_fields:
+            group = scope_groups.get(key)
+            names: list[str] = []
+            if group is not None:
+                names = [pt.title for pt in presets_by_group.get(group.id, [])]
+            title_status_by_scope[key] = tps.classify_scope_titles(key, names)
         admin_tasks: list[Task] = []
         admin_tasks_total = 0
         admin_tasks_page = 1
@@ -33762,6 +33769,7 @@ def create_app() -> Flask:
             task_preset_scope_fields=task_preset_scope_fields,
             scope_groups=scope_groups,
             presets_by_group=dict(presets_by_group),
+            title_status_by_scope=title_status_by_scope,
             scope_employment_reverse=employment_structure_support_mod.reverse_scope_employment_map(
                 EmploymentScopeLink, SystemMasterEntry
             ),

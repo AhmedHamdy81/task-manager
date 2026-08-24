@@ -4888,23 +4888,22 @@ select.searchable-select-native,
   list-style: none;
   margin: 0 0 1rem;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: 0.85rem;
 }
 
 .control-task-row {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  padding: 0.65rem 0.85rem;
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  min-height: 5.75rem;
+  padding: 0.95rem 1.05rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   background: var(--surface-2);
-}
-
-.control-task-row:last-child {
-  border-bottom: none;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .control-job-title-row .control-job-title-rename {
@@ -4918,16 +4917,191 @@ select.searchable-select-native,
 }
 
 .control-task-title {
-  font-weight: 600;
-  flex: 1;
-  min-width: 120px;
+  font-weight: 650;
+  flex: 0 0 auto;
+  min-width: 0;
+  line-height: 1.35;
 }
 
 .control-task-desc {
-  flex: 2;
-  min-width: 160px;
-  font-size: 0.9rem;
+  flex: 0 0 auto;
+  min-width: 0;
+  font-size: 0.85rem;
   color: var(--muted);
+}
+
+.control-task-row__remove {
+  margin: 0.35rem 0 0 auto;
+}
+
+.control-scope-title-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  width: 100%;
+  margin-top: 0.85rem;
+}
+
+.control-scope-title-actions__left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.control-title-status-dialog.project-edit-modal {
+  width: min(56rem, calc(100vw - 2rem));
+}
+
+.control-title-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
+  gap: 0.75rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.control-title-status-col {
+  min-width: 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.control-title-status-col h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.control-title-status-col [data-count] {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.control-title-status-col__hint {
+  margin: 0.3rem 0 0.55rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.control-title-status-col ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 14rem;
+  overflow: auto;
+}
+
+.control-title-status-col li {
+  padding: 0.22rem 0;
+  font-size: 0.84rem;
+  line-height: 1.35;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.control-title-status-col li:last-child {
+  border-bottom: none;
+}
+
+.control-title-status-col li.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.control-title-status-col[data-status-kind="missing"] h3 {
+  color: #fbbf24;
+}
+
+.control-title-status-col[data-status-kind="added"] h3 {
+  color: var(--accent);
+}
+
+.control-title-status-col[data-status-kind="existed"] h3 {
+  color: #86efac;
+}
+
+.control-scope-title-actions .control-scope-restore,
+.control-scope-title-actions form {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.control-scope-title-actions .btn {
+  margin-top: 0;
+  align-self: center;
+  min-height: 2.5rem;
+  box-sizing: border-box;
+}
+
+.control-scope-employment {
+  margin: 0 0 1.15rem;
+}
+
+.control-scope-employment-list {
+  list-style: none;
+  margin: 0.35rem 0 0.45rem;
+  padding: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.45rem 1.15rem;
+  overflow-x: auto;
+}
+
+.control-scope-employment-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: auto;
+  max-width: none;
+}
+
+.control-scope-employment-item .emp-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+}
+
+.control-scope-employment-item .emp-badge--in-house { background: rgba(46, 160, 67, 0.18); color: #86efac; }
+.control-scope-employment-item .emp-badge--freelancer { background: rgba(99, 102, 241, 0.18); color: #a5b4fc; }
+.control-scope-employment-item .emp-badge--intern { background: rgba(56, 189, 248, 0.18); color: #7dd3fc; }
+.control-scope-employment-item .emp-badge--vendor { background: rgba(234, 179, 8, 0.18); color: #fde047; }
+.control-scope-employment-item .emp-badge--client { background: rgba(236, 72, 153, 0.18); color: #f9a8d4; }
+.control-scope-employment-item .emp-badge--guest { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+.control-scope-employment-item .emp-badge--partner { background: rgba(168, 85, 247, 0.18); color: #d8b4fe; }
+.control-scope-employment-item .emp-badge--default { background: rgba(120, 120, 120, 0.2); }
+
+.control-scope-employment-level {
+  font-size: 0.75rem;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.control-scope-employment-link {
+  margin: 0;
+}
+
+.control-add-task-dialog__scope {
+  margin: -0.55rem 0 0.85rem;
+  font-size: 0.85rem;
 }
 
 .control-add-task {
