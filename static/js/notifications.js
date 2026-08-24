@@ -23,6 +23,12 @@
     return [];
   }
 
+  function notificationCountsTowardBadge(n) {
+    if (!n) return false;
+    if (n.is_acknowledged || n.is_resolved) return false;
+    return !n.is_read;
+  }
+
   function normalizeNotification(n) {
     if (!n || typeof n !== "object") return null;
     return {
@@ -34,6 +40,14 @@
       entity_type: n.entity_type != null ? String(n.entity_type) : "",
       entity_id: n.entity_id != null ? Number(n.entity_id) : 0,
       project_id: n.project_id != null ? n.project_id : null,
+      critical_shooting_day_id:
+        n.critical_shooting_day_id != null && !Number.isNaN(Number(n.critical_shooting_day_id))
+          ? Number(n.critical_shooting_day_id)
+          : null,
+      href: n.href != null ? String(n.href) : "",
+      action_label: n.action_label != null ? String(n.action_label) : "",
+      action_href: n.action_href != null ? String(n.action_href) : "",
+      rule_key: n.rule_key != null ? String(n.rule_key) : "",
       is_read: !!n.is_read,
       is_acknowledged: !!n.is_acknowledged,
       is_resolved: !!n.is_resolved,
@@ -65,6 +79,10 @@
     var ackBase = panel.getAttribute("data-ack-url-base") || "/notifications/ack/";
     var resolveBase = panel.getAttribute("data-resolve-url-base") || "/notifications/resolve/";
     var readAllUrl = panel.getAttribute("data-read-all-url") || "/notifications/read-all";
+    var i18nOpen = panel.getAttribute("data-i18n-open") || "Open";
+    var i18nAck = panel.getAttribute("data-i18n-ack") || "Ack";
+    var i18nRemove = panel.getAttribute("data-i18n-remove") || "Remove";
+    var i18nEmpty = panel.getAttribute("data-i18n-empty") || "No notifications.";
     var filter = "all";
     var muteStorageKey = "notif_muted";
     var lastUnreadCount = null;
@@ -162,10 +180,24 @@
     }
 
     function openEntity(n) {
+      if (n.href) {
+        window.location.href = n.href;
+        return;
+      }
       var type = String(n.entity_type || "").toLowerCase();
       var entityId = n.entity_id != null ? Number(n.entity_id) : 0;
       var projectId = n.project_id != null ? n.project_id : null;
 
+      if (type === "shooting_day_critical" && projectId != null) {
+        var cDay = n.critical_shooting_day_id;
+        if (cDay != null && !Number.isNaN(Number(cDay))) {
+          window.location.href =
+            "/projects/" + String(projectId) + "/production/day/" + String(cDay);
+          return;
+        }
+        window.location.href = "/projects/" + String(projectId) + "/production";
+        return;
+      }
       if (type === "shooting_day" && projectId != null) {
         var hash =
           entityId && !Number.isNaN(entityId) ? "#day-" + String(entityId) : "";
@@ -181,11 +213,61 @@
         window.location.href = "/booking";
         return;
       }
+      var approvalTypes = {
+        approval_request: true,
+        user_approval_request: true,
+        role_change_request: true,
+        reactivation_request: true,
+        permission_change_request: true,
+        user_registered: true,
+        account_reactivation_request: true,
+        workflow_request_created: true,
+        workflow_request_approved: true,
+        workflow_request_rejected: true,
+        workflow_request_completed: true,
+      };
+      var ruleKey = String(n.rule_key || "").toLowerCase();
+      var isApproval =
+        !!approvalTypes[type] ||
+        ruleKey.indexOf("managed:user_registered:") === 0 ||
+        ruleKey.indexOf("managed:role_change_request:") === 0 ||
+        ruleKey.indexOf("managed:account_reactivation_request:") === 0 ||
+        ruleKey.indexOf("managed:permission_change_request:") === 0 ||
+        ruleKey.indexOf("managed:workflow_request_") === 0;
+      if (isApproval) {
+        if (type === "approval_request" && entityId && !Number.isNaN(entityId)) {
+          window.location.href = "/admin/approvals/" + String(entityId);
+          return;
+        }
+        window.location.href = "/admin/approvals";
+        return;
+      }
       if (type === "vfx" && projectId != null) {
         window.location.href = "/projects/" + String(projectId) + "/vfx";
         return;
       }
+      if (type === "vfx_shot" && projectId != null) {
+        window.location.href = "/vfx-department/" + String(projectId);
+        return;
+      }
+      if (type === "editing_item" && projectId != null && entityId && !Number.isNaN(entityId)) {
+        window.location.href =
+          "/projects/" + String(projectId) + "/color/items/" + String(entityId);
+        return;
+      }
       if (type === "task") {
+        if (projectId != null) {
+          var taskHash =
+            entityId && !Number.isNaN(entityId)
+              ? "#task-" + String(entityId)
+              : "#project-tasks-panel";
+          window.location.href = "/projects/" + String(projectId) + taskHash;
+          return;
+        }
+        if (entityId && !Number.isNaN(entityId)) {
+          window.location.href = "/tasks#task-" + String(entityId);
+          return;
+        }
         window.location.href = "/tasks";
         return;
       }
@@ -198,7 +280,7 @@
 
     function render(list) {
       if (!Array.isArray(list) || !list.length) {
-        listEl.innerHTML = '<p class="notif-empty">No notifications.</p>';
+        listEl.innerHTML = '<p class="notif-empty">' + esc(i18nEmpty) + "</p>";
         return;
       }
       listEl.innerHTML = "";
@@ -218,6 +300,15 @@
           timeLine = window.tmDateTime.formatLocalTime(n.created_at);
         }
         if (!timeLine && n.created_ago) timeLine = n.created_ago;
+        var actionHtml = "";
+        if (n.action_label && n.action_href) {
+          actionHtml =
+            ' <a class="notif-action-link" href="' +
+            esc(n.action_href) +
+            '">' +
+            esc(n.action_label) +
+            "</a>";
+        }
         item.innerHTML =
           '<div class="notif-main">' +
           "<strong>" +
@@ -225,6 +316,7 @@
           "</strong>" +
           "<p>" +
           esc(n.message) +
+          actionHtml +
           "</p>" +
           "</div>" +
           '<div class="notif-meta">' +
@@ -233,21 +325,48 @@
             : "") +
           "</div>" +
           '<div class="notif-actions">' +
-          '<button type="button" class="btn btn--small btn--ghost js-open">Open</button>' +
-          '<button type="button" class="btn btn--small btn--ghost js-ack">Ack</button>' +
-          '<button type="button" class="btn btn--small btn--ghost js-resolve">Remove</button>' +
+          '<button type="button" class="btn btn--small btn--ghost js-open">' +
+          esc(i18nOpen) +
+          "</button>" +
+          '<button type="button" class="btn btn--small btn--ghost js-ack">' +
+          esc(i18nAck) +
+          "</button>" +
+          '<button type="button" class="btn btn--small btn--ghost js-resolve">' +
+          esc(i18nRemove) +
+          "</button>" +
           "</div>";
         var btnOpen = item.querySelector(".js-open");
         var btnAck = item.querySelector(".js-ack");
         var btnResolve = item.querySelector(".js-resolve");
         if (btnOpen) {
           btnOpen.addEventListener("click", function () {
+            if (n.action_href) {
+              window.location.href = n.action_href;
+              return;
+            }
             openEntity(n);
           });
         }
         if (btnAck) {
-          btnAck.addEventListener("click", function () {
-            post(ackBase + String(n.id)).then(loadNotifications).catch(function () {});
+          btnAck.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            var counted = notificationCountsTowardBadge(n);
+            post(ackBase + String(n.id))
+              .then(function () {
+                item.remove();
+                if (!listEl.querySelectorAll(".notif-item").length) {
+                  listEl.innerHTML = '<p class="notif-empty">' + esc(i18nEmpty) + "</p>";
+                }
+                if (counted && notifBadge) {
+                  var c = Math.max(0, (Number(notifBadge.textContent) || 0) - 1);
+                  updateBadge(c);
+                  lastUnreadCount = c;
+                }
+                loadNotifications();
+              })
+              .catch(function () {
+                loadNotifications();
+              });
           });
         }
         if (btnResolve) {
@@ -285,7 +404,7 @@
           render(list);
           var unreadCount = list.reduce(function (acc, raw) {
             var n = normalizeNotification(raw);
-            return n && !n.is_read ? acc + 1 : acc;
+            return n && notificationCountsTowardBadge(n) ? acc + 1 : acc;
           }, 0);
           updateBadge(unreadCount);
           if (lastUnreadCount !== null && unreadCount > lastUnreadCount) {
@@ -347,5 +466,23 @@
     loadNotifications();
     window.tmReloadNotifications = loadNotifications;
     window.setInterval(loadNotifications, 15000);
+
+    function wireNotificationSocketRefresh() {
+      var sock = window.__tmSocket;
+      if (!sock || typeof sock.on !== "function" || sock.__tmNotifRefreshWired) return;
+      sock.__tmNotifRefreshWired = true;
+      sock.on("notification", function (payload) {
+        if (
+          payload &&
+          payload.type === "notifications_changed" &&
+          typeof window.tmReloadNotifications === "function"
+        ) {
+          window.tmReloadNotifications();
+        }
+      });
+    }
+
+    wireNotificationSocketRefresh();
+    window.setTimeout(wireNotificationSocketRefresh, 600);
   });
 })();

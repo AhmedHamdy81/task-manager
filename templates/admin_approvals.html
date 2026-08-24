@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Approvals · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/account-approvals.css') }}?v=5">
+{% endblock %}
+{% block content %}
+<div class="admin-approvals-page">
+  <header class="admin-approvals-head">
+    <div>
+      <h1 class="admin-section-title">Approval Center</h1>
+      <p class="muted">Centralized workflow queue for registration, role, permission, and future approval requests.</p>
+    </div>
+    <div class="admin-approvals-badges">
+      <a href="{{ url_for('admin_approvals', filter='registration') }}" class="admin-approvals-badge{% if counts.pending_users %} admin-approvals-badge--alert{% endif %}">
+        Pending Users <strong>{{ counts.pending_users }}</strong>
+      </a>
+      <a href="{{ url_for('admin_approvals', filter='role_changes') }}" class="admin-approvals-badge{% if counts.role_requests %} admin-approvals-badge--alert{% endif %}">
+        Role Requests <strong>{{ counts.role_requests }}</strong>
+      </a>
+      <a href="{{ url_for('admin_approvals', filter='permissions') }}" class="admin-approvals-badge{% if counts.permission_requests %} admin-approvals-badge--alert{% endif %}">
+        Permission Requests <strong>{{ counts.permission_requests }}</strong>
+      </a>
+      <a href="{{ url_for('admin_approvals', filter='registration') }}" class="admin-approvals-badge{% if counts.reactivation_requests %} admin-approvals-badge--warn{% endif %}">
+        Reactivation Requests <strong>{{ counts.reactivation_requests }}</strong>
+      </a>
+      <a href="{{ url_for('users_list') }}" class="admin-approvals-badge{% if counts.suspended_accounts %} admin-approvals-badge--warn{% endif %}">
+        Suspended <strong>{{ counts.suspended_accounts }}</strong>
+      </a>
+    </div>
+  </header>
+
+  <nav class="admin-approvals-tabs" aria-label="Approval queues">
+    {% for key, label in filter_specs %}
+    <a href="{{ url_for('admin_approvals', filter=key) }}" class="admin-approvals-tab{% if filter_key == key %} is-active{% endif %}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+
+  <section class="panel admin-card admin-approvals-panel">
+    {% if not requests %}
+    <p class="muted admin-approvals-empty">No approval requests match this filter.</p>
+    {% else %}
+    <div class="admin-approvals-list">
+      {% for req in requests %}
+      {% set meta = request_meta.get(req.id, {}) %}
+      {% set payload = meta.get('payload', {}) %}
+      {% set target_account = meta.get('target_account') %}
+      <article class="admin-approvals-card">
+        <header class="admin-approvals-card__header">
+          <div class="admin-approvals-card__identity">
+            <h2 class="admin-approvals-card__name">{{ req.title }}</h2>
+            <p class="admin-approvals-card__type">{{ meta.get('label', req.request_type|replace('_', ' ')|title) }}</p>
+          </div>
+          <div class="admin-approvals-card__chips" aria-label="Request status">
+            <span class="admin-approvals-chip admin-approvals-chip--status admin-approvals-chip--status-{{ req.status }}">{{ req.status|replace('_', ' ')|title }}</span>
+            <span class="admin-approvals-chip admin-approvals-chip--priority admin-approvals-chip--priority-{{ req.priority }}">{{ req.priority|replace('_', ' ')|title }}</span>
+          </div>
+        </header>
+
+        <dl class="admin-approvals-meta admin-approvals-meta--details">
+          <div><dt>Requested</dt><dd>{{ req.requested_at.strftime('%Y-%m-%d %H:%M') if req.requested_at else '—' }}</dd></div>
+          <div><dt>Target user</dt><dd>{{ req.target_user.name if req.target_user else '—' }}</dd></div>
+          {% if payload.get('requested_user_type') or payload.get('requested', {}).get('user_type') %}
+          <div><dt>Account type</dt><dd>{% set ut = payload.get('requested_user_type') or payload.get('requested', {}).get('user_type') %}{{ 'Non-employee (Client / Guest)' if ut == 'client' else 'Employee' }}</dd></div>
+          {% endif %}
+          <div class="admin-approvals-meta__summary"><dt>Summary</dt><dd>{{ meta.get('summary', req.description or '—') }}</dd></div>
+        </dl>
+
+        <div class="admin-approvals-card__workspace">
+          {% if req.status == 'pending' %}
+          <form class="admin-approvals-card__approve" method="post" action="{{ url_for('admin_approve_approval_request', request_id=req.id) }}">
+            <div class="admin-approvals-card__fields">
+              {% if req.request_type in ('user_registration', 'role_change') %}
+              <label class="field field--job-title">
+                <span class="field-label">Job title</span>
+                <select name="job_title_id" class="input js-searchable-select" data-searchable-placeholder="Search job titles…">
+                  <option value="">—</option>
+                  {% for jt in job_titles %}
+                  <option value="{{ jt.id }}"{% if payload.get('requested', {}).get('job_title_id') == jt.id or payload.get('requested_job_title_id') == jt.id %} selected{% endif %}>{{ jt.name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="field field--access-role">
+                <span class="field-label">Access role</span>
+                <select name="access_role" class="input" required>
+                  {% for r in account_roles %}
+                  <option value="{{ r }}"{% if r == (payload.get('requested', {}).get('suggested_access_role') or payload.get('requested', {}).get('access_role') or 'user') %} selected{% endif %}>{{ role_labels.get(r, r|replace('_', ' ')|title) }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="field field--department">
+                <span class="field-label">Department</span>
+                <input type="text" name="department_code" class="input" value="{{ payload.get('requested', {}).get('department_code') or payload.get('department_code') or '' }}" placeholder="e.g. editing">
+              </label>
+              {% endif %}
+              {% if req.request_type == 'role_change' %}
+              <label class="field field--employment">
+                <span class="field-label">Employment type</span>
+                <input type="text" name="employment_type_code" class="input" value="{{ payload.get('requested', {}).get('employment_type_code') or '' }}">
+              </label>
+              {% endif %}
+              <label class="field field--notes">
+                <span class="field-label">Notes</span>
+                <input type="text" name="admin_notes" class="input" placeholder="Optional internal notes">
+              </label>
+            </div>
+            <div class="admin-approvals-card__buttons">
+              <button type="submit" class="btn btn--primary btn--small">Approve</button>
+              <a href="{{ url_for('admin_approval_request_detail', request_id=req.id) }}" class="btn btn--ghost btn--small">View timeline</a>
+              {% if target_account %}
+              <a href="{{ url_for('users_list') }}" class="btn btn--ghost btn--small">Users</a>
+              {% endif %}
+            </div>
+          </form>
+
+          <form class="admin-approvals-card__reject" method="post" action="{{ url_for('admin_reject_approval_request', request_id=req.id) }}" data-confirm="Reject this request?">
+            <label class="field field--grow">
+              <span class="field-label">Rejection reason</span>
+              <input type="text" name="admin_notes" class="input" placeholder="Optional message to user">
+            </label>
+            <button type="submit" class="btn btn--small btn--danger">Reject</button>
+          </form>
+          {% else %}
+          <div class="admin-approvals-card__buttons">
+            <a href="{{ url_for('admin_approval_request_detail', request_id=req.id) }}" class="btn btn--ghost btn--small">View timeline</a>
+            {% if target_account %}
+            <a href="{{ url_for('users_list') }}" class="btn btn--ghost btn--small">Users</a>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+</div>
+<script src="{{ url_for('static', filename='js/searchable-select.js') }}" defer></script>
+{% endblock %}

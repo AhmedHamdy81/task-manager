@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Approval Request · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/account-approvals.css') }}?v=5">
+{% endblock %}
+{% block content %}
+{% set payload = request_meta.payload or {} %}
+{% set payload_skip = [
+  'requested',
+  'email',
+  'requested_user_type',
+  'company',
+  'department_code',
+  'account_id',
+  'user_id',
+  'job_title_id',
+  'job_category_id',
+  'requested_job_title_id',
+] %}
+<div class="admin-approvals-page admin-approvals-detail">
+  <header class="admin-approvals-head">
+    <div>
+      <h1 class="admin-section-title">Approval request</h1>
+      <p class="muted">{{ request_meta.label }}</p>
+    </div>
+    <a href="{{ url_for('admin_approvals', filter=request_meta.category) }}" class="btn btn--ghost btn--small">Back to Approval Center</a>
+  </header>
+
+  <section class="panel admin-card admin-approvals-panel">
+    <article class="admin-approvals-card">
+      <header class="admin-approvals-card__header">
+        <div class="admin-approvals-card__identity">
+          <h2 class="admin-approvals-card__name">{{ approval_request.title }}</h2>
+          <p class="admin-approvals-card__type">{{ approval_request.description or request_meta.summary }}</p>
+        </div>
+        <div class="admin-approvals-card__chips" aria-label="Request status">
+          <span class="admin-approvals-chip admin-approvals-chip--status admin-approvals-chip--status-{{ approval_request.status }}">{{ approval_request.status|replace('_', ' ')|title }}</span>
+          <span class="admin-approvals-chip admin-approvals-chip--priority admin-approvals-chip--priority-{{ approval_request.priority }}">{{ approval_request.priority|replace('_', ' ')|title }}</span>
+        </div>
+      </header>
+      <dl class="admin-approvals-meta admin-approvals-meta--details">
+        <div><dt>Request type</dt><dd>{{ request_meta.label }}</dd></div>
+        <div><dt>Requested</dt><dd>{{ approval_request.requested_at.strftime('%Y-%m-%d %H:%M') if approval_request.requested_at else '—' }}</dd></div>
+        <div><dt>Created by</dt><dd>{{ approval_request.created_by.display_name if approval_request.created_by else '—' }}</dd></div>
+        <div><dt>Target user</dt><dd>{{ approval_request.target_user.name if approval_request.target_user else '—' }}</dd></div>
+        {% if payload.get('email') %}
+        <div><dt>Email</dt><dd>{{ payload.get('email') }}</dd></div>
+        {% endif %}
+        {% if payload.get('requested_user_type') %}
+        <div><dt>Account type</dt><dd>{{ 'Non-employee (Client / Guest)' if payload.get('requested_user_type') == 'client' else 'Employee' }}</dd></div>
+        {% endif %}
+        {% if payload.get('company') %}
+        <div><dt>Company</dt><dd>{{ payload.get('company') }}</dd></div>
+        {% endif %}
+        {% if payload.get('department_code') %}
+        <div><dt>Department</dt><dd>{{ payload.get('department_code') }}</dd></div>
+        {% endif %}
+        {% for key, value in payload.items() %}
+          {% if key not in payload_skip and not key.endswith('_id') and not key.endswith('_ids') and value not in (None, '', [], {}) and value is not mapping %}
+          <div>
+            <dt>{{ key|replace('_', ' ')|replace('requested ', '')|replace(' code', '')|title }}</dt>
+            <dd>{% if value is iterable and value is not string %}{{ value|join(', ') }}{% else %}{{ value }}{% endif %}</dd>
+          </div>
+          {% endif %}
+        {% endfor %}
+        <div class="admin-approvals-meta__summary"><dt>Summary</dt><dd>{{ request_meta.summary }}</dd></div>
+      </dl>
+    </article>
+  </section>
+
+  <section class="panel admin-card admin-approvals-panel">
+    <article class="admin-approvals-card">
+      <header class="admin-approvals-card__header">
+        <div class="admin-approvals-card__identity">
+          <h2 class="admin-approvals-card__name">Timeline</h2>
+        </div>
+      </header>
+      {% if not events %}
+      <p class="muted admin-approvals-empty">No workflow events yet.</p>
+      {% else %}
+      <ol class="admin-approvals-timeline">
+        {% for ev in events %}
+        <li class="admin-approvals-timeline__item admin-approvals-timeline__item--{{ ev.event_type }}">
+          <span class="admin-approvals-timeline__mark" aria-hidden="true"></span>
+          <div class="admin-approvals-timeline__body">
+            <div class="admin-approvals-timeline__title">{{ ev.title }}</div>
+            <div class="admin-approvals-timeline__meta">
+              <span>{{ ev.created_at.strftime('%Y-%m-%d %H:%M') if ev.created_at else '—' }}{% if ev.latest %} (latest){% endif %}</span>
+              <span>{{ ev.actor_name }}</span>
+            </div>
+            {% if ev.notes %}
+            <p class="admin-approvals-timeline__notes">{{ ev.notes }}</p>
+            {% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+    </article>
+  </section>
+</div>
+{% endblock %}

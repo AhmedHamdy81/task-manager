@@ -169,6 +169,50 @@ class TestNotificationsPanel(unittest.TestCase):
         items = (res.get_json() or {}).get("notifications") or []
         self.assertEqual(len(items), 0, "User B must not see User A's notification row")
 
+    def test_approval_notification_href_points_to_approval_center(self) -> None:
+        M = self.M
+        acc = M["Account"](
+            email="approval-href@example.com",
+            username="approvalhref",
+            password_hash=_HASH("pw"),
+            role="admin",
+        )
+        db.session.add(acc)
+        db.session.flush()
+        user = M["User"](
+            name="Approval Href User",
+            email="approval-href@example.com",
+            account_id=acc.id,
+        )
+        db.session.add(user)
+        db.session.flush()
+        note = M["Notification"](
+            user_id=user.id,
+            type="activity",
+            severity="info",
+            title="New user registration (awaiting approval)",
+            message="Review it in the Reactivation Requests tab.",
+            entity_type="user_registered",
+            entity_id=0,
+            project_id=None,
+            is_read=False,
+            is_acknowledged=False,
+            is_resolved=False,
+            rule_key="managed:user_registered:1:0:0:" + str(user.id) + ":live:",
+        )
+        db.session.add(note)
+        db.session.commit()
+
+        self.client.post(
+            "/login",
+            data={"login": "approval-href@example.com", "password": "pw", "next": "/"},
+            follow_redirects=True,
+        )
+        res = self.client.get("/notifications", headers={"Accept": "application/json"})
+        items = (res.get_json() or {}).get("notifications") or []
+        self.assertEqual(len(items), 1)
+        self.assertTrue((items[0].get("href") or "").endswith("/admin/approvals"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5287,11 +5287,49 @@ def create_app() -> Flask:
             return url_for("project_detail", project_id=pid) + "#project-tasks-panel"
         return url_for("tasks_list")
 
+    def _approval_center_notification_href(n: Notification) -> str | None:
+        """Open Approval Center for registration / role / workflow queue alerts."""
+        et = (n.entity_type or "").strip().lower()
+        rk = (n.rule_key or "").strip().lower()
+        eid = int(n.entity_id or 0)
+        approval_entity_types = {
+            "approval_request",
+            "user_approval_request",
+            "role_change_request",
+            "reactivation_request",
+            "permission_change_request",
+            "user_registered",
+            "account_reactivation_request",
+            "workflow_request_created",
+            "workflow_request_approved",
+            "workflow_request_rejected",
+            "workflow_request_completed",
+        }
+        approval_rule_prefixes = (
+            "managed:user_registered:",
+            "managed:role_change_request:",
+            "managed:account_reactivation_request:",
+            "managed:permission_change_request:",
+            "managed:workflow_request_",
+        )
+        if et not in approval_entity_types and not rk.startswith(approval_rule_prefixes):
+            return None
+        if et == "approval_request" and eid > 0:
+            return url_for("admin_approval_request_detail", request_id=eid)
+        return url_for("admin_approvals")
+
     def notification_href(n: Notification, *, note_day_map: dict[int, int] | None = None) -> str:
         """In-app link when the user opens a notification."""
         et = (n.entity_type or "").strip().lower()
         eid = int(n.entity_id or 0)
         pid = n.project_id
+        approval_href = _approval_center_notification_href(n)
+        if approval_href:
+            return approval_href
+        if et == "booking":
+            return url_for("booking.booking_home")
+        if et == "task" and pid is None:
+            return task_notification_href(None, eid if eid else None)
         if pid is None:
             return url_for("index")
         pid_i = int(pid)
