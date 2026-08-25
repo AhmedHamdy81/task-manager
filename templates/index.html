@@ -1,73 +1,371 @@
 {% extends "base.html" %}
 {% block title %}Overview · {{ app_name }}{% endblock %}
+{% block body_class %}dashboard-overview{% endblock %}
 {% block content %}
 <div class="shell-dash">
   <header class="shell-dash-hero">
-    <h1>{{ app_name }}</h1>
-    <p class="lede">Post-production pipeline — directory, assignments, and task groups.</p>
+    <h1>{% if current_account %}Welcome back, {{ current_account.display_name }}{% else %}Welcome{% endif %}</h1>
+    <p class="lede">Cut tomorrow's noise today — your pipeline at a glance.</p>
   </header>
 
-  <div class="shell-dash-grid">
-    <div class="shell-widget shell-widget--clock" id="shell-dash-clock" aria-live="polite" aria-label="Clock">
-      <h2>Clock</h2>
-      <p class="shell-widget-clock" id="shell-dash-clock-time">--:--:--</p>
-      <p class="shell-widget-clock-date" id="shell-dash-clock-date">—</p>
-      <p class="shell-widget-meta">This device (DB times are Cairo)</p>
-    </div>
-    <div class="shell-widget">
-      <h2>Projects</h2>
-      <p class="shell-widget-stat">{{ project_count }}</p>
-      <p class="shell-widget-meta">On file</p>
-      <a class="btn btn--ghost" href="{{ url_for('projects_list') }}">Open</a>
-    </div>
-    {% if current_account_is_admin and not current_account_is_machine_room %}
-    <div class="shell-widget">
-      <h2>Users</h2>
-      <p class="shell-widget-stat">{{ user_count }}</p>
-      <p class="shell-widget-meta">Directory</p>
-      <a class="btn btn--ghost" href="{{ url_for('users_list') }}">Manage</a>
-    </div>
-    {% endif %}
-    {% if not current_account_is_machine_room %}
-    <div class="shell-widget shell-widget--booking" id="dashboard-booking-card" data-today-url="{{ url_for('booking.booking_today_json') }}">
-      <h2>My booking</h2>
-      <div class="dashboard-booking-slot">
-        <div class="dashboard-booking-filled" id="dashboard-booking-filled" {% if not booking_today_card %}hidden{% endif %}>
-          <div class="dashboard-booking-body">
-            <p class="dashboard-booking-suite" id="db-booking-suite">{{ booking_today_card.suite_name if booking_today_card else "" }}</p>
-            <p class="dashboard-booking-meta" id="db-booking-time">{% if booking_today_card %}{{ booking_today_card.time_label }}{% if booking_today_card.is_full_day %} · Full day{% endif %}{% endif %}</p>
-            <p class="dashboard-booking-meta" id="db-booking-project">{% if booking_today_card and booking_today_card.project_name %}{{ booking_today_card.project_name }}{% endif %}</p>
-            <p class="dashboard-booking-for" id="db-booking-for">{% if booking_today_card and booking_today_card.booked_for_name %}For {{ booking_today_card.booked_for_name }}{% endif %}</p>
-          </div>
-          <div class="dashboard-booking-actions">
-            <a class="btn btn--ghost" href="{{ url_for('booking.booking_manage_page') }}">Manage</a>
-          </div>
+  <div class="shell-dash-widgets">
+  <div class="shell-dash-grid shell-dash-grid--stats">
+    {% if current_account_is_machine_room %}
+    <div class="shell-widget shell-widget--clock shell-widget--dash" role="region" aria-label="Device time">
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         </div>
-        <div class="dashboard-booking-empty" id="dashboard-booking-empty" {% if booking_today_card %}hidden{% endif %}>
-          <div class="dashboard-booking-empty-inner">
-            <p class="dashboard-booking-empty-title">No booking today</p>
-            <p class="dashboard-booking-empty-sub">Plan your schedule</p>
-            <div class="dashboard-booking-empty-actions">
-              <a class="btn btn--ghost" href="{{ url_for('booking.booking_manage_page') }}">Manage</a>
-            </div>
-          </div>
+        <div class="shell-widget-dash-body">
+          <h2> my BigClock</h2>
+          <p class="shell-widget-clock-row" aria-live="polite" aria-atomic="true">
+            <span class="shell-widget-clock" id="shell-dash-clock-time">--:--:--</span>
+            <span class="shell-widget-clock-date" id="shell-dash-clock-date">—</span>
+          </p>
         </div>
       </div>
     </div>
     {% endif %}
-    <div class="shell-widget">
-      <h2>{% if current_account_is_admin %}Open tasks{% else %}My open{% endif %}</h2>
-      <p class="shell-widget-stat">{{ open_tasks }}</p>
-      <p class="shell-widget-meta">{% if current_account_is_admin %}Open{% else %}Assigned to you{% endif %}</p>
-      <a class="btn btn--ghost" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') if current_account_is_machine_room else url_for('tasks_list') }}">Triage</a>
+    {% if not current_account_is_super_user|default(false) %}
+    <a class="shell-widget shell-widget--dash shell-widget--link" href="{% if current_account_has_vfx_job_title %}{{ url_for('vfx_department_home') }}{% elif current_account_is_machine_room %}{{ url_for('machine_room') }}{% else %}{{ url_for('projects_list') }}{% endif %}" aria-label="Projects — {{ project_count }} on file">
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div class="shell-widget-dash-body">
+          <h2>Projects</h2>
+          <p class="shell-widget-stat">{{ project_count }}</p>
+        </div>
+      </div>
+    </a>
+    {% endif %}
+    {% if current_account_is_admin and not current_account_is_machine_room %}
+    <a class="shell-widget shell-widget--dash shell-widget--link" href="{{ url_for('users_list') }}" aria-label="Users — {{ user_count }} in directory">
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div class="shell-widget-dash-body">
+          <h2>Users</h2>
+          <p class="shell-widget-stat">{{ user_count }}</p>
+        </div>
+      </div>
+    </a>
+    {% endif %}
+    {% if not is_guest_dashboard|default(false) %}
+    {% if not current_account_is_super_user|default(false) %}
+    <a class="shell-widget shell-widget--dash shell-widget--link" href="{% if current_account_has_vfx_job_title %}{{ url_for('vfx_department_home') }}{% elif current_account_is_machine_room %}{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}{% else %}{{ url_for('tasks_list', scope='my_open') }}{% endif %}" aria-label="{% if current_account_has_vfx_job_title %}My open VFX shots — assigned to you as artist{% elif current_account_is_admin %}Open tasks{% else %}My open tasks — assigned to or created by you{% endif %} — {{ open_tasks }}">
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        </div>
+        <div class="shell-widget-dash-body">
+          <h2>{% if current_account_has_vfx_job_title %}My open{% elif current_account_is_admin %}Open tasks{% else %}My open{% endif %}</h2>
+          <p class="shell-widget-stat">{{ open_tasks }}</p>
+        </div>
+      </div>
+    </a>
+    {% endif %}
+    {% if not current_account_is_super_user|default(false) %}
+    <div
+      class="shell-widget shell-widget--dash shell-widget--requests shell-widget--disabled"
+      role="group"
+      aria-disabled="true"
+      aria-label="Requests — {{ requests_requested_count }} requested by you, {{ requests_complete_count }} to complete (unavailable)"
+      title="Requests coming soon"
+    >
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>
+        </div>
+        <div class="shell-widget-dash-body">
+          <h2>Requests</h2>
+          <p class="shell-widget-stat shell-widget-stat--split" aria-hidden="true">
+            <span class="shell-widget-stat-requested">{{ requests_requested_count }}</span>
+            <span class="shell-widget-stat-sep" aria-hidden="true">·</span>
+            <span class="shell-widget-stat-complete">{{ requests_complete_count }}</span>
+          </p>
+          <p class="visually-hidden">{{ requests_requested_count }} requested by you, {{ requests_complete_count }} to complete. Unavailable.</p>
+        </div>
+      </div>
     </div>
-    <div class="shell-widget">
-      <h2>{% if current_account_is_admin %}All open{% else %}Team open{% endif %}</h2>
-      <p class="shell-widget-stat">{{ task_count }}</p>
-      <p class="shell-widget-meta">{% if current_account_is_admin %}Total open{% else %}On your projects{% endif %}</p>
-      <a class="btn btn--ghost" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') if current_account_is_machine_room else url_for('tasks_list') }}">Tasks</a>
+    {% endif %}
+    {% if can("action_board", "view") or can("todos", "view") or can("sticky_notes", "view") %}
+    <a class="shell-widget shell-widget--dash shell-widget--action-board shell-widget--link" href="{{ url_for('actions_page') }}" aria-label="Notes — {{ action_board_badge }} pinned">
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12l2 2 4-4"/></svg>
+        </div>
+        <div class="shell-widget-dash-body">
+          <h2>Notes</h2>
+          <p class="shell-widget-stat" id="dash-action-badge">{{ action_board_badge }}</p>
+        </div>
+      </div>
+    </a>
+    {% endif %}
+    {% endif %}
+    {% if not current_account_is_super_user|default(false) %}
+    <a class="shell-widget shell-widget--dash shell-widget--criticals shell-widget--link" href="{% if current_account_has_vfx_job_title %}{{ url_for('vfx_department_home') }}{% else %}{{ url_for('criticals_list') }}{% endif %}" aria-label="{% if current_account_has_vfx_job_title %}Overdue VFX shots{% else %}Critical alerts{% endif %} — {{ critical_count }}">
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v5"/><path d="M12 18h.01"/></svg>
+        </div>
+        <div class="shell-widget-dash-body">
+          <h2>{% if current_account_has_vfx_job_title %}Overdue{% else %}Criticals{% endif %}</h2>
+          <p class="shell-widget-stat">{{ critical_count }}</p>
+        </div>
+      </div>
+    </a>
+    {% endif %}
+    {% if current_account and missing_info and not current_account_is_super_user|default(false) %}
+    <a class="shell-widget shell-widget--dash shell-widget--missing-info shell-widget--link" href="{{ url_for('missing_information_page') }}" aria-label="Missing information — {{ missing_info.total }} issue{{ 's' if missing_info.total != 1 else '' }}">
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 11v6"/><path d="M12 7h.01"/></svg>
+        </div>
+        <div class="shell-widget-dash-body">
+          <h2>Missing info</h2>
+          <p class="shell-widget-stat tabular-nums">{{ missing_info.total }}</p>
+        </div>
+      </div>
+    </a>
+    {% endif %}
+    {% if may_start_work_session|default(false) and not current_account_is_super_user|default(false) %}
+    <div
+      class="shell-widget shell-widget--dash shell-widget--session shell-widget--wide"
+      id="dashboard-session-widget"
+      data-start-url="{{ url_for('work_session_start') }}"
+      data-active-url="{{ url_for('work_session_active') }}"
+      data-rooms-url="{{ url_for('work_session_rooms_json') }}"
+      data-default-minutes="{{ work_session_default_minutes }}"
+      data-end-url-template="{{ url_for('work_session_end', session_id=0) }}"
+      data-active-session="{{ active_work_session|tojson|forceescape }}"
+      role="region"
+      aria-label="Work session"
+    >
+      <div class="shell-widget-dash-row">
+        <div class="shell-widget-dash-icon" aria-hidden="true">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none"/></svg>
+        </div>
+        <div class="shell-widget-dash-body shell-widget-session-body">
+          <h2>Session</h2>
+          <p class="shell-widget-session-idle" id="dashboard-session-idle" {% if active_work_session %}hidden{% endif %}>
+            <span class="muted">No session running</span>
+          </p>
+          <div class="shell-widget-session-live" id="dashboard-session-live" {% if not active_work_session %}hidden{% endif %}>
+            <p class="shell-widget-stat tabular-nums" id="dashboard-session-elapsed" aria-live="polite">0:00:00</p>
+            <p class="shell-widget-session-meta" id="dashboard-session-meta"></p>
+          </div>
+          <div class="shell-widget-today-work">
+            <span class="shell-widget-today-work__stats">
+              <span class="shell-widget-today-work__stat">
+                <span class="shell-widget-today-work__label">Today</span>
+                <strong class="tabular-nums">{{ today_work.actual_label }}</strong>
+              </span>
+              <span class="shell-widget-today-work__stat">
+                <span class="shell-widget-today-work__label">Billable</span>
+                <strong class="tabular-nums">{{ today_work.billable_label }}</strong>
+              </span>
+            </span>
+            {% if today_work_project_id %}
+            <span class="shell-widget-today-work__links">
+              <a class="btn btn--small btn--ghost" href="{{ url_for('project_working_hours', project_id=today_work_project_id) }}#add">Add Manual Hours</a>
+              <a class="btn btn--small btn--ghost" href="{{ url_for('project_working_hours', project_id=today_work_project_id, user_id=today_work_user_id) }}">View My Hours</a>
+            </span>
+            {% endif %}
+            {% if today_work_reminder %}
+            <span class="shell-widget-today-work__reminder">{{ today_work_reminder }}</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="shell-widget-session-actions">
+          <button type="button" class="btn btn--primary btn--small" id="dashboard-session-start" aria-haspopup="dialog" aria-controls="dashboard-session-dialog" {% if active_work_session %}hidden{% endif %}>Start session</button>
+          <button type="button" class="btn btn--danger btn--small" id="dashboard-session-end" {% if not active_work_session %}hidden{% endif %}>End session</button>
+        </div>
+      </div>
     </div>
+    <dialog class="dashboard-session-dialog" id="dashboard-session-dialog" aria-labelledby="dashboard-session-dialog-title">
+      <form class="dashboard-session-form" id="dashboard-session-form" autocomplete="off">
+        <div class="dashboard-session-head">
+          <h2 class="dashboard-session-title" id="dashboard-session-dialog-title">Start a session</h2>
+          <button type="button" class="btn btn--ghost btn--small" data-session-close aria-label="Close">Close</button>
+        </div>
+        <label class="dashboard-session-label" for="dashboard-session-project">Project</label>
+        <select class="input input--sm" id="dashboard-session-project" name="project_id" required>
+          <option value="">Select a project…</option>
+          {% for p in work_session_projects %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+        <label class="dashboard-session-label" for="dashboard-session-room">Room <span class="dashboard-session-label-note">free now</span></label>
+        <select class="input input--sm" id="dashboard-session-room" name="edit_suite_id" required>
+          <option value="">Select a room…</option>
+          {% for r in work_session_rooms %}
+          <option value="{{ r.id }}"{% if not r.available %} disabled{% endif %}>{{ r.name }}{% if r.note %} — {{ r.note }}{% endif %}</option>
+          {% endfor %}
+        </select>
+        <p class="dashboard-session-rooms-empty muted" id="dashboard-session-rooms-empty" {% if work_session_rooms|selectattr('available')|list %}hidden{% endif %}>Every room is busy right now.</p>
+        <label class="dashboard-session-label" for="dashboard-session-job">Job</label>
+        <select class="input input--sm" id="dashboard-session-job" name="job_type" required>
+          <option value="">Select a job…</option>
+          {% for j in work_session_job_types %}
+          <option value="{{ j }}">{{ j }}</option>
+          {% endfor %}
+        </select>
+        <span class="dashboard-session-label" id="dashboard-session-duration-label">Duration <span class="dashboard-session-label-note">max {{ work_session_max_hours }} hours</span></span>
+        <div
+          class="dts dashboard-session-dts"
+          id="dashboard-session-dts"
+          data-dts
+          data-dts-preview="clock"
+          data-dts-hours-max="{{ work_session_max_hours }}"
+          data-dts-minutes-step="15"
+          role="group"
+          aria-labelledby="dashboard-session-duration-label"
+        >
+          <p class="dts__preview" id="dashboard-session-duration-preview" aria-live="polite">02:00</p>
+          <div class="dts__columns">
+            <div class="dts__col">
+              <span class="dts__col-label">Hours</span>
+              <div class="dts__viewport" data-dts-wheel="hours" tabindex="0" role="listbox" aria-label="Hours">
+                <ul class="dts__list" data-dts-list="hours"></ul>
+                <div class="dts__shade" aria-hidden="true"></div>
+                <div class="dts__selection" aria-hidden="true"></div>
+              </div>
+            </div>
+            <div class="dts__col">
+              <span class="dts__col-label">Minutes</span>
+              <div class="dts__viewport" data-dts-wheel="minutes" tabindex="0" role="listbox" aria-label="Minutes">
+                <ul class="dts__list" data-dts-list="minutes"></ul>
+                <div class="dts__shade" aria-hidden="true"></div>
+                <div class="dts__selection" aria-hidden="true"></div>
+              </div>
+            </div>
+          </div>
+          <input type="hidden" data-dts-hours-input value="2">
+          <input type="hidden" data-dts-minutes-input value="0">
+        </div>
+        <p class="dashboard-session-hint muted">The room is booked for this window. Ending the session frees it early.</p>
+        <p class="dashboard-session-error muted" id="dashboard-session-error" hidden role="alert"></p>
+        <div class="dashboard-session-actions">
+          <button type="submit" class="btn btn--primary btn--small" id="dashboard-session-submit">Start session</button>
+        </div>
+      </form>
+    </dialog>
+    {% endif %}
   </div>
+
+  {% if not current_account_is_machine_room %}
+  <aside class="shell-dash-booking-col" aria-label="My booking">
+    <div class="shell-widget shell-widget--booking shell-widget--booking-featured shell-widget--dash" id="dashboard-booking-card" data-today-url="{{ url_for('booking.booking_today_json') }}" data-list-url="{{ url_for('booking.booking_home') }}" data-viewer-directory-user-id="{{ directory_chat_user_id or '' }}"{% if can('action_board', 'view') %} data-reminders-url="{{ url_for('actions_reminders_calendar_json') }}"{% endif %}{% if can('action_board', 'create') %} data-remind-create-url="{{ url_for('actions_create') }}"{% endif %}>
+      <a class="dashboard-booking-card-link" href="{{ url_for('booking.booking_manage_page') }}" aria-label="My booking — open schedule">
+        <div class="shell-widget-booking-head">
+          <h2 class="shell-widget-booking-title">My booking</h2>
+          <div class="shell-widget-booking-clock" role="region" aria-label="Device time">
+            <p class="shell-widget-clock-row" aria-live="polite" aria-atomic="true">
+              <span class="shell-widget-clock" id="shell-dash-clock-time">--:--:--</span>
+              <span class="shell-widget-clock-date" id="shell-dash-clock-date">—</span>
+            </p>
+          </div>
+        </div>
+        <div class="dashboard-booking-panel">
+          <div class="dashboard-booking-cal-host" id="dashboard-booking-cal-host" aria-label="Booking calendar"></div>
+          <div class="dashboard-booking-slot">
+            <div class="dashboard-booking-filled" id="dashboard-booking-filled" {% if not booking_today_card %}hidden{% endif %}>
+              <div class="dashboard-booking-body">
+                <p class="dashboard-booking-suite" id="db-booking-suite">{{ booking_today_card.suite_name if booking_today_card else "" }}</p>
+                <p class="dashboard-booking-meta" id="db-booking-time">{% if booking_today_card %}{{ booking_today_card.time_label }}{% if booking_today_card.is_full_day %} · Full day{% endif %}{% endif %}</p>
+                <p class="dashboard-booking-meta" id="db-booking-project">{% if booking_today_card and booking_today_card.project_name %}{{ booking_today_card.project_name }}{% endif %}</p>
+                <p class="dashboard-booking-for" id="db-booking-for">{% if booking_today_card and booking_today_card.booked_for_name %}For {{ booking_today_card.booked_for_name }}{% endif %}</p>
+              </div>
+            </div>
+            <div class="dashboard-booking-empty" id="dashboard-booking-empty" {% if booking_today_card %}hidden{% endif %}>
+              <div class="dashboard-booking-empty-inner">
+                <p class="dashboard-booking-empty-title" id="db-booking-empty-title">No booking today</p>
+              </div>
+            </div>
+            <div class="dashboard-booking-reminders" id="dashboard-booking-reminders" hidden>
+              <p class="dashboard-booking-reminders-label" id="db-booking-reminders-label">Reminders</p>
+              <ul class="dashboard-booking-reminders-list" id="dashboard-booking-reminders-list" role="list"></ul>
+            </div>
+          </div>
+        </div>
+      </a>
+      {% if can('action_board', 'create') %}
+      <div class="dashboard-booking-footer">
+        <button type="button" class="btn btn--small btn--ghost" id="dashboard-booking-remind-open" aria-haspopup="dialog" aria-controls="dashboard-booking-remind-dialog">Remind me</button>
+      </div>
+      {% endif %}
+    </div>
+    {% if can('action_board', 'create') %}
+    <dialog class="dashboard-booking-remind-dialog" id="dashboard-booking-remind-dialog" aria-labelledby="dashboard-booking-remind-title">
+      <form class="dashboard-booking-remind-form" id="dashboard-booking-remind-form" autocomplete="off">
+        <div class="dashboard-booking-remind-head">
+          <h2 class="dashboard-booking-remind-title" id="dashboard-booking-remind-title">Set a reminder</h2>
+          <button type="button" class="btn btn--ghost btn--small" data-booking-remind-close aria-label="Close">Close</button>
+        </div>
+        <label class="dashboard-booking-remind-label" for="dashboard-booking-remind-text">Reminder</label>
+        <input type="text" id="dashboard-booking-remind-text" class="input input--sm dashboard-booking-remind-input" maxlength="300" placeholder="What should we remind you about?" required aria-label="Reminder text">
+        <p class="dashboard-booking-remind-date-label" id="dashboard-booking-remind-date-label">Remind on</p>
+        <div class="dashboard-booking-remind-cal-host" id="dashboard-booking-remind-cal-host" aria-labelledby="dashboard-booking-remind-date-label"></div>
+        <input type="hidden" name="due_date" id="dashboard-booking-remind-date" value="">
+        <p class="dashboard-booking-remind-error muted" id="dashboard-booking-remind-error" hidden role="alert"></p>
+        <div class="dashboard-booking-remind-actions">
+          <button type="submit" class="btn btn--primary btn--small" id="dashboard-booking-remind-submit">Save reminder</button>
+        </div>
+      </form>
+    </dialog>
+    {% endif %}
+  </aside>
+  {% endif %}
+  </div>
+
+  {% set show_insights_split = show_dashboard_whats_new and show_industry_radar|default(false) %}
+  {% if show_dashboard_whats_new or show_industry_radar|default(false) %}
+  <div class="dash-insights-row{% if show_insights_split %} dash-insights-row--split{% endif %}">
+  {% if show_dashboard_whats_new %}
+  <section class="dash-whats-new dash-whats-new--disabled" aria-labelledby="dash-whats-new-title" aria-disabled="true">
+    <div class="dash-whats-new__head">
+      <h2 class="dash-whats-new__title" id="dash-whats-new-title">What's New</h2>
+      <p class="muted dash-whats-new__lede">Latest product updates and improvements.</p>
+      {% if current_account_is_admin %}
+      <span class="btn btn--small btn--ghost dash-whats-new__manage is-disabled" aria-disabled="true" tabindex="-1">Manage updates</span>
+      {% endif %}
+    </div>
+    {% if dashboard_whats_new %}
+    <ul class="dash-whats-new__list" role="list">
+      {% for u in dashboard_whats_new %}
+      <li class="dash-whats-new__item">
+        <article class="dash-whats-new__card dash-whats-new__card--{{ u.importance }}">
+          <div class="dash-whats-new__card-top">
+            <span class="dash-whats-new__cat dash-whats-new__cat--{{ u.category }}" aria-label="{{ u.categoryLabel }}">{{ u.categoryLabel }}</span>
+            {% if u.importance != 'normal' and u.importance != 'minor' %}
+            <span class="dash-whats-new__imp dash-whats-new__imp--{{ u.importance }}">{{ u.importance|capitalize }}</span>
+            {% endif %}
+            <time class="muted dash-whats-new__time" datetime="{{ u.createdAt }}">{{ u.createdAtDisplay }}</time>
+          </div>
+          <h3 class="dash-whats-new__card-title">{{ u.title|e }}</h3>
+          {% if u.description %}
+          <p class="dash-whats-new__card-desc">{{ u.description|e|truncate(200, True, '…') }}</p>
+          {% endif %}
+          {% if u.projectName %}
+          <p class="muted dash-whats-new__project">{{ u.projectName|e }}</p>
+          {% endif %}
+        </article>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted dash-whats-new__empty">No published updates yet. Check back soon.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if show_industry_radar|default(false) %}
+  {% include 'partials/industry_radar_widget.html' %}
+  {% endif %}
+  </div>
+  {% endif %}
 
   {% if current_account_is_machine_room %}
   <section
@@ -96,11 +394,25 @@
 
 </div>
 {% endblock %}
+{% block extra_head %}
+{% if show_industry_radar|default(false) %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/industry-radar.css') }}">
+{% endif %}
+{% if may_start_work_session|default(false) and not current_account_is_super_user|default(false) %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/project-working-hours.css') }}">
+{% endif %}
+{% endblock %}
 {% block extra_scripts %}
+{% if show_industry_radar|default(false) %}
+<script src="{{ url_for('static', filename='js/industry-radar.js') }}" defer></script>
+{% endif %}
 {% if current_account_is_machine_room %}
 <script src="{{ url_for('static', filename='js/dashboard-mr-postcopy.js') }}" defer></script>
 {% endif %}
 <script src="{{ url_for('static', filename='js/booking.js') }}" defer></script>
+{% if may_start_work_session|default(false) and not current_account_is_super_user|default(false) %}
+<script src="{{ url_for('static', filename='js/dashboard-session.js') }}" defer></script>
+{% endif %}
 <script>
 (function () {
   function tick() {

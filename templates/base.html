@@ -1,79 +1,225 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ current_lang|default('en') }}" dir="{{ text_direction|default('ltr') }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <link rel="icon" href="{{ url_for('static', filename='icons/logo.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap-grid.min.css" crossorigin="anonymous">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='shell.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dts.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/composer-input.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/conform-request.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/safe-delete.css') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  {% if is_rtl %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/rtl.css') }}">
+  {% endif %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/help-shot.css') }}">
+  <script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/safe-delete.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/escape-modal-lock.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/dts.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/notification-actions.js') }}" defer></script>
+  {% block extra_head %}{% endblock %}
 </head>
-<body class="app--shell{% if current_account %} app-has-global-audio{% endif %} {% block body_class %}{% endblock %}">
-  <div class="app-frame">
-    <aside class="app-sidebar" id="app-sidebar" aria-label="Main navigation">
-      <a class="app-sidebar-brand" href="{{ url_for('index') if current_account else url_for('login') }}">{{ app_name }}</a>
-      {% if current_account %}
-      <nav class="app-sidebar-nav">
-        <a href="{{ url_for('index') }}" class="app-nav-item{% if request.endpoint == 'index' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">◉</span> Dashboard</a>
-        <a href="{{ url_for('music_library') }}" class="app-nav-item{% if request.endpoint in ('music_library', 'music_library_mount_add', 'browse_mount', 'browse_play_file', 'music_library_scan_mount') %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">♪</span> Music Library</a>
-        <a href="#" class="app-nav-item" aria-disabled="true" onclick="return false;"><span class="app-nav-icon" aria-hidden="true">◌</span> Comming Soon</a>
-        {% if current_account_is_machine_room %}
-        <a href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}" class="app-nav-item{% if request.endpoint in ('machine_room_tasks', 'machine_room_tasks_tab') %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">☰</span> Tasks</a>
-        <a href="{{ url_for('machine_room') }}" class="app-nav-item{% if request.endpoint == 'machine_room' or (request.endpoint and request.endpoint.startswith('machine_project')) %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">⌁</span> Storage Management</a>
-        {% else %}
-        <a href="{{ url_for('projects_list') }}" class="app-nav-item{% if request.endpoint and (request.endpoint.startswith('projects_') or request.endpoint == 'project_detail' or request.endpoint == 'project_completed_tasks' or request.endpoint == 'project_edit' or request.endpoint in ('project_members_add', 'project_member_remove', 'project_production', 'project_production_day', 'project_episodes', 'project_episode_detail', 'project_scene_edit', 'shooting_day_assign_scene', 'shooting_day_scene_update', 'production_scene_mark_done') or (request.endpoint and request.endpoint.startswith('project_vfx'))) %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">▦</span> Projects</a>
-        <a href="{{ url_for('tasks_list') }}" class="app-nav-item{% if request.endpoint == 'tasks_list' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">☰</span> Tasks</a>
-        <a href="{{ url_for('booking.booking_home') }}" class="app-nav-item{% if request.blueprint == 'booking' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">▣</span> Booking</a>
-        <a href="{{ url_for('machine_room') }}" class="app-nav-item{% if request.endpoint == 'machine_room' or (request.endpoint and request.endpoint.startswith('machine_project')) %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">⌁</span> Storage Management</a>
-        {% if current_account_is_admin %}
-        <a href="{{ url_for('users_list') }}" class="app-nav-item{% if request.endpoint == 'users_list' %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">◎</span> Users</a>
-        {% endif %}
-        {% if current_account_is_admin %}
-        <a href="{{ url_for('control_panel') }}" class="app-nav-item{% if request.endpoint and request.endpoint.startswith('control_') %} app-nav-item--active{% endif %}"><span class="app-nav-icon" aria-hidden="true">⚙</span> Control</a>
-        {% endif %}
-        {% endif %}
-      </nav>
-      <div class="app-sidebar-spacer"></div>
-      <div class="app-sidebar-user">
-        <a href="{{ url_for('profile') }}">{{ current_account.display_name }}</a>
-        <form method="post" action="{{ url_for('logout') }}" class="logout-form">
-          <button type="submit" class="btn btn--small btn--ghost">Sign out</button>
-        </form>
+<body class="app--shell{% if current_account %} app-has-global-audio{% endif %} {% block body_class %}{% endblock %}" data-sidebar-collapsed="true"{% if config.DEBUG %} data-app-debug="true"{% endif %}>
+  {# TODO(security): move sidebar-collapse bootstrap to static/js/shell.js so CSP can drop 'unsafe-inline'. #}
+  <script>
+    (function () {
+      try {
+        if (!window.matchMedia || !window.matchMedia("(min-width: 768px)").matches) {
+          document.body.removeAttribute("data-sidebar-collapsed");
+          return;
+        }
+        if (window.localStorage.getItem("sidebarCollapsed") === "false") {
+          document.body.removeAttribute("data-sidebar-collapsed");
+        }
+      } catch (e) {
+        try {
+          document.body.removeAttribute("data-sidebar-collapsed");
+        } catch (e2) {}
+      }
+    })();
+  </script>
+  <div class="container-fluid app-frame-bootstrap g-0">
+    <div class="row g-0 flex-nowrap app-frame-row">
+      <div class="col-auto p-0 app-sidebar-col">
+        <div class="app-sidebar-backdrop" id="app-sidebar-backdrop" hidden aria-hidden="true"></div>
+        <aside class="app-sidebar" id="app-sidebar" aria-label="{{ _('Main navigation') }}">
+          <div class="app-sidebar-head">
+            <button type="button" class="app-sidebar-rail-toggle" id="app-sidebar-rail-toggle" aria-controls="app-sidebar" aria-expanded="false" aria-label="{{ _('Expand sidebar') }}" title="{{ _('Expand sidebar') }}">
+              <svg class="app-sidebar-rail-icon app-sidebar-rail-icon--collapse" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+              <svg class="app-sidebar-rail-icon app-sidebar-rail-icon--expand" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+            <a class="app-sidebar-brand" href="{{ url_for('index') if current_account else url_for('login') }}" aria-label="{{ app_name }}">
+              <img class="app-sidebar-brand-mark" src="{{ url_for('static', filename='icons/logo.svg') }}" width="28" height="28" alt="">
+              <span class="app-sidebar-brand-text">{{ app_name }}</span>
+            </a>
+          </div>
+          {% if current_account %}
+          {% if account_may_use_app|default(true) %}
+          <nav class="app-sidebar-nav" aria-label="{{ _('Primary') }}">
+            <p class="app-sidebar-section-title">{{ _('Workspace') }}</p>
+            {% if can("dashboard", "view") %}
+            <a href="{{ url_for('index') }}" class="app-nav-item{% if request.endpoint == 'index' %} app-nav-item--active{% endif %}" data-nav="dashboard" data-tooltip="{{ _('Dashboard') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg></span><span class="app-nav-item-label">{{ _('Dashboard') }}</span></a>
+            {% endif %}
+            {% if can("industry_radar", "view") and not is_guest %}
+            <a href="{{ url_for('industry_radar_page') }}" class="app-nav-item{% if request.endpoint == 'industry_radar_page' %} app-nav-item--active{% endif %}" data-nav="industry_radar" data-tooltip="{{ _('Industry Radar') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/><path d="M8 8l8 8"/></svg></span><span class="app-nav-item-label">{{ _('Industry Radar') }}</span></a>
+            {% endif %}
+            {% if not is_guest %}
+            <a href="{{ url_for('chat_page') }}" class="app-nav-item{% if request.endpoint in ('chat_page', 'chat_conference_room') %} app-nav-item--active{% endif %}" data-nav="chat" data-tooltip="{{ _('Chat') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><span class="app-nav-item-label">{{ _('Chat') }}</span></a>
+            {% endif %}
+            {% if can("music_library", "view") %}
+            <a href="{{ url_for('music_library') }}" class="app-nav-item{% if request.endpoint in ('music_library', 'music_library_mount_add', 'browse_mount', 'browse_play_file', 'music_library_scan_mount') %} app-nav-item--active{% endif %}" data-nav="music" data-tooltip="{{ _('Audio Library') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></span><span class="app-nav-item-label">{{ _('Audio Library') }}</span></a>
+            {% endif %}
+            {% if can("action_board", "view") or can("todos", "view") or can("sticky_notes", "view") %}
+            <a href="{{ url_for('actions_page') }}" class="app-nav-item{% if request.endpoint and (request.endpoint.startswith('actions') or request.endpoint in ('todos_legacy_redirect', 'sticky_legacy_redirect')) %} app-nav-item--active{% endif %}" data-nav="notes" data-tooltip="{{ _('Notes') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12l2 2 4-4"/></svg></span><span class="app-nav-item-label">{{ _('Notes') }}</span></a>
+            {% endif %}
+            {% if (can("machine_room", "view") and not current_account_is_super_user|default(false)) or current_account_is_machine_room %}
+            <p class="app-sidebar-section-title">{{ _('Machine room') }}</p>
+            {% if can("machine_room", "view") and not current_account_is_super_user|default(false) %}
+            <a href="{{ url_for('machine_room_dashboard_index') }}" class="app-nav-item{% if request.endpoint in ('machine_room_dashboard', 'machine_room_dashboard_index', 'project_machine_room', 'project_machine_room_index', 'machine_project_dashboard', 'machine_project_dashboard_index', 'machine_room_report', 'machine_room') or (request.endpoint and request.endpoint.startswith('machine_project')) %} app-nav-item--active{% endif %}" data-nav="storage" data-tooltip="{{ _('Storage') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="app-nav-item-label">{{ _('Storage') }}</span></a>
+            {% endif %}
+            {% if current_account_is_machine_room and can("tasks", "view") %}
+            <a href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}" class="app-nav-item{% if request.endpoint in ('machine_room_tasks', 'machine_room_tasks_tab') %} app-nav-item--active{% endif %}" data-nav="tasks" data-tooltip="{{ _('Tasks') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span><span class="app-nav-item-label">{{ _('Tasks') }}</span></a>
+            {% endif %}
+            {% endif %}
+            {% if not current_account_is_machine_room %}
+            {% if can("projects", "view") and not current_account_is_super_user|default(false) %}
+            <a href="{{ url_for('projects_list') }}" class="app-nav-item{% if request.endpoint and (request.endpoint.startswith('projects_') or request.endpoint == 'project_detail' or request.endpoint == 'project_team' or request.endpoint == 'project_completed_tasks' or request.endpoint == 'project_edit' or request.endpoint in ('project_members_add', 'project_member_remove', 'project_production', 'project_production_day', 'project_episodes', 'project_episode_detail', 'project_scene_edit', 'shooting_day_assign_scene', 'shooting_day_scene_update', 'production_scene_mark_done', 'production_day_meta_update', 'shooting_day_critical_note_create', 'shooting_day_critical_note_update', 'shooting_day_critical_note_solve') or (request.endpoint and request.endpoint.startswith('project_vfx'))) %} app-nav-item--active{% endif %}" data-nav="projects" data-tooltip="{{ _('Projects') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="app-nav-item-label">{{ _('Projects') }}</span></a>
+            {% endif %}
+            {% if can("tasks", "view") and not current_account_is_super_user|default(false) %}
+            <a href="{{ url_for('tasks_list') }}" class="app-nav-item{% if request.endpoint == 'tasks_list' %} app-nav-item--active{% endif %}" data-nav="tasks" data-tooltip="{{ _('Tasks') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span><span class="app-nav-item-label">{{ _('Tasks') }}</span></a>
+            {% endif %}
+            {% if can("booking", "view") and not current_account_is_super_user|default(false) %}
+            <a href="{{ url_for('booking.booking_home') }}" class="app-nav-item{% if request.blueprint == 'booking' %} app-nav-item--active{% endif %}" data-nav="booking" data-tooltip="{{ _('Booking') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span><span class="app-nav-item-label">{{ _('Booking') }}</span></a>
+            {% endif %}
+            {% if (can("vfx_department", "view") or current_account_has_vfx_job_title|default(false) or current_account_is_vfx_supervisor|default(false)) and not current_account_is_super_user|default(false) %}
+            <a href="{{ url_for('vfx_department_home') }}" class="app-nav-item{% if request.endpoint in ('vfx_department_home', 'vfx_department_workspace') %} app-nav-item--active{% endif %}" data-nav="vfx" data-tooltip="{{ _('VFX Department') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M7 18h10M9 22h6"/></svg></span><span class="app-nav-item-label">{{ _('VFX Department') }}</span></a>
+            {% endif %}
+            {% if (can("color_department", "view") or current_account_is_color|default(false)) and not current_account_is_super_user|default(false) %}
+            <a href="{{ url_for('color_department_home') }}" class="app-nav-item{% if request.endpoint in ('color_department_home', 'color_department_workspace', 'color_department_episode_workspace') %} app-nav-item--active{% endif %}" data-nav="color_dept" data-tooltip="{{ _('Color Department') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M7 18h10M9 22h6"/><circle cx="8" cy="10" r="1.5" fill="currentColor"/><circle cx="12" cy="10" r="1.5" fill="currentColor"/><circle cx="16" cy="10" r="1.5" fill="currentColor"/></svg></span><span class="app-nav-item-label">{{ _('Color Department') }}</span></a>
+            {% endif %}
+            {% if can("producer_hunt", "view") %}
+            <p class="app-sidebar-section-title">{{ _('Entertainment') }}</p>
+            <a href="{{ url_for('producer_hunt.page') }}" class="app-nav-item{% if request.blueprint == 'producer_hunt' %} app-nav-item--active{% endif %}" data-nav="producer_hunt" data-tooltip="{{ _('Producer Hunt') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M8 21h8M12 17v4"/><circle cx="9" cy="11" r="1.2" fill="currentColor"/><path d="M14 8l4 3-4 3V8z" fill="currentColor" stroke="none"/></svg></span><span class="app-nav-item-label">{{ _('Producer Hunt') }}</span></a>
+            {% endif %}
+            {% if can("users", "view") or can("control_panel", "view") or can("updates", "view") %}
+            <p class="app-sidebar-section-title">{{ _('Admin') }}</p>
+            {% if can("users", "view") %}
+            {% set users_nav_active = request.endpoint == 'users_list' or (request.endpoint and (request.endpoint.startswith('admin_approvals') or request.endpoint in ('admin_approval_request_detail', 'admin_approve_approval_request', 'admin_reject_approval_request', 'admin_approve_user', 'admin_reject_user', 'admin_approve_role_change', 'admin_reject_role_change', 'admin_approve_reactivation', 'admin_reject_reactivation'))) %}
+            {% set users_nav_badge = (approval_queue_counts.pending_users + approval_queue_counts.role_requests + approval_queue_counts.permission_requests + approval_queue_counts.reactivation_requests) if approval_queue_counts else 0 %}
+            <a href="{{ url_for('users_list') }}" class="app-nav-item{% if users_nav_active %} app-nav-item--active{% endif %}" data-nav="users" data-tooltip="{{ _('Users') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span class="app-nav-item-label">{{ _('Users') }}{% if users_nav_badge %} <span class="app-nav-badge">{{ users_nav_badge }}</span>{% endif %}</span></a>
+            {% endif %}
+            {% if can("control_panel", "view") or current_account_is_admin %}
+            {% set tasks_notif_active = request.endpoint in ('control_panel', 'admin_task_log', 'admin_task_log_task_status_update', 'control_task_management_help', 'admin_notification_log', 'admin_notification_management', 'admin_notification_rule_edit', 'admin_notification_rule_toggle', 'admin_notification_rule_duplicate', 'admin_notification_rule_restore_default', 'admin_notification_rule_test', 'admin_notification_management_audit', 'admin_notification_event_create_rule', 'admin_notification_event_mark_deprecated') or (request.endpoint and (request.endpoint.startswith('control_task_') or request.endpoint.startswith('control_title_') or request.endpoint.startswith('control_scope_titles_') or request.endpoint.startswith('control_groups_') or request.endpoint.startswith('admin_notification'))) %}
+            <a href="{% if can('control_panel', 'view') %}{{ url_for('control_panel') }}{% else %}{{ url_for('admin_notification_management') }}{% endif %}" class="app-nav-item{% if tasks_notif_active %} app-nav-item--active{% endif %}" data-nav="tasks_notifications" data-tooltip="{{ _('Tasks and Notifications') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span><span class="app-nav-item-label">{{ _('Tasks and Notifications') }}</span></a>
+            {% if can("control_panel", "manage_permissions") %}
+            <a href="{{ url_for('control_access_control') }}" class="app-nav-item{% if request.endpoint in ('control_access_control', 'control_access_control_help') %} app-nav-item--active{% endif %}" data-nav="access" data-tooltip="{{ _('Access Control') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 3l7 4v5c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V7l7-4z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="app-nav-item-label">{{ _('Access Control') }}</span></a>
+            {% endif %}
+            {% if can("control_panel", "view") and current_account_is_admin %}
+            <a href="{{ url_for('control_employment_structure') }}" class="app-nav-item{% if request.endpoint == 'control_employment_structure' %} app-nav-item--active{% endif %}" data-nav="employment" data-tooltip="{{ _('Employment structure') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="app-nav-item-label">{{ _('Employment structure') }}</span></a>
+            <a href="{{ url_for('control_edit_suites') }}" class="app-nav-item{% if request.endpoint == 'control_edit_suites' %} app-nav-item--active{% endif %}" data-nav="edit_suites" data-tooltip="{{ _('Edit suites') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M10 16v4M14 16v4"/><circle cx="8" cy="10" r="1" fill="currentColor"/><circle cx="12" cy="10" r="1" fill="currentColor"/><circle cx="16" cy="10" r="1" fill="currentColor"/></svg></span><span class="app-nav-item-label">{{ _('Edit suites') }}</span></a>
+            {% endif %}
+            {% if can("control_panel", "view") %}
+            <a href="{{ url_for('control_app_workflow') }}" class="app-nav-item{% if request.endpoint == 'control_app_workflow' %} app-nav-item--active{% endif %}" data-nav="workflow" data-tooltip="{{ _('APP WorkFlow') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6M8 15h4"/></svg></span><span class="app-nav-item-label">{{ _('APP WorkFlow') }}</span></a>
+            {% endif %}
+            {% endif %}
+            {% if can("updates", "view") %}
+            <a href="{{ url_for('updates_page') }}" class="app-nav-item{% if request.endpoint in ('updates_page', 'updates_api_list', 'updates_api_create', 'updates_api_patch', 'updates_api_delete') %} app-nav-item--active{% endif %}" data-nav="updates" data-tooltip="{{ _('Updates') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6"/></svg></span><span class="app-nav-item-label">{{ _('Updates') }}</span></a>
+            {% endif %}
+            {% if current_account_is_admin %}
+            <a href="{{ url_for('control_system_setup') }}" class="app-nav-item{% if request.endpoint in ('control_system_setup', 'control_system_seed_run') %} app-nav-item--active{% endif %}" data-nav="system_setup" data-tooltip="{{ _('System Setup') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span><span class="app-nav-item-label">{{ _('System Setup') }}</span></a>
+            <a href="{{ url_for('control_industry_news_sources') }}" class="app-nav-item{% if request.endpoint and request.endpoint.startswith('control_industry_news') %} app-nav-item--active{% endif %}" data-nav="news_sources" data-tooltip="{{ _('News sources') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 11h16M4 7h10M4 15h7M4 19h13"/><circle cx="18" cy="7" r="2"/></svg></span><span class="app-nav-item-label">{{ _('News sources') }}</span></a>
+            {% endif %}
+            {% endif %}
+            {% endif %}
+          </nav>
+          {% else %}
+          <nav class="app-sidebar-nav" aria-label="{{ _('Account') }}">
+            <a href="{{ url_for('account_pending') }}" class="app-nav-item{% if request.endpoint == 'account_pending' %} app-nav-item--active{% endif %}">{{ _('Account status') }}</a>
+            <a href="{{ url_for('profile') }}" class="app-nav-item{% if request.endpoint == 'profile' %} app-nav-item--active{% endif %}">{{ _('Profile') }}</a>
+            <a href="{{ url_for('account_support') }}" class="app-nav-item{% if request.endpoint == 'account_support' %} app-nav-item--active{% endif %}">{{ _('Support') }}</a>
+          </nav>
+          {% endif %}
+          <div class="app-sidebar-spacer">
+            {% if account_may_use_app|default(true) %}
+            <a
+              href="{{ url_for('app_tour') }}"
+              class="app-nav-item app-sidebar-tour{% if request.endpoint == 'app_tour' %} app-nav-item--active{% endif %}"
+              data-nav="tour"
+              data-tooltip="{{ _('Take a Tour') }}"
+            >
+              <span class="app-nav-icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                  <circle cx="12" cy="12" r="9"/>
+                  <path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1.9-1.1 1.8V14"/>
+                  <path d="M12 17h.01"/>
+                </svg>
+              </span>
+              <span class="app-nav-item-label">{{ _('Take a Tour') }}</span>
+            </a>
+            {% endif %}
+          </div>
+          <div class="app-sidebar-lang">
+            {% include 'partials/language_switcher.html' %}
+          </div>
+          <div class="app-sidebar-user">
+            <a href="{{ url_for('profile') }}" class="app-sidebar-user-link" data-tooltip="{{ _('Profile') }}"><span class="app-nav-icon app-sidebar-user-avatar" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><span class="app-sidebar-user-name">{{ current_account.display_name }}</span></a>
+            <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+              <button type="submit" class="btn btn--small btn--ghost app-sidebar-signout" title="{{ _('Sign out') }}" aria-label="{{ _('Sign out') }}">
+                <span class="app-sidebar-signout-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span>
+                <span class="app-sidebar-signout-label">{{ _('Sign out') }}</span>
+              </button>
+            </form>
+          </div>
+          {% else %}
+          <nav class="app-sidebar-nav">
+            <a href="{{ url_for('login') }}" class="app-nav-item" data-tooltip="{{ _('Sign in') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg></span><span class="app-nav-item-label">{{ _('Sign in') }}</span></a>
+          </nav>
+          <div class="app-sidebar-lang">
+            {% include 'partials/language_switcher.html' %}
+          </div>
+          {% endif %}
+        </aside>
       </div>
-      {% else %}
-      <nav class="app-sidebar-nav">
-        <a href="{{ url_for('login') }}" class="app-nav-item">Sign in</a>
-      </nav>
-      {% endif %}
-    </aside>
 
+      <div class="col min-w-0 p-0 app-main-col">
     <div class="app-column">
       <header class="app-topbar">
-        <button type="button" class="site-nav-toggle app-sidebar-toggle" id="app-sidebar-toggle" aria-expanded="false" aria-controls="app-sidebar" aria-label="Open menu">
+        <button type="button" class="site-nav-toggle app-sidebar-toggle" id="app-sidebar-toggle" aria-expanded="false" aria-controls="app-sidebar" aria-label="{{ _('Open menu') }}">
           <span class="site-nav-toggle-bars" aria-hidden="true"></span>
         </button>
         <span class="app-topbar-title">{{ app_name }}</span>
         {% if current_account %}
-        <button type="button" id="notif-btn" class="btn btn--small btn--ghost notif-btn" aria-expanded="false" aria-controls="notif-panel" aria-label="Toggle notifications">
-          <span aria-hidden="true">🔔</span>
-          <span id="notif-badge" class="notif-badge">0</span>
-        </button>
+        <div class="app-topbar-actions">
+          <button
+            type="button"
+            id="reload-page-btn"
+            class="btn btn--small btn--ghost reload-page-btn"
+            aria-label="{{ _('Reload page') }}"
+            title="{{ _('Reload page') }}"
+            onclick="window.location.reload()"
+          >
+            <svg class="reload-page-btn__icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+              <path fill="currentColor" d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+            </svg>
+          </button>
+          <button type="button" id="notif-btn" class="btn btn--small btn--ghost notif-btn" aria-expanded="false" aria-controls="notif-panel" aria-label="{{ _('Toggle notifications') }}">
+            <span aria-hidden="true">🔔</span>
+            <span id="notif-badge" class="notif-badge">0</span>
+          </button>
+        </div>
         {% endif %}
       </header>
       <div class="app-body">
         <main class="wrap main app-main">
-          {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-              <ul class="flash-list" role="status">
-                {% for category, message in messages %}
-                  <li class="flash flash--{{ category }}">{{ message }}</li>
-                {% endfor %}
-              </ul>
-            {% endif %}
-          {% endwith %}
+          {% include 'partials/flash_messages.html' %}
           <div class="app-main-inner">
             <div class="page-wrapper">
               <div class="page-content">
@@ -83,6 +229,41 @@
           </div>
         </main>
       </div>
+      {% if current_account %}
+      <div id="tm-global-audio-dock" class="tm-global-audio-dock" hidden>
+        <div class="tm-global-audio-dock-main">
+          <div class="tm-global-audio-track-block">
+            <span class="tm-global-audio-track-label muted" id="tm-global-audio-track-label">{{ _('Now playing') }}</span>
+            <div id="tm-global-audio-track" class="tm-global-audio-track" title="">—</div>
+          </div>
+          <div class="tm-global-audio-waveform-block">
+            <div id="global-waveform" class="music-library-waveform tm-global-audio-waveform"></div>
+            <div class="tm-global-audio-waveform-meta">
+              <span id="global-waveform-time" class="muted tm-global-audio-time">0.0s</span>
+              <span class="muted tm-global-audio-hint">Wheel zoom · Space · ← → · ↑ ↓</span>
+            </div>
+          </div>
+          <div class="tm-global-audio-controls-cluster">
+            <button id="tm-global-audio-toggle" type="button" class="btn btn--small btn--ghost tm-global-audio-toggle" aria-label="Play or pause">▶</button>
+            <label class="tm-global-audio-volume" title="Volume">
+              <span class="tm-global-audio-volume-icon" aria-hidden="true">🔊</span>
+              <input
+                type="range"
+                id="tm-global-audio-volume"
+                min="0"
+                max="1"
+                step="0.01"
+                value="0.8"
+                aria-label="Volume"
+                aria-valuemin="0"
+                aria-valuemax="1"
+              >
+              <span id="tm-global-audio-volume-label" class="muted tm-global-audio-volume-label">80%</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
 
     {% if current_account %}
@@ -94,81 +275,69 @@
       <div class="app-inspector-content" id="app-inspector-content"></div>
     </aside>
     <div class="app-inspector-backdrop" id="app-inspector-backdrop" hidden aria-hidden="true"></div>
-    <div id="tm-global-audio-dock" class="tm-global-audio-dock" hidden>
-      <div class="tm-global-audio-dock-main">
-        <div class="tm-global-audio-track-block">
-          <span class="tm-global-audio-track-label muted" id="tm-global-audio-track-label">Now playing</span>
-          <div id="tm-global-audio-track" class="tm-global-audio-track" title="">—</div>
-        </div>
-        <div class="tm-global-audio-waveform-block">
-          <div id="global-waveform" class="music-library-waveform tm-global-audio-waveform"></div>
-          <div class="tm-global-audio-waveform-meta">
-            <span id="global-waveform-time" class="muted tm-global-audio-time">0.0s</span>
-            <span class="muted tm-global-audio-hint">Wheel zoom · Space · ← → · ↑ ↓</span>
-          </div>
-        </div>
-        <div class="tm-global-audio-controls-cluster">
-          <button id="tm-global-audio-toggle" type="button" class="btn btn--small btn--ghost tm-global-audio-toggle" aria-label="Play or pause">▶</button>
-          <label class="tm-global-audio-volume" title="Volume">
-            <span class="tm-global-audio-volume-icon" aria-hidden="true">🔊</span>
-            <input
-              type="range"
-              id="tm-global-audio-volume"
-              min="0"
-              max="1"
-              step="0.01"
-              value="0.8"
-              aria-label="Volume"
-              aria-valuemin="0"
-              aria-valuemax="1"
-            >
-            <span id="tm-global-audio-volume-label" class="muted tm-global-audio-volume-label">80%</span>
-          </label>
-        </div>
-      </div>
-    </div>
     {% endif %}
+    </div>
+    </div>
   </div>
   {% if current_account %}
   <div
     id="notif-panel"
     class="notif-panel"
-    aria-label="Notifications"
+    aria-label="{{ _('Notifications') }}"
     data-list-url="{{ url_for('notifications_list') }}"
     data-read-url-base="{{ url_for('notifications_mark_read', notification_id=0)[:-1] }}"
     data-ack-url-base="{{ url_for('notifications_ack', notification_id=0)[:-1] }}"
     data-resolve-url-base="{{ url_for('notifications_resolve', notification_id=0)[:-1] }}"
     data-read-all-url="{{ url_for('notifications_mark_all_read') }}"
+    data-i18n-open="{{ _('Open') }}"
+    data-i18n-ack="{{ _('Ack') }}"
+    data-i18n-remove="{{ _('Remove') }}"
+    data-i18n-empty="{{ _('No notifications.') }}"
   >
     <div class="notif-header">
-      <h2>Notifications</h2>
+      <h2>{{ _('Notifications') }}</h2>
       <div class="notif-header-actions">
-        <button type="button" id="notif-mute" class="btn btn--small btn--ghost" aria-label="Toggle notification sound">🔊</button>
-        <button type="button" id="mark-all-read" class="btn btn--small btn--ghost">Mark all read</button>
-        <button type="button" id="notif-close" class="btn btn--small btn--ghost" aria-label="Close notifications">✕</button>
+        <button type="button" id="notif-mute" class="btn btn--small btn--ghost" aria-label="{{ _('Toggle notification sound') }}">🔊</button>
+        <button type="button" id="mark-all-read" class="btn btn--small btn--ghost">{{ _('Mark all read') }}</button>
+        <button type="button" id="notif-close" class="btn btn--small btn--ghost" aria-label="{{ _('Close notifications') }}">✕</button>
       </div>
     </div>
-    <div class="notif-filters" role="tablist" aria-label="Notification filters">
-      <button type="button" class="notif-filter is-active" data-filter="all">All</button>
-      <button type="button" class="notif-filter" data-filter="alert">Alerts</button>
-      <button type="button" class="notif-filter" data-filter="activity">Activity</button>
+    <div class="notif-filters" role="tablist" aria-label="{{ _('Notification filters') }}">
+      <button type="button" class="notif-filter is-active" data-filter="all">{{ _('All') }}</button>
+      <button type="button" class="notif-filter" data-filter="alert">{{ _('Alerts') }}</button>
+      <button type="button" class="notif-filter" data-filter="activity">{{ _('Activity') }}</button>
     </div>
     <div id="notif-list" class="notif-list" aria-live="polite"></div>
   </div>
   {% endif %}
 
+  {# TODO(security): move form data-confirm submit handler to static/js (CSP unsafe-inline). #}
   <script>
-    document.addEventListener('DOMContentLoaded', function () {
-      document.querySelectorAll('form[data-confirm]').forEach(function (form) {
-        form.addEventListener('submit', function (e) {
-          var msg = form.getAttribute('data-confirm');
-          if (!msg) return;
-          if (!window.confirm(msg)) e.preventDefault();
-        });
-      });
-      document.querySelectorAll('form.status-form').forEach(function (form) {
+    document.addEventListener(
+      'submit',
+      function (e) {
+        var t = e.target;
+        var form = null;
+        if (t && t.nodeType === 1) {
+          form = t.tagName === 'FORM' ? t : t.closest ? t.closest('form') : null;
+        }
+        if (!form) return;
+        if (form.classList.contains('tm-form-confirm-onsubmit')) return;
+        var msg = form.getAttribute('data-confirm');
+        if (!msg) return;
+        if (!window.confirm(msg)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      },
+      true
+    );
+    window.__wireTaskStatusForms = function (root) {
+      var scope = root || document;
+      scope.querySelectorAll('form.status-form').forEach(function (form) {
         var sel = form.querySelector('select[name="status"]');
-        if (!sel) return;
+        if (!sel || sel.dataset.statusFormWired === '1') return;
+        sel.dataset.statusFormWired = '1';
         sel.dataset.lastCommitted = sel.value;
         sel.addEventListener('change', function () {
           var label = (sel.options[sel.selectedIndex] && sel.options[sel.selectedIndex].text) || '';
@@ -182,9 +351,15 @@
           form.submit();
         });
       });
+    };
+    document.addEventListener('DOMContentLoaded', function () {
+      window.__wireTaskStatusForms(document);
     });
   </script>
+  {% include 'partials/safe_delete_modal.html' %}
   {% if current_account %}
+  {% include 'partials/task_copy_est_modal.html' %}
+  {% include 'partials/task_copy_finish_modal.html' %}
   <div id="realtime-toast-host" class="realtime-toast-host" aria-live="polite" aria-relevant="additions" data-socket-token="{{ socket_connect_token }}"></div>
   <div
     id="global-chat-container"
@@ -194,6 +369,7 @@
     data-viewer-id="{{ directory_chat_user_id if directory_chat_user_id is not none else '' }}"
     aria-live="polite"></div>
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  {# TODO(security): move __tmTaskFragmentUrls into a data-* attribute + external JS (CSP unsafe-inline). #}
   <script>
     window.__tmTaskFragmentUrls = {
       dashboardMrTasks: {{ url_for('ui_fragment_dashboard_machine_room_tasks') | tojson }},
@@ -204,21 +380,33 @@
   <script src="{{ url_for('static', filename='js/tm-datetime.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/realtime.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/task-copy-live.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/task-copy-estimate-edit.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/tasks-realtime.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/chat/chat-state.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/chat/chat-api.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/chat/chat-voice-player.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/chat/chat-conference-api.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/chat/chat-render.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/chat/chat-events.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/global-chat.js') }}" defer></script>
   {% endif %}
+  <script src="{{ url_for('static', filename='js/flash-messages.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/composer-input.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/site-nav.js') }}" defer></script>
-  {% if current_account %}
   <script src="{{ url_for('static', filename='js/shell.js') }}" defer></script>
+  {% if current_account %}
   <script src="{{ url_for('static', filename='js/notifications.js') }}" defer></script>
-  <script src="https://unpkg.com/wavesurfer.js@7.8.6/dist/wavesurfer.min.js"></script>
-  <script src="https://unpkg.com/wavesurfer.js@7.8.6/dist/plugins/regions.min.js"></script>
+  {% include 'partials/conform_failure_modal.html' %}
+  {% include 'partials/conform_issues_modal.html' %}
+  <script src="{{ url_for('static', filename='js/conform-request.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/conform-issues.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/conform-finish.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='vendor/wavesurfer.js/wavesurfer.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='vendor/wavesurfer.js/plugins/regions.min.js') }}"></script>
   <script src="{{ url_for('static', filename='js/global-audio-player.js') }}"></script>
   {% endif %}
+  <script src="{{ url_for('static', filename='js/help-shot-sanitize.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/help-lightbox.js') }}" defer></script>
   {% block extra_scripts %}{% endblock %}
 </body>
 </html>

@@ -517,6 +517,11 @@ def _normalized_account_role_key(raw: str | None) -> str:
     return re.sub(r"[\s\-]+", "_", raw.strip().lower())
 
 
+def account_role_is_administrator(role: str | None) -> bool:
+    """True when the access role is Administrator or Super user (same privileges)."""
+    return _normalized_account_role_key(role) in (ROLE_ADMIN, ROLE_SUPER_USER)
+
+
 def _normalized_guest_access_level(raw: str | None) -> str:
     level = (raw or GUEST_ACCESS_VIEWER).strip().lower()
     if level in GUEST_ACCESS_LEVELS:
@@ -680,7 +685,7 @@ def create_app() -> Flask:
 
         @property
         def is_admin(self) -> bool:
-            return _normalized_account_role_key(self.role) == ROLE_ADMIN
+            return account_role_is_administrator(self.role)
 
         @property
         def display_login(self) -> str:
@@ -10139,6 +10144,9 @@ def create_app() -> Flask:
         return {
             "current_account": acc,
             "current_account_is_admin": bool(acc and acc.is_admin),
+            "current_account_is_super_user": bool(
+                acc and _normalized_account_role_key(acc.role) == ROLE_SUPER_USER
+            ),
             "current_account_is_machine_room": bool(acc and account_is_machine_room_role(acc)),
             "current_account_is_elevated": bool(acc and account_is_elevated(acc)),
             "current_account_can_create_projects": bool(acc and account_can_create_projects(acc)),
