@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Progress sheet · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block body_class %}vfx-editor-pro-body vfx-progress-sheet-page-body{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=ps-sheet-tabs-1">
+{% endblock %}
+{% block content %}
+{% include 'partials/project_page_head.html' %}
+<div id="vfx-progress-sheet-page" class="vfx-progress-sheet-page">
+  <header class="vfx-progress-sheet-page__head">
+    <div>
+      <h2 id="vfx-progress-sheet-title" class="vfx-progress-sheet-page__title">Progress sheet</h2>
+      <p class="muted vfx-progress-sheet-page__lead">Shot status by scene for this project’s VFX board.</p>
+    </div>
+    <a href="{{ url_for('project_vfx', project_id=project.id) }}" class="btn btn--small btn--ghost">Back to VFX</a>
+  </header>
+  <div id="vfx-progress-sheet-summary" class="vfx-progress-sheet-summary" aria-live="polite"></div>
+  <div
+    id="vfx-progress-sheet-item-select"
+    class="vfx-progress-sheet-item-select"
+    role="tablist"
+    aria-label="Editing items"
+  ></div>
+  <div class="vfx-progress-sheet-table-wrap vfx-progress-sheet-table-wrap--page">
+    <table class="vfx-progress-sheet-table vfx-progress-sheet-table--shots" aria-label="VFX shot progress">
+      <thead>
+        <tr>
+          <th scope="col">Shot</th>
+          <th scope="col">Duration</th>
+          <th scope="col">Briefing</th>
+          <th scope="col">Vendor</th>
+          <th scope="col">Status</th>
+          <th scope="col">Priority</th>
+          <th scope="col">Sent date</th>
+          <th scope="col">Due date</th>
+          <th scope="col">Version</th>
+          <th scope="col">Dept</th>
+          <th scope="col">Thumb</th>
+        </tr>
+      </thead>
+      <tbody id="vfx-progress-sheet-body"></tbody>
+    </table>
+  </div>
+</div>
+<dialog id="vfx-preview-modal" class="vfx-preview-modal" aria-label="Shot briefing">
+  <div class="vfx-preview-modal-inner">
+    <button type="button" id="vfx-preview-modal-close" class="btn btn--small btn--ghost vfx-preview-modal-close">Close</button>
+    <div id="vfx-preview-modal-body"></div>
+  </div>
+</dialog>
+<script type="application/json" id="vfx-editor-bootstrap">{{ vfx_editor_payload | tojson }}</script>
+<script>
+  window.__VFX_PROJECT_ID__ = {{ project.id }};
+</script>
+<script src="{{ url_for('static', filename='js/vfx-editor-pro.js') }}?v=ps-sheet-dur-2" defer></script>
+{% endblock %}
