@@ -1,49 +1,85 @@
 {# Shared new-task form: set task_create_field_prefix, task_create_show_project_select,
    task_create_fixed_project_id (when select hidden), task_create_next_url (optional),
-   task_create_users, then include. Expects task_groups, titles_by_group, user_project_ids,
+   task_create_submit_label (optional), task_create_fixed_scope_key (optional, hides scope select),
+   task_create_project_searchable (optional, searchable project picker),
+   task_create_users, then include. Expects post_scope_fields, scope_groups, titles_by_group,
    and projects (when task_create_show_project_select). #}
-<form id="{{ task_create_field_prefix }}new-task-form" class="form-stack" method="post" action="{{ url_for('tasks_create') }}">
-  {% if task_create_next_url %}
-  <input type="hidden" name="next" value="{{ task_create_next_url }}">
-  {% endif %}
-  <label class="field">
-    <span class="field-label">Task group</span>
-    <select name="group_id" id="{{ task_create_field_prefix }}task-form-group" required>
-      {% for g in task_groups %}
-      <option value="{{ g.id }}">{{ g.name }}</option>
-      {% endfor %}
-    </select>
-  </label>
+{% set task_create_submit_label = task_create_submit_label|default('Create task', true) %}
+{% macro task_create_form_title_field() %}
   <label class="field">
     <span class="field-label">Task title</span>
     <select name="preset_id" id="{{ task_create_field_prefix }}task-form-preset" required>
       <option value="" disabled selected>Choose a title…</option>
-      {% for g in task_groups %}
-      {% for pt in titles_by_group.get(g.id, []) %}
-      <option value="{{ pt.id }}" data-group-id="{{ g.id }}">{{ pt.title }}</option>
+      {% for key, label, hint in post_scope_fields %}
+      {% set scope_group = scope_groups.get(key) %}
+      {% if scope_group %}
+      {% for pt in titles_by_group.get(scope_group.id, []) %}
+      <option value="{{ pt.id }}" data-scope-key="{{ key }}">{{ pt.title }}</option>
       {% endfor %}
+      {% endif %}
       {% endfor %}
     </select>
   </label>
+{% endmacro %}
+{% macro task_create_form_project_field() %}
   {% if task_create_show_project_select %}
   <label class="field">
     <span class="field-label">Project</span>
-    <select name="project_id" id="{{ task_create_field_prefix }}task-form-project" required>
+    <select
+      name="project_id"
+      id="{{ task_create_field_prefix }}task-form-project"
+      class="{% if task_create_project_searchable is defined and task_create_project_searchable %}js-searchable-select{% endif %}"
+      {% if task_create_project_searchable is defined and task_create_project_searchable %}
+      data-searchable-placeholder="Search projects…"
+      {% endif %}
+      required
+    >
       <option value="" disabled selected>Choose project…</option>
       {% for p in projects %}
-      <option value="{{ p.id }}">{{ p.name }}</option>
+      <option
+        value="{{ p.id }}"
+        data-scopes="{% for key, _, _ in post_scope_fields %}{% if p|attr(key) %}{{ key }},{% endif %}{% endfor %}"
+      >{{ p.name }}</option>
       {% endfor %}
     </select>
   </label>
   {% else %}
   <input type="hidden" name="project_id" value="{{ task_create_fixed_project_id }}">
   {% endif %}
+{% endmacro %}
+<form id="{{ task_create_field_prefix }}new-task-form" class="form-stack" method="post" action="{{ url_for('tasks_create') }}">
+  {% if task_create_next_url %}
+  <input type="hidden" name="next" value="{{ task_create_next_url }}">
+  {% endif %}
+  {{ task_create_form_project_field() }}
+  {% if task_create_fixed_scope_key is defined and task_create_fixed_scope_key %}
+  <input type="hidden" name="post_scope_key" id="{{ task_create_field_prefix }}task-form-scope" value="{{ task_create_fixed_scope_key }}">
+  {% else %}
+  <label class="field">
+    <span class="field-label">Post-production scope</span>
+    <select name="post_scope_key" id="{{ task_create_field_prefix }}task-form-scope" required>
+      {% if task_create_show_project_select %}
+      <option value="" disabled selected>Choose scope…</option>
+      {% endif %}
+      {% for key, label, hint in post_scope_fields %}
+      {% if scope_groups.get(key) %}
+      <option value="{{ key }}">{{ label }}</option>
+      {% endif %}
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  {{ task_create_form_title_field() }}
   <label class="field">
     <span class="field-label">Assign to</span>
     <select name="user_id" id="{{ task_create_field_prefix }}task-form-user" required>
-      <option value="" disabled selected>Choose user on this project…</option>
-      {% for u in task_create_users %}
-      <option value="{{ u.id }}" data-projects="{{ user_project_ids.get(u.id, [])|join(',') }}">{{ u.name }}</option>
+      <option value="" disabled selected>Choose a team member…</option>
+      {% for job_title, members in group_users_by_job_title(task_create_users) %}
+      <optgroup label="{{ job_title }}">
+        {% for u in members %}
+        <option value="{{ u.id }}" data-projects="{{ user_project_ids.get(u.id, [])|join(',') }}">{{ u.name }}</option>
+        {% endfor %}
+      </optgroup>
       {% endfor %}
     </select>
   </label>
@@ -56,27 +92,81 @@
     </select>
   </label>
   <label class="field">
-    <span class="field-label">Extra notes (optional)</span>
-    <textarea name="description" rows="2" placeholder="Appended to the preset’s default description"></textarea>
+    <span class="field-label">Due date (optional)</span>
+    <input type="date" name="due_date" id="{{ task_create_field_prefix }}task-form-due-date">
   </label>
-  <button type="submit" class="btn btn--primary">Create task</button>
+  <label class="field task-create-notes-field">
+    <span class="field-label">Extra notes (optional)</span>
+    <div class="task-mention-field" data-mention-field>
+      <textarea
+        name="description"
+        id="{{ task_create_field_prefix }}task-form-description"
+        data-mention-input
+        rows="2"
+        placeholder="Appended to the preset’s default description · type @ to mention a team member"
+      ></textarea>
+      <ul
+        class="project-chat-mention-suggestions task-mention-suggestions"
+        data-mention-list
+        role="listbox"
+        aria-label="Mention team member"
+        hidden
+      ></ul>
+    </div>
+  </label>
+  <button type="submit" class="btn btn--primary">{{ task_create_submit_label }}</button>
 </form>
+<script type="application/json" id="{{ task_create_field_prefix }}task-mention-team">
+[{% for u in task_create_users %}{"id":{{ u.id }},"name":{{ (u.name or '')|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]
+</script>
+<script src="{{ url_for('static', filename='js/mention-autocomplete.js') }}" defer></script>
 <script>
 (function () {
-  var groupEl = document.getElementById("{{ task_create_field_prefix }}task-form-group");
+  var scopeEl = document.getElementById("{{ task_create_field_prefix }}task-form-scope");
   var presetEl = document.getElementById("{{ task_create_field_prefix }}task-form-preset");
   var projectEl = document.getElementById("{{ task_create_field_prefix }}task-form-project");
   var userEl = document.getElementById("{{ task_create_field_prefix }}task-form-user");
-  if (!groupEl || !presetEl) return;
+  if (!scopeEl || !presetEl) return;
+  function syncScopes() {
+    {% if task_create_show_project_select %}
+    if (!projectEl || !scopeEl.options) return;
+    var selected = projectEl.options[projectEl.selectedIndex];
+    var allowed = [];
+    if (selected && selected.value) {
+      allowed = String(selected.getAttribute("data-scopes") || "")
+        .split(",")
+        .filter(function (key) { return key.length; });
+    }
+    var keep = "";
+    Array.prototype.forEach.call(scopeEl.options, function (opt) {
+      if (!opt.value) {
+        opt.hidden = false;
+        opt.disabled = false;
+        return;
+      }
+      var ok = allowed.indexOf(opt.value) >= 0;
+      opt.hidden = !ok;
+      opt.disabled = !ok;
+      if (ok && opt.value === scopeEl.value) keep = opt.value;
+    });
+    if (allowed.length === 1) {
+      scopeEl.value = allowed[0];
+    } else if (keep) {
+      scopeEl.value = keep;
+    } else {
+      scopeEl.value = "";
+    }
+    {% endif %}
+  }
   function syncPresets() {
-    var gid = groupEl.value;
+    var scopeKey = scopeEl.value;
     presetEl.querySelectorAll("option").forEach(function (opt) {
       if (!opt.value) {
         opt.hidden = false;
         opt.disabled = false;
         return;
       }
-      var match = String(opt.getAttribute("data-group-id")) === String(gid);
+      var match = String(opt.getAttribute("data-scope-key")) === String(scopeKey);
       opt.hidden = !match;
       opt.disabled = !match;
     });
@@ -102,13 +192,79 @@
       opt.hidden = !ok;
       opt.disabled = !ok;
     });
+    userEl.querySelectorAll("optgroup").forEach(function (og) {
+      var anyVisible = false;
+      og.querySelectorAll("option").forEach(function (opt) {
+        if (opt.value && !opt.hidden && !opt.disabled) anyVisible = true;
+      });
+      og.hidden = !anyVisible;
+      og.disabled = !anyVisible;
+    });
     userEl.value = "";
   }
-  groupEl.addEventListener("change", syncPresets);
-  {% if task_create_show_project_select %}
-  if (projectEl) projectEl.addEventListener("change", syncAssignees);
+  {% if not (task_create_fixed_scope_key is defined and task_create_fixed_scope_key) %}
+  scopeEl.addEventListener("change", syncPresets);
   {% endif %}
+  {% if task_create_show_project_select %}
+  if (projectEl) {
+    projectEl.addEventListener("change", function () {
+      syncScopes();
+      syncPresets();
+      syncAssignees();
+    });
+  }
+  {% endif %}
+  syncScopes();
   syncPresets();
   syncAssignees();
+
+  function teamFromUserOptions(pid) {
+    if (!userEl) return [];
+    var team = [];
+    userEl.querySelectorAll("option").forEach(function (opt) {
+      if (!opt.value) return;
+      var raw = opt.getAttribute("data-projects") || "";
+      var ids = raw.split(",").filter(function (x) { return x.length; });
+      if (!pid || ids.indexOf(String(pid)) >= 0) {
+        team.push({ id: parseInt(opt.value, 10), name: (opt.textContent || "").trim() });
+      }
+    });
+    return team;
+  }
+
+  function initMentions() {
+    if (!window.MentionAutocomplete) return;
+    var field = document.querySelector(
+      "#{{ task_create_field_prefix }}task-form-description"
+    );
+    if (!field) return;
+    var wrap = field.closest("[data-mention-field]");
+    var teamEl = document.getElementById("{{ task_create_field_prefix }}task-mention-team");
+    var baseTeam = [];
+    if (teamEl) {
+      try {
+        baseTeam = JSON.parse(teamEl.textContent || "[]");
+      } catch (e) {
+        baseTeam = [];
+      }
+    }
+    {% if task_create_show_project_select %}
+    MentionAutocomplete.initField(wrap, {
+      team: baseTeam,
+      getTeam: function () {
+        var pid = projectEl && projectEl.value;
+        return pid ? teamFromUserOptions(pid) : [];
+      },
+    });
+    {% else %}
+    MentionAutocomplete.initField(wrap, { team: baseTeam });
+    {% endif %}
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initMentions);
+  } else {
+    initMentions();
+  }
 })();
 </script>

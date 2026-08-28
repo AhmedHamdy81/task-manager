@@ -19811,6 +19811,9 @@ def create_app() -> Flask:
         else:
             member_users = []
         post_scope_fields, scope_groups, titles_by_group = load_post_scope_task_context()
+        from project_settings import project_enabled_post_scope_fields
+
+        post_scope_fields = project_enabled_post_scope_fields(p)
         has_title_presets = TaskGroupTitle.query.count() > 0
         user_project_ids: dict[int, list[int]] = defaultdict(list)
         for pm in ProjectMember.query.all():
@@ -33077,6 +33080,13 @@ def create_app() -> Flask:
         if vis is not None and project.id not in vis:
             flash("You cannot create tasks for that project.", "error")
             return _redirect_after_task_action()
+        from project_settings import project_enabled_post_scope_fields
+
+        enabled_scopes = {key for key, _label, _hint in project_enabled_post_scope_fields(project)}
+        scope_to_save = post_scope_key or preset_scope or ""
+        if scope_to_save and scope_to_save not in enabled_scopes:
+            flash("That post-production scope is not enabled on this project.", "error")
+            return _redirect_after_task_action()
         if not user_id:
             flash("Choose an assignee.", "error")
             return _redirect_after_task_action()
@@ -33103,7 +33113,6 @@ def create_app() -> Flask:
                 flash("Invalid due date.", "error")
                 return _redirect_after_task_action()
 
-        scope_to_save = post_scope_key or preset_scope or ""
         actor_uid = directory_user_id_for_account(actor)
 
         t = Task(
