@@ -1,0 +1,16 @@
+"use strict";
+const{app,BrowserWindow,Menu,ipcMain,session,shell}=require("electron");
+app.commandLine.appendSwitch("disable-features","BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights");
+const fs=require("fs"),path=require("path");
+const{isSafeExternal,isSameOrigin,normalizeServerUrl}=require("./url-policy.cjs");
+let win,serverUrl;
+const local=n=>path.join(__dirname,n),config=()=>path.join(app.getPath("userData"),"server.json");
+function readServer(){try{return normalizeServerUrl(JSON.parse(fs.readFileSync(config(),"utf8")).serverUrl)}catch{return null}}
+function writeServer(v){const u=normalizeServerUrl(v);if(!u)throw Error("Enter an http:// or https:// server address.");fs.mkdirSync(path.dirname(config()),{recursive:true});fs.writeFileSync(config(),JSON.stringify({serverUrl:u},null,2)+"\n",{mode:0o600});serverUrl=u}
+function showLocal(name){win.webContents.session.setPreloads([local("setup-preload.cjs")]);return win.loadFile(local(name))}
+function loadServer(){if(!serverUrl)return showLocal("setup.html");win.webContents.session.setPreloads([local("setup-preload.cjs")]);return win.loadURL(serverUrl)}
+function policy(){win.webContents.on("will-navigate",(e,u)=>{if(serverUrl&&isSameOrigin(u,serverUrl))return;e.preventDefault();if(isSafeExternal(u))void shell.openExternal(u)});win.webContents.setWindowOpenHandler(({url})=>{if(serverUrl&&isSameOrigin(url,serverUrl))void win.loadURL(url);else if(isSafeExternal(url))void shell.openExternal(url);return{action:"deny"}})}
+function create(){win=new BrowserWindow({width:1440,height:920,minWidth:1000,minHeight:680,show:false,backgroundColor:"#121a22",title:"BigBang",webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true,allowRunningInsecureContent:false,devTools:!app.isPackaged}});policy();win.once("ready-to-show",()=>win.show());win.webContents.on("did-fail-load",(_e,c,_d,_u,main)=>{if(main&&c!==-3)void showLocal("offline.html")});serverUrl=readServer();void loadServer()}
+function menu(){Menu.setApplicationMenu(Menu.buildFromTemplate([{label:"BigBang",submenu:[{role:"about"},{type:"separator"},{label:"Change Server…",click:()=>showLocal("setup.html")},{label:"Reload",accelerator:"CmdOrCtrl+R",click:()=>loadServer()},{type:"separator"},{role:"hide"},{role:"quit"}]},{label:"Edit",submenu:[{role:"cut"},{role:"copy"},{role:"paste"},{role:"selectAll"}]},{label:"Window",submenu:[{role:"minimize"},{role:"zoom"}]}]))}
+app.whenReady().then(()=>{session.defaultSession.setPermissionRequestHandler((wc,p,cb,d)=>cb(!!(serverUrl&&isSameOrigin(d.requestingUrl||wc.getURL(),serverUrl)&&["notifications","media"].includes(p))));app.on("web-contents-created",(_e,c)=>c.on("will-attach-webview",e=>e.preventDefault()));ipcMain.handle("setup:get",()=>serverUrl||"");ipcMain.handle("setup:save",async(_e,v)=>{try{writeServer(v);void loadServer();return{ok:true}}catch(e){return{ok:false,error:e.message}}});ipcMain.handle("offline:retry",()=>loadServer());ipcMain.handle("offline:change",()=>showLocal("setup.html"));menu();create();app.on("activate",()=>{if(!BrowserWindow.getAllWindows().length)create()})});
+app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit()});

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import base64
+import hashlib
 import json
 import math
 import os
@@ -9977,7 +9978,9 @@ def create_app() -> Flask:
         ensure_offline_and_production_color_view_permissions()
         ensure_sqlite_stored_instant_utc_to_cairo_v1()
 
-    PUBLIC_ENDPOINTS = frozenset({"login", "register", "logout", "static"})
+    PUBLIC_ENDPOINTS = frozenset(
+        {"login", "register", "logout", "static", "forgot_password", "reset_password"}
+    )
 
     def account_is_super_user_effective(acc: Account | None) -> bool:
         """True when account role is super_user or directory job title matches."""
@@ -13688,6 +13691,138 @@ def create_app() -> Flask:
             return redirect(next_url)
 
         return render_template("login.html", next_url=_safe_next_url(request.args.get("next")))
+
+    PASSWORD_RESET_SALT = "password-reset"
+    PASSWORD_RESET_MAX_AGE_SEC = 60 * 60
+
+    def _account_by_login_id(login_id: str):
+        ident = (login_id or "").strip()
+        if not ident:
+            return None
+        ident_lower = ident.lower()
+        if "@" in ident:
+            return Account.query.filter_by(email=ident_lower).first()
+        return Account.query.filter(
+            db.func.lower(Account.username) == ident_lower,
+        ).first()
+
+    def _password_reset_serializer():
+        return URLSafeTimedSerializer(app.config["SECRET_KEY"], salt=PASSWORD_RESET_SALT)
+
+    def _password_reset_stamp(acc: Account) -> str:
+        raw = (acc.password_hash or "").encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()[:24]
+
+    def _password_reset_token(acc: Account) -> str:
+        return _password_reset_serializer().dumps(
+            {"id": int(acc.id), "ph": _password_reset_stamp(acc)}
+        )
+
+    def _account_from_password_reset_token(token: str):
+        try:
+            data = _password_reset_serializer().loads(
+                token or "", max_age=PASSWORD_RESET_MAX_AGE_SEC
+            )
+        except (BadSignature, SignatureExpired, TypeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        try:
+            acc_id = int(data.get("id") or 0)
+        except (TypeError, ValueError):
+            return None
+        acc = db.session.get(Account, acc_id)
+        if acc is None:
+            return None
+        if _password_reset_stamp(acc) != str(data.get("ph") or ""):
+            return None
+        if not account_approval_support_mod.account_may_use_app(acc):
+            return None
+        return acc
+
+    def _notify_admins_password_reset(acc: Account, reset_url: str) -> None:
+        try:
+            admin_ids = account_approval_support_mod.admin_directory_user_ids(
+                db, Account, User, ROLE_ADMIN, ROLE_SUPER_USER
+            )
+            login_label = acc.display_login
+            account_approval_support_mod.notify_users(
+                db,
+                User,
+                create_notification=_create_notification,
+                emit_to_account=emit_notification_to_account,
+                recipient_user_ids=admin_ids,
+                title="Password reset requested",
+                message=(
+                    f"{login_label} requested a password reset. "
+                    f"Send them this link (expires in 1 hour): {reset_url}"
+                ),
+                entity_type="account",
+                entity_id=int(acc.id),
+                actor=acc,
+                severity="warning",
+                n_type="security",
+            )
+        except Exception:
+            app.logger.exception("Could not notify administrators of a password reset request")
+
+    @app.route("/forgot-password", methods=["GET", "POST"])
+    def forgot_password():
+        if session.get("account_id"):
+            return redirect(url_for("index"))
+        if request.method == "POST":
+            login_id = (request.form.get("login") or "").strip()
+            acc = _account_by_login_id(login_id)
+            if acc is not None and account_approval_support_mod.account_may_use_app(acc):
+                token = _password_reset_token(acc)
+                reset_url = url_for("reset_password", token=token, _external=True)
+                log_security_event(
+                    "password_reset_requested",
+                    account_id=int(acc.id),
+                    details={"login": (acc.display_login or "")[:120]},
+                )
+                app.logger.info("Password reset link for account %s: %s", acc.id, reset_url)
+                _notify_admins_password_reset(acc, reset_url)
+            else:
+                log_security_event(
+                    "password_reset_requested",
+                    details={"login": login_id.lower()[:120], "unknown": True},
+                )
+            flash(
+                "If an account matches, a reset link was sent to an administrator. "
+                "Check with them, then use the link within one hour.",
+                "success",
+            )
+            return redirect(url_for("login"))
+        return render_template("forgot_password.html")
+
+    @app.route("/reset-password/<token>", methods=["GET", "POST"])
+    def reset_password(token: str):
+        if session.get("account_id"):
+            return redirect(url_for("index"))
+        acc = _account_from_password_reset_token(token)
+        if acc is None:
+            flash("That reset link is invalid or has expired. Request a new one.", "error")
+            return redirect(url_for("forgot_password"))
+        if request.method == "POST":
+            new_pw = request.form.get("password") or ""
+            confirm_pw = request.form.get("confirm") or ""
+            if len(new_pw) < MIN_PASSWORD_LENGTH:
+                flash(
+                    f"Password must be at least {MIN_PASSWORD_LENGTH} characters.",
+                    "error",
+                )
+                return render_template("reset_password.html", token=token)
+            if new_pw != confirm_pw:
+                flash("Passwords do not match.", "error")
+                return render_template("reset_password.html", token=token)
+            acc.password_hash = generate_password_hash(new_pw, method="pbkdf2:sha256")
+            db.session.commit()
+            log_security_event("password_reset_completed", account_id=int(acc.id))
+            flash("Your password was updated. Sign in with the new password.", "success")
+            return redirect(url_for("login"))
+        return render_template("reset_password.html", token=token)
+
 
     @app.route("/register", methods=["GET", "POST"])
     def register():

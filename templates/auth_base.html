@@ -1,30 +1,60 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ current_lang|default('en') }}" dir="{{ text_direction|default('ltr') }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <link rel="icon" href="{{ url_for('static', filename='icons/logo.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  {% if is_rtl %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/rtl.css') }}">
+  {% endif %}
+  <script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
 </head>
 <body class="auth-body">
   <main class="auth-shell">
     <div class="auth-card">
-      <a class="auth-logo" href="{{ url_for('login') }}">{{ app_name }}</a>
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          <ul class="flash-list" role="status">
-            {% for category, message in messages %}
-              <li class="flash flash--{{ category }}">{{ message }}</li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-      {% endwith %}
+      <div class="auth-card__top">
+        <a class="auth-logo" href="{{ url_for('login') }}" aria-label="{{ app_name }}">
+          <img class="auth-logo-mark" src="{{ url_for('static', filename='icons/logo-wordmark.svg') }}" width="168" height="28" alt="">
+        </a>
+        <button type="button" class="auth-server-btn" id="auth-server-open" title="{{ _('Change server connection') }}" aria-label="{{ _('Change server connection') }}" onclick="window.authServerOpen&&window.authServerOpen()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect width="20" height="8" x="2" y="2" rx="2" ry="2"></rect>
+            <rect width="20" height="8" x="2" y="14" rx="2" ry="2"></rect>
+            <line x1="6" x2="6.01" y1="6" y2="6"></line>
+            <line x1="6" x2="6.01" y1="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <dialog id="auth-server-dialog" class="auth-server-dialog" aria-labelledby="auth-server-dialog-title">
+        <form id="auth-server-form" class="auth-server-dialog__form">
+          <h2 id="auth-server-dialog-title" class="auth-server-dialog__title">{{ _('Change server connection') }}</h2>
+          <p class="auth-server-dialog__hint">{{ _('Use https:// or http:// — for example a LAN address or http://127.0.0.1:5001.') }}</p>
+          <label class="field" for="auth-server-url">
+            <span class="field-label">{{ _('Server address') }}</span>
+            <input id="auth-server-url" type="url" name="server_url" required autocomplete="url" spellcheck="false" placeholder="http://127.0.0.1:5001">
+          </label>
+          <p id="auth-server-error" class="auth-server-dialog__error" hidden data-invalid="{{ _('Enter an http:// or https:// server address.') }}"></p>
+          <div class="auth-server-dialog__actions">
+            <button type="button" class="btn" id="auth-server-cancel">{{ _('Cancel') }}</button>
+            <button type="submit" class="btn btn--primary" id="auth-server-save">{{ _('Save') }}</button>
+          </div>
+        </form>
+      </dialog>
+      {% include 'partials/flash_messages.html' %}
       {% block content %}{% endblock %}
+      <div class="auth-lang-switcher">
+        {% include 'partials/language_switcher.html' %}
+      </div>
     </div>
-    <p class="auth-footer-note">Sign in required to use this app.</p>
+    <p class="auth-footer-note">{{ _('Sign in required to use this app.') }}</p>
   </main>
+  <script src="{{ url_for('static', filename='js/flash-messages.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='js/auth-server-connection.js') }}"></script>
 </body>
 </html>

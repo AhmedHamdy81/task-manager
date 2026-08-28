@@ -1,0 +1,16 @@
+{# Language switcher — English | العربية #}
+<nav class="lang-switcher" aria-label="{{ _('Language') }}">
+  <a
+    href="{{ url_for('set_language', lang='en', next=request.full_path if request.full_path else request.path) }}"
+    class="lang-switcher__link{% if current_lang == 'en' %} lang-switcher__link--active{% endif %}"
+    hreflang="en"
+    lang="en"
+  >{{ _('English') }}</a>
+  <span class="lang-switcher__sep" aria-hidden="true">|</span>
+  <a
+    href="{{ url_for('set_language', lang='ar', next=request.full_path if request.full_path else request.path) }}"
+    class="lang-switcher__link{% if current_lang == 'ar' %} lang-switcher__link--active{% endif %}"
+    hreflang="ar"
+    lang="ar"
+  >{{ _('العربية') }}</a>
+</nav>

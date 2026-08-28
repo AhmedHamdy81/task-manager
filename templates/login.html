@@ -10,15 +10,20 @@
     <span class="field-label">Email or username</span>
     <input type="text" name="login" required autocomplete="username" autofocus placeholder="admin or you@example.com">
   </label>
-  <label class="field">
-    <span class="field-label">Password</span>
-    <input type="password" name="password" required autocomplete="current-password" placeholder="••••••••">
-  </label>
+  <div class="field">
+    <label class="field-label" for="login-password">Password</label>
+    <input id="login-password" type="password" name="password" required autocomplete="current-password" placeholder="••••••••">
+    <a class="auth-forgot" href="{{ url_for('forgot_password') }}">{{ _('Forgot password?') }}</a>
+  </div>
   <button type="submit" class="btn btn--primary btn--block">Sign in</button>
 </form>
 
 <p class="auth-switch">
+  {% if allow_public_register %}
   No account?
   <a href="{{ url_for('register') }}">Create one</a>
+  {% else %}
+  Need an account? Ask an administrator.
+  {% endif %}
 </p>
 {% endblock %}

@@ -1,0 +1,31 @@
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, message in messages %}
+    {% if category in ['error', 'warning', 'danger'] %}
+    <div class="modal flash-modal flash-modal--{{ category }} hidden"
+         data-flash-modal
+         data-flash-category="{{ category }}"
+         role="alertdialog"
+         aria-modal="true"
+         aria-labelledby="flash-modal-title-{{ loop.index }}"
+         aria-describedby="flash-modal-message-{{ loop.index }}"
+         aria-hidden="true">
+      <div class="modal-backdrop" data-flash-dismiss tabindex="-1"></div>
+      <div class="modal-content flash-modal__panel">
+        <header class="flash-modal__head">
+          <h3 class="flash-modal__title" id="flash-modal-title-{{ loop.index }}">
+            {% if category == 'error' or category == 'danger' %}Error
+            {% elif category == 'warning' %}Warning
+            {% else %}Message{% endif %}
+          </h3>
+        </header>
+        <p class="flash-modal__message flash--{{ category }}" id="flash-modal-message-{{ loop.index }}">{{ message }}</p>
+        <div class="modal-actions flash-modal__actions">
+          <button type="button" class="btn btn-primary btn-sm" data-flash-dismiss>OK</button>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+  {% endif %}
+{% endwith %}
