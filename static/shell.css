@@ -1370,6 +1370,50 @@ body.app--shell .form-stack .field:last-child {
   margin-bottom: 0;
 }
 
+
+.task-create-dialog .project-team-modal-inner {
+  max-height: min(88vh, 720px);
+}
+
+.task-create-dialog .form-stack {
+  max-width: none;
+  width: 100%;
+}
+
+.task-create-dialog .form-stack .field {
+  min-width: 0;
+  width: 100%;
+}
+
+.task-create-dialog .form-stack select,
+.task-create-dialog .form-stack input[type="text"],
+.task-create-dialog .form-stack input[type="date"],
+.task-create-dialog .form-stack textarea,
+.task-create-dialog .form-stack .input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.task-create-dialog .field .searchable-select {
+  display: block;
+  max-width: none;
+  width: 100%;
+}
+
+.task-create-dialog .searchable-select-trigger {
+  min-height: 2.35rem;
+}
+
+.task-create-dialog .form-actions {
+  width: 100%;
+}
+
+.task-create-dialog .form-actions .btn--primary,
+.task-create-dialog .form-stack > .btn--primary {
+  width: 100%;
+}
+
+
 .shell-panel-min {
   background: var(--surface);
   border: 1px solid var(--border);

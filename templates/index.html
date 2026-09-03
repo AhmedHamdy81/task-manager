@@ -67,12 +67,10 @@
     </a>
     {% endif %}
     {% if not current_account_is_super_user|default(false) %}
-    <div
-      class="shell-widget shell-widget--dash shell-widget--requests shell-widget--disabled"
-      role="group"
-      aria-disabled="true"
-      aria-label="Requests — {{ requests_requested_count }} requested by you, {{ requests_complete_count }} to complete (unavailable)"
-      title="Requests coming soon"
+    <a
+      class="shell-widget shell-widget--dash shell-widget--requests shell-widget--link"
+      href="{{ url_for('requests_page') }}"
+      aria-label="Requests — {{ requests_requested_count }} requested by you, {{ requests_complete_count }} to complete"
     >
       <div class="shell-widget-dash-row">
         <div class="shell-widget-dash-icon" aria-hidden="true">
@@ -85,10 +83,10 @@
             <span class="shell-widget-stat-sep" aria-hidden="true">·</span>
             <span class="shell-widget-stat-complete">{{ requests_complete_count }}</span>
           </p>
-          <p class="visually-hidden">{{ requests_requested_count }} requested by you, {{ requests_complete_count }} to complete. Unavailable.</p>
+          <p class="visually-hidden">{{ requests_requested_count }} requested by you, {{ requests_complete_count }} to complete.</p>
         </div>
       </div>
-    </div>
+    </a>
     {% endif %}
     {% if can("action_board", "view") or can("todos", "view") or can("sticky_notes", "view") %}
     <a class="shell-widget shell-widget--dash shell-widget--action-board shell-widget--link" href="{{ url_for('actions_page') }}" aria-label="Notes — {{ action_board_badge }} pinned">

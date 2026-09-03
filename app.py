@@ -961,6 +961,76 @@ def create_app() -> Flask:
             order_by="TaskNote.created_at.desc()",
         )
 
+    class WorkRequest(db.Model):
+        """Internal work request (Request Management)."""
+
+        __tablename__ = "work_requests"
+        __table_args__ = (
+            db.Index("ix_work_requests_status", "status"),
+            db.Index("ix_work_requests_priority", "priority"),
+            db.Index("ix_work_requests_type", "request_type"),
+        )
+
+        id = db.Column(db.Integer, primary_key=True)
+        title = db.Column(db.String(200), nullable=False)
+        description = db.Column(db.Text, nullable=False, default="")
+        request_type = db.Column(db.String(64), nullable=False, default="general")
+        priority = db.Column(db.String(16), nullable=False, default="medium")
+        status = db.Column(db.String(32), nullable=False, default="pending")
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
+        related_task_id = db.Column(db.Integer, db.ForeignKey("tasks.id"), nullable=True, index=True)
+        related_episode_id = db.Column(
+            db.Integer, db.ForeignKey("pipeline_episodes.id"), nullable=True, index=True
+        )
+        related_scene_id = db.Column(
+            db.Integer, db.ForeignKey("pipeline_scenes.id"), nullable=True, index=True
+        )
+        requested_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+        assigned_to_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+        estimated_duration_minutes = db.Column(db.Integer, nullable=True)
+        started_at = db.Column(db.DateTime, nullable=True)
+        finished_at = db.Column(db.DateTime, nullable=True)
+        failed_at = db.Column(db.DateTime, nullable=True)
+        started_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+        finished_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+        failed_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+        last_transition_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+        created_at = db.Column(db.DateTime, default=now_local, nullable=False)
+        updated_at = db.Column(db.DateTime, nullable=True)
+        version = db.Column(db.Integer, nullable=False, default=1)
+        archived = db.Column(db.Boolean, nullable=False, default=False)
+
+        project = db.relationship("Project", foreign_keys=[project_id])
+        requester = db.relationship("User", foreign_keys=[requested_by_id])
+        assignee = db.relationship("User", foreign_keys=[assigned_to_id])
+        related_task = db.relationship("Task", foreign_keys=[related_task_id])
+        related_episode = db.relationship("ProductionEpisode", foreign_keys=[related_episode_id])
+        related_scene = db.relationship("ProductionScene", foreign_keys=[related_scene_id])
+        events = db.relationship(
+            "WorkRequestEvent",
+            back_populates="work_request",
+            cascade="all, delete-orphan",
+            lazy=True,
+        )
+
+    class WorkRequestEvent(db.Model):
+        """Append-only history and comments for a work request."""
+
+        __tablename__ = "work_request_events"
+
+        id = db.Column(db.Integer, primary_key=True)
+        request_id = db.Column(
+            db.Integer, db.ForeignKey("work_requests.id"), nullable=False, index=True
+        )
+        event_type = db.Column(db.String(32), nullable=False, index=True)
+        body = db.Column(db.Text, nullable=False, default="")
+        actor_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+        created_at = db.Column(db.DateTime, default=now_local, nullable=False)
+        metadata_json = db.Column(db.Text, nullable=True)
+
+        work_request = db.relationship("WorkRequest", back_populates="events")
+        actor = db.relationship("User", foreign_keys=[actor_user_id])
+
     class TaskNote(db.Model):
         """Notes attached to workflow tasks (e.g. conform failure details)."""
 
@@ -6267,6 +6337,17 @@ def create_app() -> Flask:
             "Set BOOTSTRAP_ADMIN_PASSWORD before deploying."
         )
 
+    def ensure_sqlite_work_request_tables() -> None:
+        """Create work_requests tables on existing SQLite databases."""
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        names = set(insp.get_table_names())
+        if "work_requests" not in names:
+            WorkRequest.__table__.create(bind=db.engine, checkfirst=True)
+        if "work_request_events" not in names:
+            WorkRequestEvent.__table__.create(bind=db.engine, checkfirst=True)
+
     def ensure_sqlite_accounts_username_role_columns() -> None:
         if db.engine.dialect.name != "sqlite":
             return
@@ -9947,6 +10028,7 @@ def create_app() -> Flask:
         ensure_sqlite_sticky_notes_table()
         ensure_sqlite_action_items_table()
         ensure_sqlite_action_items_source_chat_message_id()
+        ensure_sqlite_work_request_tables()
         migrate_legacy_action_items_once()
         purge_non_note_action_items()
         ensure_sqlite_audio_usage_tables()
@@ -16777,10 +16859,21 @@ def create_app() -> Flask:
         )
 
     @app.route("/")
+
+    def count_dashboard_request_stats(
+        project_ids: set[int] | list[int] | None, uid: int
+    ) -> tuple[int, int]:
+        """Return (requested_by_me, assigned_to_me_to_complete) for open work requests."""
+        import work_request_support as _wrs
+
+        return _wrs.count_open_for_dashboard(WorkRequest, project_ids, uid)
+
     def index():
         acc = db.session.get(Account, session.get("account_id"))
         vis = visible_project_ids_for_account(acc)
         user_count = User.query.count()
+        requests_requested_count = 0
+        requests_complete_count = 0
         if vis is None:
             # Administrator: all projects, original dashboard semantics
             task_count = Task.query.filter_by(archived=False).count()
@@ -16816,6 +16909,13 @@ def create_app() -> Flask:
             project_count = 0
         else:
             project_count = len(vis)
+
+        uid_dash = directory_user_id_for_account(acc)
+        if uid_dash is not None:
+            req_vis = None if vis is None else vis
+            requests_requested_count, requests_complete_count = count_dashboard_request_stats(
+                req_vis, int(uid_dash)
+            )
 
         booking_today_card = None
         if acc is not None:
@@ -16900,6 +17000,8 @@ def create_app() -> Flask:
             user_count=user_count,
             task_count=task_count,
             open_tasks=open_tasks,
+            requests_requested_count=requests_requested_count,
+            requests_complete_count=requests_complete_count,
             project_count=project_count,
             critical_count=critical_count,
             booking_today_card=booking_today_card,
@@ -34862,6 +34964,32 @@ def create_app() -> Flask:
         "now_local": now_local,
     }
     account_approval_routes_mod.register_account_approval_routes(app, _account_approval_ctx)
+
+
+    import work_request_routes as work_request_routes_mod
+
+    work_request_routes_mod.register_work_request_routes(
+        app,
+        {
+            "db": db,
+            "Account": Account,
+            "User": User,
+            "Project": Project,
+            "ProjectMember": ProjectMember,
+            "Task": Task,
+            "ProductionEpisode": ProductionEpisode,
+            "ProductionScene": ProductionScene,
+            "WorkRequest": WorkRequest,
+            "WorkRequestEvent": WorkRequestEvent,
+            "now_local": now_local,
+            "account_from_session": account_from_session,
+            "directory_user_id_for_account": directory_user_id_for_account,
+            "visible_project_ids_for_account": visible_project_ids_for_account,
+            "send_managed_notification": send_managed_notification,
+            "format_datetime_cairo": format_datetime_cairo,
+            "perm_svc": perm_svc,
+        },
+    )
 
     scheduled_jobs_mod.register_scheduled_jobs(app)
 

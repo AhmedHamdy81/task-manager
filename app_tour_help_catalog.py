@@ -105,7 +105,7 @@ def build_tour_help_catalog(_: Callable[..., str]) -> dict[str, dict[str, Any]]:
                         ),
                         (
                             _("Requests"),
-                            _("Shows requested · to-complete counts. Currently unavailable (coming soon) — the card is visible but not clickable."),
+                            _("Shows requested · to-complete counts. Opens Requests: work you asked for, and work assigned to you to complete."),
                         ),
                         (
                             _("Notes"),

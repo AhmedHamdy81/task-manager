@@ -45,6 +45,14 @@ PROJECT_MEMBER_UPDATED: Final = "project.member.updated"
 PROJECT_MEMBER_REMOVED: Final = "project.member.removed"
 PROJECT_SETTINGS_UPDATED: Final = "project.settings.updated"
 
+# --- Work requests ---
+REQUEST_CREATED: Final = "request.request.created"
+REQUEST_UPDATED: Final = "request.request.updated"
+REQUEST_STARTED: Final = "request.request.started"
+REQUEST_FINISHED: Final = "request.request.finished"
+REQUEST_FAILED: Final = "request.request.failed"
+REQUEST_REOPENED: Final = "request.request.reopened"
+
 # Future modules (reserved; registered so Phase 2 can adopt without redesign):
 # tasks.task.created, vfx.shot.updated, color.version.uploaded, etc.
 
@@ -76,6 +84,12 @@ ALL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         PROJECT_MEMBER_UPDATED,
         PROJECT_MEMBER_REMOVED,
         PROJECT_SETTINGS_UPDATED,
+        REQUEST_CREATED,
+        REQUEST_UPDATED,
+        REQUEST_STARTED,
+        REQUEST_FINISHED,
+        REQUEST_FAILED,
+        REQUEST_REOPENED,
     }
 )
 
@@ -83,12 +97,14 @@ MODULE_MEDIA: Final = "media"
 MODULE_SHOOTING: Final = "shooting"
 MODULE_BOOKING: Final = "booking"
 MODULE_PROJECT: Final = "project"
+MODULE_REQUESTS: Final = "requests"
 
 MODULE_LABELS: Final[dict[str, str]] = {
     MODULE_MEDIA: "Media",
     MODULE_SHOOTING: "Shooting",
     MODULE_BOOKING: "Booking",
     MODULE_PROJECT: "Team & Settings",
+    MODULE_REQUESTS: "Requests",
 }
 
 STATUS_STARTED: Final = "started"

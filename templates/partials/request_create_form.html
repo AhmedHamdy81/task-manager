@@ -1,0 +1,52 @@
+{# Create-request form. Expects: projects, users, user_project_ids, request_types #}
+<form id="new-request-form" class="form-stack" method="post" action="{{ url_for('requests_create') }}">
+  <label class="field">
+    <span class="field-label">Project</span>
+    <select name="project_id" id="request-form-project" class="js-searchable-select" data-searchable-placeholder="Search projects…" required>
+      <option value="" disabled selected>Choose project…</option>
+      {% for p in projects %}
+      <option value="{{ p.id }}">{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field">
+    <span class="field-label">Request type</span>
+    <select name="request_type" id="request-form-type" required>
+      {% for key, label in request_types %}
+      <option value="{{ key }}"{% if key == 'general' %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field">
+    <span class="field-label">Title</span>
+    <input class="input" type="text" name="title" id="request-form-title" maxlength="200" required placeholder="What do you need?">
+  </label>
+  <label class="field">
+    <span class="field-label">Assign to <span class="muted">(optional)</span></span>
+    <select name="user_id" id="request-form-user" class="js-searchable-select" data-searchable-placeholder="Search people…">
+      <option value="">Unassigned</option>
+      {% for job_title, members in group_users_by_job_title(users) %}
+      <optgroup label="{{ job_title }}">
+        {% for u in members %}
+        <option value="{{ u.id }}" data-projects="{{ user_project_ids.get(u.id, [])|join(',') }}">{{ u.name }}</option>
+        {% endfor %}
+      </optgroup>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="field">
+    <span class="field-label">Priority</span>
+    <select name="priority" required>
+      <option value="high">High</option>
+      <option value="medium" selected>Medium</option>
+      <option value="low">Low</option>
+    </select>
+  </label>
+  <label class="field">
+    <span class="field-label">Description <span class="muted">(optional)</span></span>
+    <textarea class="input" name="description" rows="3" maxlength="4000" placeholder="Details, links, or context"></textarea>
+  </label>
+  <div class="form-actions">
+    <button type="submit" class="btn btn--primary" data-request-submit>Create request</button>
+  </div>
+</form>

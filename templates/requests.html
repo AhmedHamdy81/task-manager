@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}Requests · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/requests.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="page-wrapper requests-page" id="requests-page-root">
+  <header class="page-head shell-page-head">
+    <h1>Requests</h1>
+    <p class="muted">Internal work requests. Filter in the URL, or create a request for a project you belong to.</p>
+  </header>
+
+  {% if can_create and projects and users %}
+  <div class="tasks-create-actions">
+    <button type="button" class="btn btn--primary" id="request-create-open" aria-haspopup="dialog" aria-controls="request-create-dialog" aria-expanded="false">Create request</button>
+  </div>
+  <dialog class="project-team-modal task-create-dialog" id="request-create-dialog" aria-labelledby="request-create-dialog-title">
+    <div class="project-team-modal-inner">
+      <div class="project-team-modal-head">
+        <h2 id="request-create-dialog-title" class="project-team-modal-title">New request</h2>
+        <button type="button" class="btn btn--small btn--ghost" data-request-create-dialog-close aria-label="Close">Close</button>
+      </div>
+      {% include 'partials/request_create_form.html' %}
+    </div>
+  </dialog>
+  {% elif can_create and not projects %}
+  <section class="panel shell-panel-min">
+    <p class="empty"><strong>No projects available</strong> — you must be on a project team before you can create requests.</p>
+  </section>
+  {% endif %}
+
+  <form class="shell-filter-bar requests-filters" method="get" action="{{ url_for('requests_page') }}" role="search">
+    <label class="field">
+      <span class="visually-hidden">Search</span>
+      <input class="input" type="search" name="q" value="{{ filter_search }}" placeholder="Search title or description">
+    </label>
+    <label class="field">
+      <span class="visually-hidden">Status</span>
+      <select name="status">
+        <option value="">All statuses</option>
+        {% for key in statuses %}
+        <option value="{{ key }}"{% if filter_status == key %} selected{% endif %}>{{ status_labels[key] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="visually-hidden">Project</span>
+      <select name="project_id">
+        <option value="">All projects</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}"{% if filter_project_id == p.id %} selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="visually-hidden">Requested by</span>
+      <select name="requester_id">
+        <option value="">Anyone requested</option>
+        {% for u in users %}
+        <option value="{{ u.id }}"{% if filter_requester_id == u.id %} selected{% endif %}>{{ u.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="visually-hidden">Assigned to</span>
+      <select name="assignee_id">
+        <option value="">Anyone assigned</option>
+        {% for u in users %}
+        <option value="{{ u.id }}"{% if filter_assignee_id == u.id %} selected{% endif %}>{{ u.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="visually-hidden">Priority</span>
+      <select name="priority">
+        <option value="">All priorities</option>
+        {% for p in priorities %}
+        <option value="{{ p }}"{% if filter_priority == p %} selected{% endif %}>{{ p|title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">
+      <span class="visually-hidden">Sort</span>
+      <select name="sort">
+        <option value="updated"{% if filter_sort == 'updated' %} selected{% endif %}>Last updated</option>
+        <option value="created"{% if filter_sort == 'created' %} selected{% endif %}>Created</option>
+        <option value="title"{% if filter_sort == 'title' %} selected{% endif %}>Title</option>
+        <option value="priority"{% if filter_sort == 'priority' %} selected{% endif %}>Priority</option>
+        <option value="status"{% if filter_sort == 'status' %} selected{% endif %}>Status</option>
+      </select>
+    </label>
+    <input type="hidden" name="dir" value="{{ filter_dir }}">
+    <button type="submit" class="btn btn--small">Filter</button>
+  </form>
+
+  {% if not requests %}
+  <p class="empty">No requests match these filters.</p>
+  {% else %}
+  <div class="requests-table-wrap">
+    <table class="requests-table">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Project</th>
+          <th>Requested by</th>
+          <th>Assigned to</th>
+          <th>Priority</th>
+          <th>Status</th>
+          <th>Est. time</th>
+          <th>Created</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in requests %}
+        <tr class="requests-row requests-row--{{ r.status }}">
+          <td>
+            <a href="{{ url_for('request_detail', request_id=r.id) }}">{{ r.title }}</a>
+          </td>
+          <td>{% if r.project %}{{ r.project.name }}{% else %}—{% endif %}</td>
+          <td>{% if r.requester %}{{ r.requester.name }}{% else %}—{% endif %}</td>
+          <td>{% if r.assignee %}{{ r.assignee.name }}{% else %}Unassigned{% endif %}</td>
+          <td>{{ (r.priority or 'medium')|title }}</td>
+          <td><span class="request-status request-status--{{ r.status }}">{{ status_labels.get(r.status, r.status) }}</span></td>
+          <td>{% if r.estimated_duration_minutes %}{{ r.estimated_duration_minutes }} min{% else %}—{% endif %}</td>
+          <td class="tabular-nums">{% if r.created_at %}{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</td>
+          <td class="tabular-nums">{% if r.updated_at %}{{ r.updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="requests-pager" aria-label="Request pages">
+    {% if page > 1 %}
+    <a class="btn btn--small btn--ghost" href="{{ url_for('requests_page', page=page-1, q=filter_search, status=filter_status, project_id=filter_project_id, requester_id=filter_requester_id, assignee_id=filter_assignee_id, priority=filter_priority, type=filter_type, sort=filter_sort, dir=filter_dir) }}">Previous</a>
+    {% endif %}
+    <span class="muted">Page {{ page }} of {{ pages }} ({{ total }})</span>
+    {% if page < pages %}
+    <a class="btn btn--small btn--ghost" href="{{ url_for('requests_page', page=page+1, q=filter_search, status=filter_status, project_id=filter_project_id, requester_id=filter_requester_id, assignee_id=filter_assignee_id, priority=filter_priority, type=filter_type, sort=filter_sort, dir=filter_dir) }}">Next</a>
+    {% endif %}
+  </nav>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/searchable-select.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/requests-page.js') }}" defer></script>
+{% endblock %}

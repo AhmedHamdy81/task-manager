@@ -1,0 +1,110 @@
+body.app--shell .requests-filters {
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 1rem;
+}
+body.app--shell .requests-table-wrap {
+  overflow-x: auto;
+}
+body.app--shell .requests-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+body.app--shell .requests-table th,
+body.app--shell .requests-table td {
+  text-align: left;
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  vertical-align: top;
+}
+body.app--shell .requests-table th {
+  color: var(--text-secondary, #9aa8bd);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+body.app--shell .request-status {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+body.app--shell .request-status--pending {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text, #e8eef8);
+}
+body.app--shell .request-status--started {
+  background: rgba(240, 193, 74, 0.18);
+  color: #f0c14a;
+}
+body.app--shell .request-status--finished {
+  background: rgba(90, 196, 140, 0.18);
+  color: #7ddeaf;
+}
+body.app--shell .request-status--failed {
+  background: rgba(220, 80, 80, 0.18);
+  color: #f08a8a;
+}
+body.app--shell .requests-pager {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+body.app--shell .request-dl {
+  display: grid;
+  grid-template-columns: 8rem 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+body.app--shell .request-dl dt {
+  color: var(--text-secondary, #9aa8bd);
+  font-weight: 600;
+}
+body.app--shell .request-dl dd {
+  margin: 0;
+}
+body.app--shell .request-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+body.app--shell .request-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+body.app--shell .request-timeline-item {
+  padding-left: 0.85rem;
+  border-left: 2px solid rgba(255, 255, 255, 0.12);
+}
+body.app--shell .request-timeline-item--failed {
+  border-left-color: #f08a8a;
+}
+body.app--shell .request-timeline-item--finished {
+  border-left-color: #7ddeaf;
+}
+body.app--shell .request-timeline-item--started {
+  border-left-color: #f0c14a;
+}
+body.app--shell .form-stack--inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: end;
+}
+@media (max-width: 720px) {
+  body.app--shell .request-dl {
+    grid-template-columns: 1fr;
+  }
+  body.app--shell .requests-table th:nth-child(n + 6),
+  body.app--shell .requests-table td:nth-child(n + 6) {
+    display: none;
+  }
+}

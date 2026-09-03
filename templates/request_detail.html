@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }} · Requests · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/requests.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="page-wrapper request-detail-page" id="request-{{ item.id }}">
+  <header class="page-head shell-page-head">
+    <p class="muted"><a href="{{ url_for('requests_page') }}">Requests</a></p>
+    <h1>{{ item.title }}</h1>
+    <p>
+      <span class="request-status request-status--{{ item.status }}">{{ status_labels.get(item.status, item.status) }}</span>
+      · {{ (item.priority or 'medium')|title }}
+      · {{ request_type_labels.get(item.request_type, item.request_type) }}
+    </p>
+  </header>
+
+  <section class="panel request-detail-meta">
+    <dl class="request-dl">
+      <dt>Project</dt>
+      <dd>
+        {% if item.project %}
+        <a href="{{ url_for('project_detail', project_id=item.project.id) }}">{{ item.project.name }}</a>
+        {% else %}—{% endif %}
+      </dd>
+      <dt>Requested by</dt>
+      <dd>{% if item.requester %}{{ item.requester.name }}{% else %}—{% endif %}</dd>
+      <dt>Assigned to</dt>
+      <dd>{% if item.assignee %}{{ item.assignee.name }}{% else %}Unassigned{% endif %}</dd>
+      <dt>Estimated time</dt>
+      <dd>{% if item.estimated_duration_minutes %}{{ item.estimated_duration_minutes }} min{% else %}—{% endif %}</dd>
+      <dt>Created</dt>
+      <dd class="tabular-nums">{% if item.created_at %}{{ item.created_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</dd>
+      <dt>Updated</dt>
+      <dd class="tabular-nums">{% if item.updated_at %}{{ item.updated_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</dd>
+      <dt>Started</dt>
+      <dd class="tabular-nums">{% if item.started_at %}{{ item.started_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</dd>
+      <dt>Finished</dt>
+      <dd class="tabular-nums">{% if item.finished_at %}{{ item.finished_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</dd>
+      <dt>Failed</dt>
+      <dd class="tabular-nums">{% if item.failed_at %}{{ item.failed_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}</dd>
+      {% if item.related_task %}
+      <dt>Related task</dt>
+      <dd><a href="{{ url_for('tasks_list') }}#task-{{ item.related_task.id }}">{{ item.related_task.title }}</a></dd>
+      {% endif %}
+      {% if item.related_episode %}
+      <dt>Related episode</dt>
+      <dd>
+        {% if item.project_id %}
+        <a href="{{ url_for('project_episode_detail', project_id=item.project_id, episode_number=item.related_episode.episode_number) }}">Episode {{ item.related_episode.episode_number }}</a>
+        {% else %}Episode {{ item.related_episode.episode_number }}{% endif %}
+      </dd>
+      {% endif %}
+    </dl>
+    {% if item.description %}
+    <div class="request-description">
+      <h2 class="panel-title">Description</h2>
+      <p>{{ item.description }}</p>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if can_change_status and next_statuses %}
+  <section class="panel request-actions" aria-label="Status actions">
+    <h2 class="panel-title">Next actions</h2>
+    <div class="request-action-row">
+      {% if 'started' in next_statuses %}
+      <button type="button" class="btn btn--primary" data-request-dialog-open="request-start-dialog">Start</button>
+      {% endif %}
+      {% if 'finished' in next_statuses %}
+      <button type="button" class="btn btn--primary" data-request-dialog-open="request-finish-dialog">Finish</button>
+      {% endif %}
+      {% if 'failed' in next_statuses %}
+      <button type="button" class="btn btn--danger" data-request-dialog-open="request-fail-dialog">Mark failed</button>
+      {% endif %}
+      {% if 'pending' in next_statuses and can_reopen %}
+      <button type="button" class="btn btn--ghost" data-request-dialog-open="request-reopen-dialog">Reopen</button>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if can_assign %}
+  <section class="panel">
+    <h2 class="panel-title">Assign</h2>
+    <form class="form-stack form-stack--inline" method="post" action="{{ url_for('requests_assign', request_id=item.id) }}">
+      <label class="field">
+        <span class="visually-hidden">Assigned to</span>
+        <select name="assigned_to_id" class="js-searchable-select">
+          <option value="">Unassigned</option>
+          {% for u in users %}
+          <option value="{{ u.id }}"{% if item.assigned_to_id == u.id %} selected{% endif %}>{{ u.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="btn btn--small">Save assignee</button>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="panel">
+    <h2 class="panel-title">Add a comment</h2>
+    <form class="form-stack" method="post" action="{{ url_for('requests_comment', request_id=item.id) }}">
+      <label class="field">
+        <span class="visually-hidden">Comment</span>
+        <textarea class="input" name="comment" rows="3" required maxlength="4000"></textarea>
+      </label>
+      <button type="submit" class="btn btn--small" data-request-submit>Add comment</button>
+    </form>
+  </section>
+
+  <section class="panel" aria-labelledby="request-history-heading">
+    <h2 class="panel-title" id="request-history-heading">Activity</h2>
+    {% if events %}
+    <ol class="request-timeline">
+      {% for ev in events %}
+      <li class="request-timeline-item request-timeline-item--{{ ev.event_type }}">
+        <p>
+          <strong>{{ (ev.event_type or 'event')|replace('_', ' ')|title }}</strong>
+          {% if ev.actor %} · {{ ev.actor.name }}{% endif %}
+          {% if ev.created_at %}
+          <span class="muted tabular-nums"> · {{ ev.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+          {% endif %}
+        </p>
+        {% if ev.body %}
+        <p>{{ ev.body }}</p>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="empty">No activity yet.</p>
+    {% endif %}
+  </section>
+
+  {% if can_delete %}
+  <form method="post" action="{{ url_for('requests_delete', request_id=item.id) }}" data-confirm="Archive this request?">
+    <button type="submit" class="btn btn--danger btn--small">Delete request</button>
+  </form>
+  {% endif %}
+</div>
+
+<dialog class="project-team-modal" id="request-start-dialog" aria-labelledby="request-start-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="request-start-title" class="project-team-modal-title">Start this request?</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-request-dialog-close aria-label="Close">Close</button>
+    </div>
+    <form class="form-stack" method="post" action="{{ url_for('requests_start', request_id=item.id) }}" data-request-status-form>
+      <input type="hidden" name="version" value="{{ item.version }}">
+      <label class="field">
+        <span class="field-label">Estimated duration (minutes, optional)</span>
+        <input class="input" type="number" name="estimated_duration_minutes" min="0" max="20160" step="1" inputmode="numeric">
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary" data-request-submit>Start request</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="project-team-modal" id="request-finish-dialog" aria-labelledby="request-finish-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="request-finish-title" class="project-team-modal-title">Finish this request?</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-request-dialog-close aria-label="Close">Close</button>
+    </div>
+    <form class="form-stack" method="post" action="{{ url_for('requests_finish', request_id=item.id) }}" data-request-status-form>
+      <input type="hidden" name="version" value="{{ item.version }}">
+      <label class="field">
+        <span class="field-label">Completion comment <span class="muted">(optional)</span></span>
+        <textarea class="input" name="comment" rows="3" maxlength="4000"></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary" data-request-submit>Finish request</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="project-team-modal" id="request-fail-dialog" aria-labelledby="request-fail-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="request-fail-title" class="project-team-modal-title">Mark as failed</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-request-dialog-close aria-label="Close">Close</button>
+    </div>
+    <form class="form-stack" method="post" action="{{ url_for('requests_fail', request_id=item.id) }}" data-request-status-form>
+      <input type="hidden" name="version" value="{{ item.version }}">
+      <label class="field">
+        <span class="field-label">Failure reason</span>
+        <textarea class="input" name="comment" rows="3" maxlength="4000" required></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--danger" data-request-submit>Mark failed</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="project-team-modal" id="request-reopen-dialog" aria-labelledby="request-reopen-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="request-reopen-title" class="project-team-modal-title">Reopen this request?</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-request-dialog-close aria-label="Close">Close</button>
+    </div>
+    <form class="form-stack" method="post" action="{{ url_for('requests_reopen', request_id=item.id) }}" data-request-status-form>
+      <input type="hidden" name="version" value="{{ item.version }}">
+      <p class="muted">It will return to Pending. This is recorded in the activity history.</p>
+      <label class="field">
+        <span class="field-label">Reason <span class="muted">(optional)</span></span>
+        <textarea class="input" name="comment" rows="3" maxlength="4000"></textarea>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary" data-request-submit>Reopen</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/searchable-select.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/requests-page.js') }}" defer></script>
+{% endblock %}
