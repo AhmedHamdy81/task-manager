@@ -1,0 +1,75 @@
+{% extends "auth_base.html" %}
+{% block title %}Awaiting approval · {{ app_name }}{% endblock %}
+{% block content %}
+<h1 class="auth-title">Account pending</h1>
+<p class="auth-sub account-pending-message">
+  {% if account.status == 'pending_approval' %}
+  Your account is awaiting administrator approval.
+  {% elif account.status == 'rejected' %}
+  Your registration request has not been approved.
+  {% if account.status_notes %}
+  <br><br><strong>Reason:</strong> {{ account.status_notes|e }}
+  {% endif %}
+  {% elif account.status == 'suspended' %}
+  Your account has been suspended.
+  {% if account.suspension_reason %}
+  <br><br><strong>Reason:</strong> {{ account.suspension_reason|e }}
+  {% endif %}
+  {% if account.suspension_end_at %}
+  <br>Suspension end: {{ account.suspension_end_at.strftime('%Y-%m-%d') }}
+  {% endif %}
+  {% elif account.status == 'disabled' %}
+  Your account has been disabled.
+  {% if account.disable_reason %}
+  <br><br><strong>Reason:</strong> {{ account.disable_reason|e }}
+  {% endif %}
+  {% elif account.status == 'pending_reactivation' %}
+  Your reactivation request is pending administrator review.
+  {% else %}
+  Your account cannot be used right now. Contact an administrator for assistance.
+  {% endif %}
+</p>
+<p class="muted account-pending-hint">You can contact support while your account status is being reviewed.</p>
+<div class="account-pending-actions">
+  <a href="{{ url_for('account_support') }}" class="btn btn--ghost btn--block">Contact Administrator</a>
+  {% if account.status == 'suspended' or account.status == 'disabled' %}
+  <button type="button" class="btn btn--primary btn--block" id="reactivation-open">Request Reactivation</button>
+  {% endif %}
+  <form method="post" action="{{ url_for('logout') }}" class="account-pending-logout">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn--ghost btn--block">Sign out</button>
+  </form>
+</div>
+
+{% if account.status == 'suspended' or account.status == 'disabled' %}
+<form id="reactivation-form" hidden method="post" action="{{ url_for('account_reactivation_request') }}" class="account-reactivation-panel">
+  <h2 class="panel-title">Reactivation request</h2>
+  <label class="field">
+    <span class="field-label">Reason</span>
+    <textarea name="reason" class="input" rows="3" required placeholder="Explain why your account should be reactivated."></textarea>
+  </label>
+  <label class="field">
+    <span class="field-label">Additional notes</span>
+    <textarea name="notes" class="input" rows="2" placeholder="Optional."></textarea>
+  </label>
+  <div class="account-reactivation-actions">
+    <button type="submit" class="btn btn--primary btn--block">Submit request</button>
+    <button type="button" class="btn btn--ghost btn--block" id="reactivation-cancel">Cancel</button>
+  </div>
+</form>
+<script>
+(function () {
+  var form = document.getElementById("reactivation-form");
+  var openBtn = document.getElementById("reactivation-open");
+  var cancelBtn = document.getElementById("reactivation-cancel");
+  if (!form || !openBtn) return;
+  function setOpen(open) {
+    form.hidden = !open;
+    openBtn.hidden = open;
+  }
+  openBtn.addEventListener("click", function () { setOpen(true); });
+  if (cancelBtn) cancelBtn.addEventListener("click", function () { setOpen(false); });
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -97,6 +97,8 @@ import video_preview as vp
 import color_grading_support as cg
 import color_grading_routes as cg_routes
 import notification_events as notif_events
+import mail_service as mail_service_mod
+import mail_settings as mail_settings_mod
 from guest_access import GUEST_NOTE_VISIBILITY_DEFAULT, build_guest_access
 
 db = SQLAlchemy()
@@ -10043,6 +10045,19 @@ def create_app() -> Flask:
         ensure_sqlite_industry_news_tables()
         ensure_sqlite_dashboard_monitoring_tables()
         system_seed_mod.ensure_sqlite_system_seed_tables(db)
+        try:
+            import mail_settings as mail_settings_mod
+
+            mail_settings_mod.ensure_mail_setting_defaults(db, SystemSetting)
+            _mail_cfg = mail_settings_mod.resolve_mail_config(
+                SystemSetting,
+                app=app,
+                app_root=app_root,
+                include_password=True,
+            )
+            mail_settings_mod.apply_mail_config_to_app(app, _mail_cfg)
+        except Exception:
+            app.logger.exception("Could not apply saved mail settings at startup")
         employment_structure_support_mod.ensure_employment_structure_tables(db)
         machine_room_dashboard_support_mod.ensure_machine_room_dashboard_tables(db, now_local)
         job_titles_master_support_mod.ensure_job_titles_master_tables(db)
@@ -10134,6 +10149,17 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             return None
         return db.session.get(Account, pk) if pk is not None else None
+
+    def absolute_url_for(endpoint: str, **values) -> str:
+        path = url_for(endpoint, **values)
+        fallback = ""
+        try:
+            fallback = (request.url_root or "").rstrip("/")
+        except RuntimeError:
+            fallback = ""
+        return system_seed_mod.absolute_url_from_path(
+            SystemSetting, path, fallback=fallback
+        )
 
     @app.before_request
     def enforce_logged_in_users_only():
@@ -13777,6 +13803,20 @@ def create_app() -> Flask:
     PASSWORD_RESET_SALT = "password-reset"
     PASSWORD_RESET_MAX_AGE_SEC = 60 * 60
 
+    def _password_reset_max_age_sec() -> int:
+        try:
+            minutes = int(
+                app.config.get("MAIL_RESET_EXPIRY_MINUTES")
+                or mail_settings_mod.DEFAULT_RESET_EXPIRY_MINUTES
+            )
+        except (TypeError, ValueError):
+            minutes = mail_settings_mod.DEFAULT_RESET_EXPIRY_MINUTES
+        minutes = max(
+            mail_settings_mod.RESET_EXPIRY_MIN,
+            min(mail_settings_mod.RESET_EXPIRY_MAX, minutes),
+        )
+        return int(minutes) * 60
+
     def _account_by_login_id(login_id: str):
         ident = (login_id or "").strip()
         if not ident:
@@ -13803,7 +13843,7 @@ def create_app() -> Flask:
     def _account_from_password_reset_token(token: str):
         try:
             data = _password_reset_serializer().loads(
-                token or "", max_age=PASSWORD_RESET_MAX_AGE_SEC
+                token or "", max_age=_password_reset_max_age_sec()
             )
         except (BadSignature, SignatureExpired, TypeError, ValueError):
             return None
@@ -13822,7 +13862,7 @@ def create_app() -> Flask:
             return None
         return acc
 
-    def _notify_admins_password_reset(acc: Account, reset_url: str) -> None:
+    def _notify_admins_password_reset_failed(acc: Account) -> None:
         try:
             admin_ids = account_approval_support_mod.admin_directory_user_ids(
                 db, Account, User, ROLE_ADMIN, ROLE_SUPER_USER
@@ -13834,10 +13874,10 @@ def create_app() -> Flask:
                 create_notification=_create_notification,
                 emit_to_account=emit_notification_to_account,
                 recipient_user_ids=admin_ids,
-                title="Password reset requested",
+                title="Password reset email failed",
                 message=(
-                    f"{login_label} requested a password reset. "
-                    f"Send them this link (expires in 1 hour): {reset_url}"
+                    f"{login_label} requested a password reset, but email delivery failed. "
+                    "Contact them out of band — the reset link was not included here."
                 ),
                 entity_type="account",
                 entity_id=int(acc.id),
@@ -13846,7 +13886,32 @@ def create_app() -> Flask:
                 n_type="security",
             )
         except Exception:
-            app.logger.exception("Could not notify administrators of a password reset request")
+            app.logger.exception(
+                "Could not notify administrators of a password reset delivery failure"
+            )
+
+    def _send_password_reset_email(acc: Account, reset_url: str, *, expires_minutes: int) -> bool:
+        app_name = str(app.config.get("APP_NAME") or "BIGbang Studios")
+        subject = f"Reset your {app_name} password"
+        text_body = (
+            f"A password reset was requested for your {app_name} account.\n\n"
+            f"Reset your password using this link:\n{reset_url}\n\n"
+            f"This link expires in {expires_minutes} minutes and can only be used once. "
+            "If you did not request this change, you can ignore this email."
+        )
+        html_body = render_template(
+            "emails/password_reset.html",
+            app_name=app_name,
+            reset_url=reset_url,
+            expires_minutes=expires_minutes,
+        )
+        return mail_service_mod.send_email(
+            app.config,
+            to_address=acc.email,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+        )
 
     @app.route("/forgot-password", methods=["GET", "POST"])
     def forgot_password():
@@ -13855,24 +13920,47 @@ def create_app() -> Flask:
         if request.method == "POST":
             login_id = (request.form.get("login") or "").strip()
             acc = _account_by_login_id(login_id)
+            try:
+                expiry_minutes = int(
+                    app.config.get("MAIL_RESET_EXPIRY_MINUTES")
+                    or mail_settings_mod.DEFAULT_RESET_EXPIRY_MINUTES
+                )
+            except (TypeError, ValueError):
+                expiry_minutes = mail_settings_mod.DEFAULT_RESET_EXPIRY_MINUTES
+            expiry_minutes = max(
+                mail_settings_mod.RESET_EXPIRY_MIN,
+                min(mail_settings_mod.RESET_EXPIRY_MAX, expiry_minutes),
+            )
             if acc is not None and account_approval_support_mod.account_may_use_app(acc):
                 token = _password_reset_token(acc)
-                reset_url = url_for("reset_password", token=token, _external=True)
+                reset_url = absolute_url_for("reset_password", token=token)
                 log_security_event(
                     "password_reset_requested",
                     account_id=int(acc.id),
                     details={"login": (acc.display_login or "")[:120]},
                 )
-                app.logger.info("Password reset link for account %s: %s", acc.id, reset_url)
-                _notify_admins_password_reset(acc, reset_url)
+                delivered = False
+                try:
+                    delivered = _send_password_reset_email(
+                        acc, reset_url, expires_minutes=expiry_minutes
+                    )
+                except Exception:
+                    delivered = False
+                    app.logger.exception(
+                        "Could not send password reset email for account %s", acc.id
+                    )
+                if not delivered:
+                    fallback = app.config.get("MAIL_ADMIN_FALLBACK_ON_FAILURE", True)
+                    if fallback:
+                        _notify_admins_password_reset_failed(acc)
             else:
                 log_security_event(
                     "password_reset_requested",
                     details={"login": login_id.lower()[:120], "unknown": True},
                 )
             flash(
-                "If an account matches, a reset link was sent to an administrator. "
-                "Check with them, then use the link within one hour.",
+                "If an account matches, a password reset link has been sent. "
+                f"Check your email and use the link within {expiry_minutes} minutes.",
                 "success",
             )
             return redirect(url_for("login"))
@@ -14042,13 +14130,17 @@ def create_app() -> Flask:
             .all()
         )
 
-    @app.route("/logout", methods=["POST"])
+    @app.route("/logout", methods=["GET", "POST"])
     def logout():
         aid = session.get("account_id")
         if aid:
-            log_security_event("logout", account_id=int(aid))
+            try:
+                log_security_event("logout", account_id=int(aid))
+            except Exception:
+                app.logger.exception("Could not record logout audit event")
         session.clear()
-        return redirect(url_for("login"))
+        # 303 avoids browser "Confirm Form Resubmission" if the user refreshes.
+        return redirect(url_for("login"), code=303)
 
     @app.route("/profile", methods=["GET", "POST"])
     def profile():
@@ -34863,6 +34955,7 @@ def create_app() -> Flask:
         "JobTitlePostScopeLink": JobTitlePostScopeLink,
         "account_from_session": account_from_session,
         "account_can_access_admin_settings": account_can_access_admin_settings,
+        "log_security_event": log_security_event,
     }
     app.extensions["system_seed"] = _system_seed_ctx
     system_seed_routes_mod.register_system_seed_routes(app, _system_seed_ctx)

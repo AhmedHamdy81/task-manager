@@ -1,0 +1,538 @@
+# Task Manager translations
+# Locale: en
+msgid ""
+msgstr ""
+"Project-Id-Version: task-manager\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-04 19:53+0000\n"
+"PO-Revision-Date: 2026-09-04 19:53+0000\n"
+"Last-Translator: \n"
+"Language-Team: en\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Access Control"
+msgstr "Access Control"
+
+msgid "Ack"
+msgstr "Ack"
+
+msgid "Action Board"
+msgstr "Action Board"
+
+msgid "Active tasks"
+msgstr "Active tasks"
+
+msgid "Activity"
+msgstr "Activity"
+
+msgid "Add"
+msgstr "Add"
+
+msgid "Admin"
+msgstr "Admin"
+
+msgid "Administrator fallback"
+msgstr "Administrator fallback"
+
+msgid "Alerts"
+msgstr "Alerts"
+
+msgid "All"
+msgstr "All"
+
+msgid "APP WorkFlow"
+msgstr "APP WorkFlow"
+
+msgid "Approved"
+msgstr "Approved"
+
+msgid "Assigned to"
+msgstr "Assigned to"
+
+msgid "Attach image"
+msgstr "Attach image"
+
+msgid "Audio Library"
+msgstr "Audio Library"
+
+msgid "Back"
+msgstr "Back"
+
+msgid "Between %(min)s and %(max)s minutes."
+msgstr "Between %(min)s and %(max)s minutes."
+
+msgid "Booking"
+msgstr "Booking"
+
+msgid "Bookings"
+msgstr "Bookings"
+
+msgid "Cancel"
+msgstr "Cancel"
+
+msgid "Cancelled"
+msgstr "Cancelled"
+
+msgid "Change server connection"
+msgstr "Change server connection"
+
+msgid "Chat"
+msgstr "Chat"
+
+msgid "Clear"
+msgstr "Clear"
+
+msgid "Close"
+msgstr "Close"
+
+msgid "Close notifications"
+msgstr "Close notifications"
+
+msgid "Color"
+msgstr "Color"
+
+msgid "Color Department"
+msgstr "Color Department"
+
+msgid "Completed"
+msgstr "Completed"
+
+msgid "Completed at"
+msgstr "Completed at"
+
+msgid "Completed tasks"
+msgstr "Completed tasks"
+
+msgid "Configure SMTP delivery for password-reset and other application emails. Password-reset links use the public application URL below."
+msgstr "Configure SMTP delivery for password-reset and other application emails. Password-reset links use the public application URL below."
+
+msgid "Configured"
+msgstr "Configured"
+
+msgid "Confirm"
+msgstr "Confirm"
+
+msgid "Connection"
+msgstr "Connection"
+
+msgid "Connection address"
+msgstr "Connection address"
+
+msgid "Copy"
+msgstr "Copy"
+
+msgid "Create"
+msgstr "Create"
+
+msgid "Created at"
+msgstr "Created at"
+
+msgid "Custom SMTP"
+msgstr "Custom SMTP"
+
+msgid "Dashboard"
+msgstr "Dashboard"
+
+msgid "Default sender email"
+msgstr "Default sender email"
+
+msgid "Default sender name"
+msgstr "Default sender name"
+
+msgid "Delete"
+msgstr "Delete"
+
+msgid "Delete for everyone"
+msgstr "Delete for everyone"
+
+msgid "Delete for me"
+msgstr "Delete for me"
+
+msgid "Delivered"
+msgstr "Delivered"
+
+msgid "Disabled"
+msgstr "Disabled"
+
+msgid "Done"
+msgstr "Done"
+
+msgid "Download"
+msgstr "Download"
+
+msgid "Due date"
+msgstr "Due date"
+
+msgid "Edit"
+msgstr "Edit"
+
+msgid "Edit suites"
+msgstr "Edit suites"
+
+msgid "Email & Password Reset"
+msgstr "Email & Password Reset"
+
+msgid "Email delivery"
+msgstr "Email delivery"
+
+msgid "Employment and Access"
+msgstr "Employment and Access"
+
+msgid "Employment structure"
+msgstr "Employment structure"
+
+msgid "Enable email delivery"
+msgstr "Enable email delivery"
+
+msgid "Enabled"
+msgstr "Enabled"
+
+msgid "Encryption"
+msgstr "Encryption"
+
+msgid "English"
+msgstr "English"
+
+msgid "Enter an http:// or https:// server address."
+msgstr "Enter an http:// or https:// server address."
+
+msgid "Entertainment"
+msgstr "Entertainment"
+
+msgid "Example reset URL"
+msgstr "Example reset URL"
+
+msgid "Expand sidebar"
+msgstr "Expand sidebar"
+
+msgid "Failed"
+msgstr "Failed"
+
+msgid "Filter"
+msgstr "Filter"
+
+msgid "For Gmail, use a Google App Password — not your normal Gmail password."
+msgstr "For Gmail, use a Google App Password — not your normal Gmail password."
+
+msgid "Forgot password?"
+msgstr "Forgot password?"
+
+msgid "Gmail"
+msgstr "Gmail"
+
+msgid "Health"
+msgstr "Health"
+
+msgid "Hide"
+msgstr "Hide"
+
+msgid "HTTP address"
+msgstr "HTTP address"
+
+msgid "HTTP address used to connect to this BigBang server — desktop app, share links, and emails. Use http:// or https:// (for example a LAN host or http://127.0.0.1:5001)."
+msgstr "HTTP address used to connect to this BigBang server — desktop app, share links, and emails. Use http:// or https:// (for example a LAN host or http://127.0.0.1:5001)."
+
+msgid "In progress"
+msgstr "In progress"
+
+msgid "Industry news"
+msgstr "Industry news"
+
+msgid "Industry Radar"
+msgstr "Industry Radar"
+
+msgid "Join call"
+msgstr "Join call"
+
+msgid "Jump to first unread"
+msgstr "Jump to first unread"
+
+msgid "Language"
+msgstr "Language"
+
+msgid "Leave blank to keep the existing password. Secrets are never shown."
+msgstr "Leave blank to keep the existing password. Secrets are never shown."
+
+msgid "Machine room"
+msgstr "Machine room"
+
+msgid "Machine Room"
+msgstr "Machine Room"
+
+msgid "Main navigation"
+msgstr "Main navigation"
+
+msgid "Mark all read"
+msgstr "Mark all read"
+
+msgid "Microsoft 365 / Outlook"
+msgstr "Microsoft 365 / Outlook"
+
+msgid "minutes"
+msgstr "minutes"
+
+msgid "News sources"
+msgstr "News sources"
+
+msgid "No active tasks."
+msgstr "No active tasks."
+
+msgid "No notifications."
+msgstr "No notifications."
+
+msgid "No open requests."
+msgstr "No open requests."
+
+msgid "None"
+msgstr "None"
+
+msgid "Not configured"
+msgstr "Not configured"
+
+msgid "Notes"
+msgstr "Notes"
+
+msgid "Notification filters"
+msgstr "Notification filters"
+
+msgid "Notification log"
+msgstr "Notification log"
+
+msgid "Notification Management"
+msgstr "Notification Management"
+
+msgid "Notifications"
+msgstr "Notifications"
+
+msgid "Now playing"
+msgstr "Now playing"
+
+msgid "Open"
+msgstr "Open"
+
+msgid "Open menu"
+msgstr "Open menu"
+
+msgid "Password is supplied by the MAIL_PASSWORD environment variable and cannot be changed here."
+msgstr "Password is supplied by the MAIL_PASSWORD environment variable and cannot be changed here."
+
+msgid "Password-reset link expiry (minutes)"
+msgstr "Password-reset link expiry (minutes)"
+
+msgid "Password-reset preview"
+msgstr "Password-reset preview"
+
+msgid "Pending"
+msgstr "Pending"
+
+msgid "Primary"
+msgstr "Primary"
+
+msgid "Priority"
+msgstr "Priority"
+
+msgid "Producer Hunt"
+msgstr "Producer Hunt"
+
+msgid "Production"
+msgstr "Production"
+
+msgid "Profile"
+msgstr "Profile"
+
+msgid "Project"
+msgstr "Project"
+
+msgid "Project Settings"
+msgstr "Project Settings"
+
+msgid "Projects"
+msgstr "Projects"
+
+msgid "Public application URL"
+msgstr "Public application URL"
+
+msgid "Recipient email"
+msgstr "Recipient email"
+
+msgid "Rejected"
+msgstr "Rejected"
+
+msgid "Remove"
+msgstr "Remove"
+
+msgid "Replace password"
+msgstr "Replace password"
+
+msgid "Reply"
+msgstr "Reply"
+
+msgid "Requests"
+msgstr "Requests"
+
+msgid "Reset-link expiry"
+msgstr "Reset-link expiry"
+
+msgid "Save"
+msgstr "Save"
+
+msgid "Save connection address"
+msgstr "Save connection address"
+
+msgid "Save settings"
+msgstr "Save settings"
+
+msgid "Search"
+msgstr "Search"
+
+msgid "Send"
+msgstr "Send"
+
+msgid "Send administrator fallback notification when email fails"
+msgstr "Send administrator fallback notification when email fails"
+
+msgid "Send test email"
+msgstr "Send test email"
+
+msgid "Send Test Email"
+msgstr "Send Test Email"
+
+msgid "Sends a real message using the current form values (including unsaved changes where safe)."
+msgstr "Sends a real message using the current form values (including unsaved changes where safe)."
+
+msgid "Server address"
+msgstr "Server address"
+
+msgid "Settings"
+msgstr "Settings"
+
+msgid "Shooting Day"
+msgstr "Shooting Day"
+
+msgid "Shooting Days"
+msgstr "Shooting Days"
+
+msgid "Show"
+msgstr "Show"
+
+msgid "Sign in"
+msgstr "Sign in"
+
+msgid "Sign in required to use this app."
+msgstr "Sign in required to use this app."
+
+msgid "Sign out"
+msgstr "Sign out"
+
+msgid "SMTP password"
+msgstr "SMTP password"
+
+msgid "SMTP port"
+msgstr "SMTP port"
+
+msgid "SMTP provider preset"
+msgstr "SMTP provider preset"
+
+msgid "SMTP server"
+msgstr "SMTP server"
+
+msgid "SMTP username"
+msgstr "SMTP username"
+
+msgid "SSL/TLS"
+msgstr "SSL/TLS"
+
+msgid "Start call"
+msgstr "Start call"
+
+msgid "STARTTLS"
+msgstr "STARTTLS"
+
+msgid "Status"
+msgstr "Status"
+
+msgid "Storage"
+msgstr "Storage"
+
+msgid "Storage & Folders"
+msgstr "Storage & Folders"
+
+msgid "System Setup"
+msgstr "System Setup"
+
+msgid "System Setup sections"
+msgstr "System Setup sections"
+
+msgid "Task"
+msgstr "Task"
+
+msgid "Task Log"
+msgstr "Task Log"
+
+msgid "Task management"
+msgstr "Task management"
+
+msgid "Tasks"
+msgstr "Tasks"
+
+msgid "This preview never generates a real password-reset token."
+msgstr "This preview never generates a real password-reset token."
+
+msgid "Toggle notification sound"
+msgstr "Toggle notification sound"
+
+msgid "Toggle notifications"
+msgstr "Toggle notifications"
+
+msgid "Type a message…"
+msgstr "Type a message…"
+
+msgid "Typing…"
+msgstr "Typing…"
+
+msgid "Unread messages"
+msgstr "Unread messages"
+
+msgid "Updated at"
+msgstr "Updated at"
+
+msgid "Updates"
+msgstr "Updates"
+
+msgid "Upload"
+msgstr "Upload"
+
+msgid "Upload directory"
+msgstr "Upload directory"
+
+msgid "Use https:// or http:// — for example a LAN address or http://127.0.0.1:5001."
+msgstr "Use https:// or http:// — for example a LAN address or http://127.0.0.1:5001."
+
+msgid "Used in password-reset links. Must not be localhost, 127.0.0.1, or a desktop app URL. Example: https://bigbang.example.com or http://192.168.1.20:5001"
+msgstr "Used in password-reset links. Must not be localhost, 127.0.0.1, or a desktop app URL. Example: https://bigbang.example.com or http://192.168.1.20:5001"
+
+msgid "Users"
+msgstr "Users"
+
+msgid "VFX"
+msgstr "VFX"
+
+msgid "VFX Department"
+msgstr "VFX Department"
+
+msgid "Voice note"
+msgstr "Voice note"
+
+msgid "Workspace"
+msgstr "Workspace"
+
+msgid "You have unsaved email settings."
+msgstr "You have unsaved email settings."
+
+msgid "العربية"
+msgstr "العربية"
+

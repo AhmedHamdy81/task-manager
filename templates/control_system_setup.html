@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+{% block title %}System Setup · {{ app_name }}{% endblock %}
+{% block body_class %}control-system-setup{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/system-setup.css') }}">
+{% endblock %}
+{% block content %}
+<div class="system-setup">
+  <header class="system-setup__head">
+    <div>
+      <h1 class="admin-section-title">System Setup</h1>
+      <p class="muted">Essential master data health and safe repair. Additive only — never deletes projects, users, tasks, or workflow data.</p>
+    </div>
+    {% if not current_account_is_super_user|default(false) %}
+    <form method="post" action="{{ seed_run_url }}" class="inline system-setup__seed-form" id="system-setup-seed-form">
+      <button type="submit" class="btn btn--primary" data-confirm="{{ seed_confirm_message|e }}">
+        Seed / Repair Essential System Data
+      </button>
+    </form>
+    {% endif %}
+  </header>
+
+  <nav class="system-setup__nav" aria-label="{{ _('System Setup sections') }}">
+    <a class="system-setup__nav-link{% if active_section == 'email' or not active_section %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='email') }}" data-section="email">{{ _('Email & Password Reset') }}</a>
+    <a class="system-setup__nav-link{% if active_section == 'connection' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='connection') }}" data-section="connection">{{ _('Connection') }}</a>
+    <a class="system-setup__nav-link{% if active_section == 'upload' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='upload') }}" data-section="upload">{{ _('Upload directory') }}</a>
+    <a class="system-setup__nav-link{% if active_section == 'health' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='health') }}" data-section="health">{{ _('Health') }}</a>
+  </nav>
+
+  <section class="panel admin-card system-setup__email" id="system-setup-email" data-setup-section="email">
+    <div class="system-setup__email-head">
+      <div>
+        <h2 class="panel-title">{{ _('Email & Password Reset') }}</h2>
+        <p class="muted">{{ _('Configure SMTP delivery for password-reset and other application emails. Password-reset links use the public application URL below.') }}</p>
+      </div>
+      {% if mail.status == 'configured' %}
+      <span class="system-setup__badge system-setup__badge--ok">{{ _('Configured') }}</span>
+      {% else %}
+      <span class="system-setup__badge system-setup__badge--warn">{{ _('Not configured') }}</span>
+      {% endif %}
+    </div>
+
+    <form
+      method="post"
+      action="{{ mail_save_url }}"
+      class="system-setup__email-form"
+      id="system-setup-email-form"
+      data-unsaved-warn="{{ _('You have unsaved email settings.') }}"
+      data-providers='{{ mail_providers|tojson }}'
+    >
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="replace_password" id="mail-replace-password" value="0">
+
+      <label class="check check--select-btn system-setup__select-btn" for="mail-enabled">
+        <input type="checkbox" name="mail_enabled" value="1" id="mail-enabled"{% if mail.enabled %} checked{% endif %}>
+        <span class="check-select-btn__text">{{ _('Enable email delivery') }}</span>
+      </label>
+
+      <div class="system-setup__email-grid">
+        <label class="field">
+          <span class="field-label">{{ _('SMTP provider preset') }}</span>
+          <select class="input" name="mail_provider" id="mail-provider">
+            {% for key, meta in mail_providers.items() %}
+            <option value="{{ key }}"{% if mail.provider == key %} selected{% endif %}>{{ _(meta.label) }}</option>
+            {% endfor %}
+          </select>
+          <span class="field-hint muted" id="mail-provider-help"{% if mail.provider != 'gmail' %} hidden{% endif %}>
+            {{ _('For Gmail, use a Google App Password — not your normal Gmail password.') }}
+          </span>
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ _('SMTP server') }}</span>
+          <input class="input" type="text" name="mail_server" id="mail-server" value="{{ mail.server|e }}" autocomplete="off" spellcheck="false">
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ _('SMTP port') }}</span>
+          <input class="input" type="number" name="mail_port" id="mail-port" value="{{ mail.port }}" min="1" max="65535" inputmode="numeric">
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ _('Encryption') }}</span>
+          <select class="input" name="mail_encryption" id="mail-encryption">
+            {% for value, label in mail_encryption_options %}
+            <option value="{{ value }}"{% if mail.encryption == value %} selected{% endif %}>{{ _(label) }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ _('SMTP username') }}</span>
+          <input class="input" type="text" name="mail_username" id="mail-username" value="{{ mail.username|e }}" autocomplete="username" spellcheck="false">
+        </label>
+
+        <div class="field">
+          <span class="field-label" id="mail-password-label">{{ _('SMTP password') }}</span>
+          {% if mail.password_env_locked %}
+          <p class="muted field-hint">{{ _('Password is supplied by the MAIL_PASSWORD environment variable and cannot be changed here.') }}</p>
+          <input class="input" type="password" value="••••••••" disabled aria-labelledby="mail-password-label" autocomplete="off">
+          {% else %}
+          <div class="system-setup__password-row">
+            <input
+              class="input"
+              type="password"
+              name="mail_password"
+              id="mail-password"
+              value=""
+              placeholder="{{ mail.password_placeholder|e }}"
+              autocomplete="new-password"
+              spellcheck="false"
+              {% if mail.password_configured %}readonly{% endif %}
+              aria-labelledby="mail-password-label"
+            >
+            <button type="button" class="btn btn--ghost" id="mail-password-replace"{% if not mail.password_configured %} hidden{% endif %}>{{ _('Replace password') }}</button>
+            <button type="button" class="btn btn--ghost" id="mail-password-toggle" hidden>{{ _('Show') }}</button>
+          </div>
+          <span class="field-hint muted">{{ _('Leave blank to keep the existing password. Secrets are never shown.') }}</span>
+          {% endif %}
+        </div>
+
+        <label class="field">
+          <span class="field-label">{{ _('Default sender name') }}</span>
+          <input class="input" type="text" name="mail_sender_name" id="mail-sender-name" value="{{ mail.sender_name|e }}" autocomplete="organization">
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ _('Default sender email') }}</span>
+          <input class="input" type="email" name="mail_sender_email" id="mail-sender-email" value="{{ mail.sender_email|e }}" autocomplete="email">
+        </label>
+
+        <label class="field system-setup__email-span">
+          <span class="field-label">{{ _('Public application URL') }}</span>
+          <input
+            class="input"
+            type="url"
+            name="public_application_url"
+            id="mail-public-url"
+            value="{{ mail.public_base_url|e }}"
+            placeholder="https://bigbang.example.com"
+            autocomplete="off"
+            spellcheck="false"
+          >
+          <span class="field-hint muted">{{ _('Used in password-reset links. Must not be localhost, 127.0.0.1, or a desktop app URL. Example: https://bigbang.example.com or http://192.168.1.20:5001') }}</span>
+        </label>
+
+        <label class="field">
+          <span class="field-label">{{ _('Password-reset link expiry (minutes)') }}</span>
+          <input
+            class="input"
+            type="number"
+            name="mail_reset_expiry_minutes"
+            id="mail-reset-expiry"
+            value="{{ mail.reset_expiry_minutes }}"
+            min="{{ mail_reset_expiry_min }}"
+            max="{{ mail_reset_expiry_max }}"
+            inputmode="numeric"
+          >
+          <span class="field-hint muted">{{ _('Between %(min)s and %(max)s minutes.') % {'min': mail_reset_expiry_min, 'max': mail_reset_expiry_max} }}</span>
+        </label>
+      </div>
+
+      <label class="check check--select-btn system-setup__select-btn" for="mail-admin-fallback">
+        <input type="checkbox" name="mail_admin_fallback" value="1" id="mail-admin-fallback"{% if mail.admin_fallback_on_failure %} checked{% endif %}>
+        <span class="check-select-btn__text">{{ _('Send administrator fallback notification when email fails') }}</span>
+      </label>
+
+      <div class="system-setup__email-actions">
+        <button type="submit" class="btn btn--primary" id="mail-save-btn">{{ _('Save settings') }}</button>
+        <span class="muted system-setup__save-state" id="mail-save-state" aria-live="polite"></span>
+      </div>
+    </form>
+
+    <div class="system-setup__email-test" id="system-setup-email-test">
+      <h3 class="system-setup__email-subhead">{{ _('Send test email') }}</h3>
+      <p class="muted">{{ _('Sends a real message using the current form values (including unsaved changes where safe).') }}</p>
+      <div class="system-setup__email-test-row">
+        <label class="field">
+          <span class="field-label">{{ _('Recipient email') }}</span>
+          <input class="input" type="email" id="mail-test-recipient" autocomplete="email" placeholder="admin@example.com">
+        </label>
+        <button
+          type="button"
+          class="btn btn--ghost"
+          id="mail-test-btn"
+          data-url="{{ mail_test_url }}"
+          {% if not mail.can_send_test %}disabled{% endif %}
+        >{{ _('Send Test Email') }}</button>
+      </div>
+      <p class="muted system-setup__test-result" id="mail-test-result" aria-live="polite"></p>
+    </div>
+
+    <div class="system-setup__email-preview" id="system-setup-email-preview">
+      <h3 class="system-setup__email-subhead">{{ _('Password-reset preview') }}</h3>
+      <dl class="system-setup__dl">
+        <div><dt>{{ _('Reset-link expiry') }}</dt><dd id="mail-preview-expiry">{{ mail.reset_expiry_minutes }} {{ _('minutes') }}</dd></div>
+        <div><dt>{{ _('Public application URL') }}</dt><dd><code id="mail-preview-public">{{ mail.public_base_url or '—' }}</code></dd></div>
+        <div><dt>{{ _('Example reset URL') }}</dt><dd><code id="mail-preview-example">{{ mail_example_reset_url }}</code></dd></div>
+        <div><dt>{{ _('Email delivery') }}</dt><dd>{% if mail.is_ready %}{{ _('Configured') }}{% else %}{{ _('Not configured') }}{% endif %}</dd></div>
+        <div><dt>{{ _('Administrator fallback') }}</dt><dd>{% if mail.admin_fallback_on_failure %}{{ _('Enabled') }}{% else %}{{ _('Disabled') }}{% endif %}</dd></div>
+      </dl>
+      <p class="muted">{{ _('This preview never generates a real password-reset token.') }}</p>
+    </div>
+  </section>
+
+  <section class="panel admin-card system-setup__connection" id="system-setup-connection" data-setup-section="connection">
+    <h2 class="panel-title">{{ _('Connection address') }}</h2>
+    <p class="muted">{{ _('HTTP address used to connect to this BigBang server — desktop app, share links, and emails. Use http:// or https:// (for example a LAN host or http://127.0.0.1:5001).') }}</p>
+    <form method="post" action="{{ connection_save_url }}" class="system-setup__connection-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="field">
+        <span class="field-label">{{ _('HTTP address') }}</span>
+        <input
+          class="input"
+          type="url"
+          name="connection_http_address"
+          value="{{ connection_http_address|e }}"
+          placeholder="http://127.0.0.1:5001"
+          required
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </label>
+      <button type="submit" class="btn btn--primary">{{ _('Save connection address') }}</button>
+    </form>
+  </section>
+
+  <section class="panel admin-card system-setup__upload" id="system-setup-upload" data-setup-section="upload">
+    <h2 class="panel-title">Upload directory</h2>
+    <p class="muted">Folder where this server stores uploaded files (avatars, chat attachments, media, scripts, and related assets). Defaults to the app <code>instance</code> directory. Restart the server after saving so new uploads use the path.</p>
+    {% if upload_directory_active and upload_directory_active != upload_directory %}
+    <p class="muted">Active now: <code>{{ upload_directory_active|e }}</code></p>
+    {% endif %}
+    {% if upload_directory_env_locked %}
+    <p class="muted">Locked by environment variable <code>TASK_MANAGER_UPLOAD_DIR</code>.</p>
+    {% endif %}
+    <form method="post" action="{{ upload_directory_save_url }}" class="system-setup__connection-form system-setup__upload-form" id="system-setup-upload-form">
+      <label class="field">
+        <span class="field-label">Upload directory</span>
+        <div class="system-setup__upload-input-row">
+          <input
+            class="input"
+            type="text"
+            name="upload_directory"
+            id="upload-directory-input"
+            value="{{ upload_directory|e }}"
+            placeholder="/Users/you/Documents/Cursor/task-manager/instance"
+            required
+            autocomplete="off"
+            spellcheck="false"
+            {% if upload_directory_env_locked %}readonly{% endif %}
+          >
+          <button
+            type="button"
+            class="btn btn--ghost"
+            id="upload-directory-choose"
+            data-browse-url="{{ upload_directory_browse_url }}"
+            {% if upload_directory_env_locked %}disabled hidden{% endif %}
+          >Choose…</button>
+          <span class="muted field-hint" id="upload-directory-choose-status" hidden></span>
+        </div>
+      </label>
+      <button type="submit" class="btn btn--primary"{% if upload_directory_env_locked %} disabled{% endif %}>Save upload directory</button>
+    </form>
+    {% if upload_directory_history %}
+    <div class="system-setup__upload-history">
+      <h3 class="system-setup__upload-history-title">Directory history</h3>
+      <ul class="system-setup__upload-history-list">
+        {% for path in upload_directory_history %}
+        {% set history_entity_id = upload_directory_history_entity_id(path) %}
+        {% set can_remove_history = path in upload_directory_history_stored %}
+        <li class="system-setup__upload-history-item{% if path == upload_directory %} is-current{% endif %}">
+          <code class="system-setup__upload-history-path" title="{{ path|e }}">{{ path|e }}</code>
+          <div class="system-setup__upload-history-actions">
+            <button
+              type="button"
+              class="btn btn--small btn--ghost"
+              data-upload-history-use="{{ path|e }}"
+              {% if upload_directory_env_locked %}disabled{% endif %}
+            >Use</button>
+            {% if can_remove_history %}
+            <button
+              type="button"
+              class="btn btn--small btn--ghost"
+              data-safe-delete
+              data-entity-type="{{ upload_directory_history_safe_delete_type|e }}"
+              data-entity-id="{{ history_entity_id }}"
+              data-entity-label="Upload directory"
+              data-entity-name="{{ path|e }}"
+              data-delete-url="{{ upload_directory_history_remove_url }}"
+              data-warning-text="This removes the path from Directory history only. Files on disk are not deleted."
+              data-confirm-label="Remove from history"
+              data-modal-title="Safe Delete"
+              data-modal-desc="You are about to remove this directory from history:"
+              data-success-redirect="{{ url_for('control_system_setup') }}"
+              {% if upload_directory_env_locked or not history_entity_id %}disabled{% endif %}
+            >Remove</button>
+            {% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+
+  <dialog class="project-team-modal" id="upload-directory-use-dialog" aria-labelledby="upload-directory-use-title">
+    <div class="project-team-modal-inner">
+      <div class="project-team-modal-head">
+        <h2 id="upload-directory-use-title" class="project-team-modal-title">Use this directory?</h2>
+        <button type="button" class="btn btn--small btn--ghost" data-upload-use-cancel aria-label="Close">Close</button>
+      </div>
+      <p class="muted" id="upload-directory-use-message">Switch the upload directory to this path and save it.</p>
+      <p><code id="upload-directory-use-path"></code></p>
+      <p class="muted">Restart the server after saving so new uploads use the path.</p>
+      <div class="form-actions" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:1rem;">
+        <button type="button" class="btn btn--ghost" data-upload-use-cancel>Cancel</button>
+        <button type="button" class="btn btn--primary" data-upload-use-confirm>Use directory</button>
+      </div>
+    </div>
+  </dialog>
+
+  {% if warnings %}
+  <section class="panel admin-card system-setup__warnings" role="alert">
+    <h2 class="panel-title">Missing essential data</h2>
+    <ul class="system-setup__warning-list">
+      {% for w in warnings %}
+      <li>{{ w|e }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <section class="panel admin-card system-setup__meta">
+    <h2 class="panel-title">Backup &amp; last seed</h2>
+    <dl class="system-setup__dl">
+      <div>
+        <dt>Latest backup</dt>
+        <dd>{% if latest_backup_path %}<code>{{ latest_backup_path|e }}</code>{% else %}<span class="muted">No backups yet</span>{% endif %}</dd>
+      </div>
+      {% if last_seed_run %}
+      <div>
+        <dt>Last seed run</dt>
+        <dd>{{ last_seed_run.created_at or '—' }}</dd>
+      </div>
+      <div>
+        <dt>Last seed result</dt>
+        <dd>
+          created {{ last_seed_run.created_count }},
+          updated {{ last_seed_run.updated_count }},
+          skipped {{ last_seed_run.skipped_existing_count }},
+          failed {{ last_seed_run.failed_count }}
+          {% if last_seed_run.backup_path %}
+          <span class="muted">· backup <code>{{ last_seed_run.backup_path|e }}</code></span>
+          {% endif %}
+        </dd>
+      </div>
+      {% else %}
+      <div>
+        <dt>Last seed result</dt>
+        <dd class="muted">No system seed has been run yet.</dd>
+      </div>
+      {% endif %}
+    </dl>
+  </section>
+
+  {% if seed_report %}
+  <section class="panel admin-card system-setup__report" aria-live="polite">
+    <h2 class="panel-title">Latest seed report</h2>
+    <p class="muted">
+      Created {{ seed_report.created_count|default(0) }},
+      updated {{ seed_report.updated_count|default(0) }},
+      skipped {{ seed_report.skipped_existing_count|default(0) }},
+      failed {{ seed_report.failed_count|default(0) }}.
+    </p>
+    {% if seed_report.tables_touched %}
+    <p class="muted">Tables touched: {{ seed_report.tables_touched|join(', ') }}</p>
+    {% endif %}
+    {% if seed_report.warnings %}
+    <ul class="system-setup__warning-list">
+      {% for w in seed_report.warnings %}
+      <li>{{ w|e }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="panel admin-card system-setup__health" id="system-setup-health" data-setup-section="health">
+    <h2 class="panel-title">Master data counts</h2>
+    <div class="system-setup__table-wrap">
+      <table class="system-setup__table">
+        <thead>
+          <tr>
+            <th scope="col">Group</th>
+            <th scope="col">Count</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in groups %}
+          <tr class="{% if not g.ok and g.min_expected > 0 %}system-setup__row--warn{% endif %}">
+            <td>
+              {{ g.label|e }}
+              {% if g.is_industry_radar and not current_account_is_super_user|default(false) %}
+              <span class="muted system-setup__ir-note">(use <a href="{{ industry_radar_sources_url }}">Industry News Sources</a> to rebuild)</span>
+              {% endif %}
+            </td>
+            <td>{{ g.count }}</td>
+            <td>
+              {% if g.min_expected == 0 %}
+              <span class="system-setup__badge system-setup__badge--info">Info</span>
+              {% elif g.ok %}
+              <span class="system-setup__badge system-setup__badge--ok">OK</span>
+              {% else %}
+              <span class="system-setup__badge system-setup__badge--warn">Low (min {{ g.min_expected }})</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if not current_account_is_super_user|default(false) %}
+  <section class="panel admin-card system-setup__working-hours">
+    <h2 class="panel-title">Working Hours</h2>
+    <p class="muted">Rebuild the Working Hours ledger from ended work sessions and completed media operations. Additive only — existing entries are never duplicated or changed.</p>
+    {% if working_hours_backfill_report %}
+    <ul class="system-setup__warning-list" aria-live="polite">
+      <li>Sessions scanned: {{ working_hours_backfill_report.sessions_scanned }}</li>
+      <li>Session rows created: {{ working_hours_backfill_report.session_rows_created }}</li>
+      <li>Media events scanned: {{ working_hours_backfill_report.media_events_scanned }}</li>
+      <li>Media rows created: {{ working_hours_backfill_report.media_rows_created }}</li>
+      <li>Skipped duplicates: {{ working_hours_backfill_report.skipped_duplicates }}</li>
+      <li>Errors: {{ working_hours_backfill_report.errors }}</li>
+    </ul>
+    {% endif %}
+    <form method="post" action="{{ working_hours_backfill_url }}" class="inline">
+      <button type="submit" class="btn btn--primary" data-confirm="{{ working_hours_backfill_confirm|e }}">Backfill Working Hours</button>
+    </form>
+  </section>
+
+  <section class="panel admin-card system-setup__ir">
+    <h2 class="panel-title">Industry Radar</h2>
+    <p class="muted">Industry Radar sources and items are managed separately. System seed does not rebuild feeds.</p>
+    <div class="system-setup__ir-actions">
+      <a href="{{ industry_radar_sources_url }}" class="btn btn--ghost">Industry News Sources</a>
+      <form method="post" action="{{ industry_radar_rebuild_url }}" class="inline ir-rebuild-form">
+        <button type="submit" class="btn btn--primary" data-confirm="Rebuild Industry Radar sources and fetch items? This does not delete users or projects.">Rebuild Industry Radar</button>
+      </form>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/system-setup.js') }}"></script>
+{% endblock %}

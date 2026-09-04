@@ -1,0 +1,538 @@
+# Task Manager translations
+# Locale: ar
+msgid ""
+msgstr ""
+"Project-Id-Version: task-manager\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-04 19:53+0000\n"
+"PO-Revision-Date: 2026-09-04 19:53+0000\n"
+"Last-Translator: \n"
+"Language-Team: ar\n"
+"Language: ar\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=6; plural=(n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=11 ? 4 : 5);\n"
+
+msgid "Access Control"
+msgstr "التحكم بالصلاحيات"
+
+msgid "Ack"
+msgstr "إقرار"
+
+msgid "Action Board"
+msgstr "لوحة المتابعة"
+
+msgid "Active tasks"
+msgstr "المهام النشطة"
+
+msgid "Activity"
+msgstr "النشاط"
+
+msgid "Add"
+msgstr "إضافة"
+
+msgid "Admin"
+msgstr "الإدارة"
+
+msgid "Administrator fallback"
+msgstr "الإشعار الاحتياطي للمسؤولين"
+
+msgid "Alerts"
+msgstr "التنبيهات"
+
+msgid "All"
+msgstr "الكل"
+
+msgid "APP WorkFlow"
+msgstr "سير عمل التطبيق"
+
+msgid "Approved"
+msgstr "معتمد"
+
+msgid "Assigned to"
+msgstr "مسند إلى"
+
+msgid "Attach image"
+msgstr "إرفاق صورة"
+
+msgid "Audio Library"
+msgstr "مكتبة الصوت"
+
+msgid "Back"
+msgstr "رجوع"
+
+msgid "Between %(min)s and %(max)s minutes."
+msgstr "بين %(min)s و %(max)s دقيقة."
+
+msgid "Booking"
+msgstr "الحجوزات"
+
+msgid "Bookings"
+msgstr "الحجوزات"
+
+msgid "Cancel"
+msgstr "إلغاء"
+
+msgid "Cancelled"
+msgstr "ملغي"
+
+msgid "Change server connection"
+msgstr "تغيير اتصال الخادم"
+
+msgid "Chat"
+msgstr "المحادثات"
+
+msgid "Clear"
+msgstr "مسح"
+
+msgid "Close"
+msgstr "إغلاق"
+
+msgid "Close notifications"
+msgstr "إغلاق الإشعارات"
+
+msgid "Color"
+msgstr "الألوان"
+
+msgid "Color Department"
+msgstr "قسم الألوان"
+
+msgid "Completed"
+msgstr "مكتمل"
+
+msgid "Completed at"
+msgstr "تاريخ الإكمال"
+
+msgid "Completed tasks"
+msgstr "المهام المكتملة"
+
+msgid "Configure SMTP delivery for password-reset and other application emails. Password-reset links use the public application URL below."
+msgstr "اضبط تسليم SMTP لإعادة تعيين كلمة المرور ورسائل التطبيق. روابط إعادة التعيين تستخدم عنوان التطبيق العام أدناه."
+
+msgid "Configured"
+msgstr "مُعدّ"
+
+msgid "Confirm"
+msgstr "تأكيد"
+
+msgid "Connection"
+msgstr "الاتصال"
+
+msgid "Connection address"
+msgstr "عنوان الاتصال"
+
+msgid "Copy"
+msgstr "نسخ"
+
+msgid "Create"
+msgstr "إنشاء"
+
+msgid "Created at"
+msgstr "تاريخ الإنشاء"
+
+msgid "Custom SMTP"
+msgstr "SMTP مخصص"
+
+msgid "Dashboard"
+msgstr "لوحة التحكم"
+
+msgid "Default sender email"
+msgstr "بريد المرسل الافتراضي"
+
+msgid "Default sender name"
+msgstr "اسم المرسل الافتراضي"
+
+msgid "Delete"
+msgstr "حذف"
+
+msgid "Delete for everyone"
+msgstr "حذف للجميع"
+
+msgid "Delete for me"
+msgstr "حذف لدي"
+
+msgid "Delivered"
+msgstr "تم التسليم"
+
+msgid "Disabled"
+msgstr "معطّل"
+
+msgid "Done"
+msgstr "تم"
+
+msgid "Download"
+msgstr "تحميل"
+
+msgid "Due date"
+msgstr "تاريخ التسليم"
+
+msgid "Edit"
+msgstr "تعديل"
+
+msgid "Edit suites"
+msgstr "غرف المونتاج"
+
+msgid "Email & Password Reset"
+msgstr "البريد الإلكتروني وإعادة تعيين كلمة المرور"
+
+msgid "Email delivery"
+msgstr "إرسال البريد"
+
+msgid "Employment and Access"
+msgstr "التوظيف والصلاحيات"
+
+msgid "Employment structure"
+msgstr "هيكل التوظيف"
+
+msgid "Enable email delivery"
+msgstr "تفعيل إرسال البريد"
+
+msgid "Enabled"
+msgstr "مفعّل"
+
+msgid "Encryption"
+msgstr "التشفير"
+
+msgid "English"
+msgstr "English"
+
+msgid "Enter an http:// or https:// server address."
+msgstr "أدخل عنوان خادم يبدأ بـ http:// أو https://."
+
+msgid "Entertainment"
+msgstr "ترفيه"
+
+msgid "Example reset URL"
+msgstr "مثال لرابط إعادة التعيين"
+
+msgid "Expand sidebar"
+msgstr "توسيع الشريط الجانبي"
+
+msgid "Failed"
+msgstr "فشل"
+
+msgid "Filter"
+msgstr "تصفية"
+
+msgid "For Gmail, use a Google App Password — not your normal Gmail password."
+msgstr "لـ Gmail استخدم كلمة مرور تطبيقات Google — وليس كلمة المرور العادية."
+
+msgid "Forgot password?"
+msgstr "نسيت كلمة المرور؟"
+
+msgid "Gmail"
+msgstr "Gmail"
+
+msgid "Health"
+msgstr "الصحة"
+
+msgid "Hide"
+msgstr "إخفاء"
+
+msgid "HTTP address"
+msgstr "عنوان HTTP"
+
+msgid "HTTP address used to connect to this BigBang server — desktop app, share links, and emails. Use http:// or https:// (for example a LAN host or http://127.0.0.1:5001)."
+msgstr "عنوان HTTP للاتصال بخادم BigBang — تطبيق سطح المكتب وروابط المشاركة والبريد. استخدم http:// أو https:// (مثل عنوان الشبكة المحلية أو http://127.0.0.1:5001)."
+
+msgid "In progress"
+msgstr "قيد التنفيذ"
+
+msgid "Industry news"
+msgstr "أخبار الصناعة"
+
+msgid "Industry Radar"
+msgstr "رادار الصناعة"
+
+msgid "Join call"
+msgstr "الانضمام للمكالمة"
+
+msgid "Jump to first unread"
+msgstr "الانتقال لأول غير مقروء"
+
+msgid "Language"
+msgstr "اللغة"
+
+msgid "Leave blank to keep the existing password. Secrets are never shown."
+msgstr "اتركه فارغًا للإبقاء على كلمة المرور الحالية. لا تُعرض الأسرار أبدًا."
+
+msgid "Machine room"
+msgstr "غرفة الميديا"
+
+msgid "Machine Room"
+msgstr "غرفة الميديا"
+
+msgid "Main navigation"
+msgstr "التنقل الرئيسي"
+
+msgid "Mark all read"
+msgstr "تعليم الكل كمقروء"
+
+msgid "Microsoft 365 / Outlook"
+msgstr "Microsoft 365 / Outlook"
+
+msgid "minutes"
+msgstr "دقائق"
+
+msgid "News sources"
+msgstr "مصادر الأخبار"
+
+msgid "No active tasks."
+msgstr "لا توجد مهام نشطة."
+
+msgid "No notifications."
+msgstr "لا توجد إشعارات."
+
+msgid "No open requests."
+msgstr "لا توجد طلبات مفتوحة."
+
+msgid "None"
+msgstr "بدون"
+
+msgid "Not configured"
+msgstr "غير مُعدّ"
+
+msgid "Notes"
+msgstr "الملاحظات"
+
+msgid "Notification filters"
+msgstr "تصفية الإشعارات"
+
+msgid "Notification log"
+msgstr "سجل الإشعارات"
+
+msgid "Notification Management"
+msgstr "إدارة الإشعارات"
+
+msgid "Notifications"
+msgstr "الإشعارات"
+
+msgid "Now playing"
+msgstr "قيد التشغيل"
+
+msgid "Open"
+msgstr "فتح"
+
+msgid "Open menu"
+msgstr "فتح القائمة"
+
+msgid "Password is supplied by the MAIL_PASSWORD environment variable and cannot be changed here."
+msgstr "كلمة المرور مُزوَّدة عبر متغير البيئة MAIL_PASSWORD ولا يمكن تغييرها من هنا."
+
+msgid "Password-reset link expiry (minutes)"
+msgstr "انتهاء صلاحية رابط إعادة التعيين (دقائق)"
+
+msgid "Password-reset preview"
+msgstr "معاينة إعادة تعيين كلمة المرور"
+
+msgid "Pending"
+msgstr "قيد الانتظار"
+
+msgid "Primary"
+msgstr "أساسي"
+
+msgid "Priority"
+msgstr "الأولوية"
+
+msgid "Producer Hunt"
+msgstr "صيد المنتج"
+
+msgid "Production"
+msgstr "الإنتاج"
+
+msgid "Profile"
+msgstr "الملف الشخصي"
+
+msgid "Project"
+msgstr "مشروع"
+
+msgid "Project Settings"
+msgstr "إعدادات المشروع"
+
+msgid "Projects"
+msgstr "المشاريع"
+
+msgid "Public application URL"
+msgstr "عنوان التطبيق العام"
+
+msgid "Recipient email"
+msgstr "البريد المستلم"
+
+msgid "Rejected"
+msgstr "مرفوض"
+
+msgid "Remove"
+msgstr "إزالة"
+
+msgid "Replace password"
+msgstr "استبدال كلمة المرور"
+
+msgid "Reply"
+msgstr "رد"
+
+msgid "Requests"
+msgstr "الطلبات"
+
+msgid "Reset-link expiry"
+msgstr "انتهاء صلاحية الرابط"
+
+msgid "Save"
+msgstr "حفظ"
+
+msgid "Save connection address"
+msgstr "حفظ عنوان الاتصال"
+
+msgid "Save settings"
+msgstr "حفظ الإعدادات"
+
+msgid "Search"
+msgstr "بحث"
+
+msgid "Send"
+msgstr "إرسال"
+
+msgid "Send administrator fallback notification when email fails"
+msgstr "إرسال إشعار احتياطي للمسؤولين عند فشل البريد"
+
+msgid "Send test email"
+msgstr "إرسال بريد تجريبي"
+
+msgid "Send Test Email"
+msgstr "إرسال بريد تجريبي"
+
+msgid "Sends a real message using the current form values (including unsaved changes where safe)."
+msgstr "يرسل رسالة حقيقية باستخدام قيم النموذج الحالية (بما في ذلك التغييرات غير المحفوظة عندما يكون ذلك آمنًا)."
+
+msgid "Server address"
+msgstr "عنوان الخادم"
+
+msgid "Settings"
+msgstr "الإعدادات"
+
+msgid "Shooting Day"
+msgstr "يوم تصوير"
+
+msgid "Shooting Days"
+msgstr "أيام التصوير"
+
+msgid "Show"
+msgstr "إظهار"
+
+msgid "Sign in"
+msgstr "تسجيل الدخول"
+
+msgid "Sign in required to use this app."
+msgstr "يلزم تسجيل الدخول لاستخدام هذا التطبيق."
+
+msgid "Sign out"
+msgstr "تسجيل الخروج"
+
+msgid "SMTP password"
+msgstr "كلمة مرور SMTP"
+
+msgid "SMTP port"
+msgstr "منفذ SMTP"
+
+msgid "SMTP provider preset"
+msgstr "إعداد مزود SMTP مسبق"
+
+msgid "SMTP server"
+msgstr "خادم SMTP"
+
+msgid "SMTP username"
+msgstr "اسم مستخدم SMTP"
+
+msgid "SSL/TLS"
+msgstr "SSL/TLS"
+
+msgid "Start call"
+msgstr "بدء مكالمة"
+
+msgid "STARTTLS"
+msgstr "STARTTLS"
+
+msgid "Status"
+msgstr "الحالة"
+
+msgid "Storage"
+msgstr "التخزين"
+
+msgid "Storage & Folders"
+msgstr "التخزين والمجلدات"
+
+msgid "System Setup"
+msgstr "إعداد النظام"
+
+msgid "System Setup sections"
+msgstr "أقسام إعداد النظام"
+
+msgid "Task"
+msgstr "مهمة"
+
+msgid "Task Log"
+msgstr "سجل المهام"
+
+msgid "Task management"
+msgstr "إدارة المهام"
+
+msgid "Tasks"
+msgstr "المهام"
+
+msgid "This preview never generates a real password-reset token."
+msgstr "هذه المعاينة لا تُنشئ رمز إعادة تعيين حقيقيًا أبدًا."
+
+msgid "Toggle notification sound"
+msgstr "تبديل صوت الإشعارات"
+
+msgid "Toggle notifications"
+msgstr "تبديل الإشعارات"
+
+msgid "Type a message…"
+msgstr "اكتب رسالة…"
+
+msgid "Typing…"
+msgstr "يكتب…"
+
+msgid "Unread messages"
+msgstr "رسائل غير مقروءة"
+
+msgid "Updated at"
+msgstr "تاريخ التحديث"
+
+msgid "Updates"
+msgstr "التحديثات"
+
+msgid "Upload"
+msgstr "رفع"
+
+msgid "Upload directory"
+msgstr "مجلد الرفع"
+
+msgid "Use https:// or http:// — for example a LAN address or http://127.0.0.1:5001."
+msgstr "استخدم https:// أو http:// — على سبيل المثال عنوان الشبكة المحلية أو http://127.0.0.1:5001."
+
+msgid "Used in password-reset links. Must not be localhost, 127.0.0.1, or a desktop app URL. Example: https://bigbang.example.com or http://192.168.1.20:5001"
+msgstr "يُستخدم في روابط إعادة تعيين كلمة المرور. يجب ألا يكون localhost أو 127.0.0.1 أو عنوان سطح المكتب. مثال: https://bigbang.example.com أو http://192.168.1.20:5001"
+
+msgid "Users"
+msgstr "المستخدمون"
+
+msgid "VFX"
+msgstr "المؤثرات البصرية"
+
+msgid "VFX Department"
+msgstr "قسم المؤثرات البصرية"
+
+msgid "Voice note"
+msgstr "ملاحظة صوتية"
+
+msgid "Workspace"
+msgstr "مساحة العمل"
+
+msgid "You have unsaved email settings."
+msgstr "لديك إعدادات بريد غير محفوظة."
+
+msgid "العربية"
+msgstr "العربية"
+

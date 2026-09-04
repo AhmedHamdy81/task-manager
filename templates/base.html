@@ -172,6 +172,7 @@
           <div class="app-sidebar-user">
             <a href="{{ url_for('profile') }}" class="app-sidebar-user-link" data-tooltip="{{ _('Profile') }}"><span class="app-nav-icon app-sidebar-user-avatar" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><span class="app-sidebar-user-name">{{ current_account.display_name }}</span></a>
             <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn btn--small btn--ghost app-sidebar-signout" title="{{ _('Sign out') }}" aria-label="{{ _('Sign out') }}">
                 <span class="app-sidebar-signout-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span>
                 <span class="app-sidebar-signout-label">{{ _('Sign out') }}</span>
