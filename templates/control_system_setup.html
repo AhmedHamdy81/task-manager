@@ -49,7 +49,7 @@
       data-providers='{{ mail_providers|tojson }}'
     >
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="replace_password" id="mail-replace-password" value="0">
+      <input type="hidden" name="replace_password" id="mail-replace-password" value="{% if mail.password_configured %}0{% else %}1{% endif %}">
 
       <label class="check check--select-btn system-setup__select-btn" for="mail-enabled">
         <input type="checkbox" name="mail_enabled" value="1" id="mail-enabled"{% if mail.enabled %} checked{% endif %}>
@@ -114,6 +114,7 @@
             >
             <button type="button" class="btn btn--ghost" id="mail-password-replace"{% if not mail.password_configured %} hidden{% endif %}>{{ _('Replace password') }}</button>
             <button type="button" class="btn btn--ghost" id="mail-password-toggle" hidden>{{ _('Show') }}</button>
+            <button type="button" class="btn btn--ghost" id="mail-password-cancel" hidden>{{ _('Cancel') }}</button>
           </div>
           <span class="field-hint muted">{{ _('Leave blank to keep the existing password. Secrets are never shown.') }}</span>
           {% endif %}

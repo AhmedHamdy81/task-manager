@@ -1,0 +1,387 @@
+<div class="industry-radar-admin">
+  {% if show_backup_warning|default(false) %}
+  <p class="industry-radar-backup-warning" role="status">
+    Before major changes, back up <code>instance/app.db</code>.
+  </p>
+  {% endif %}
+  <header class="industry-radar-admin__head">
+    <div>
+      <h2 class="admin-section-title">Industry News Sources</h2>
+      <p class="muted">Manage RSS/API feeds. Fetching runs only on refresh or CLI — never on the dashboard.</p>
+    </div>
+    <div class="industry-radar-admin__actions">
+      <form method="post" action="{{ rebuild_url }}" class="inline ir-rebuild-form">
+        <button type="submit" class="btn btn--primary">Rebuild Industry Radar Sources</button>
+      </form>
+      <form method="post" action="{{ add_defaults_url }}" class="inline">
+        <button type="submit" class="btn btn--ghost">Add Default Industry Sources</button>
+      </form>
+      <form method="post" action="{{ add_expanded_url }}" class="inline">
+        <button type="submit" class="btn btn--ghost">Add Egypt / MENA / AI Sources</button>
+      </form>
+      <form method="post" action="{{ refresh_all_url }}" class="inline">
+        <button type="submit" class="btn btn--primary">Refresh All Sources</button>
+      </form>
+      <a href="{{ url_for('control_industry_news') }}" class="btn btn--ghost">Imported items</a>
+    </div>
+  </header>
+
+  <section class="panel admin-card industry-radar-discover" id="ir-discover-root"
+    data-discover-url="{{ discover_url|e }}"
+    data-create-url="{{ create_from_discovery_url|e }}"
+    data-refresh-url-template="{{ url_for('control_industry_news_sources_refresh', source_id=0)|e }}"
+    data-categories='{{ categories|tojson }}'
+    data-regions='{{ regions|tojson }}'
+    data-source-groups='{{ source_groups|tojson }}'
+    data-category-labels='{{ category_labels|tojson }}'
+    data-region-labels='{{ region_labels|tojson }}'
+    data-source-group-labels='{{ source_group_labels|tojson }}'>
+    <h2 class="panel-title">Discover Source from URL</h2>
+    <p class="muted">Paste a website or category page URL. The app will detect RSS/Atom feeds — nothing is fetched until you click Detect.</p>
+    <div class="industry-radar-discover__input-row">
+      <label class="field field--grow">
+        <span class="field-label">Website or category URL</span>
+        <input type="url" class="input" id="ir-discover-url" placeholder="https://www.dailynewsegypt.com/category/cinema/" autocomplete="off">
+      </label>
+      <button type="button" class="btn btn--primary" id="ir-discover-btn">Detect RSS Source</button>
+    </div>
+    <div id="ir-discover-status" class="industry-radar-admin__status" hidden role="status" aria-live="polite"></div>
+    <div id="ir-discover-results" class="industry-radar-discover__results" hidden></div>
+  </section>
+
+  {% if expanded_report %}
+  <section class="panel admin-card industry-radar-expanded-report" aria-labelledby="ir-expanded-report-title">
+    <h2 class="panel-title" id="ir-expanded-report-title">Expanded sources report</h2>
+    <p class="muted">
+      Created {{ expanded_report.created_count|default(0) }},
+      skipped {{ expanded_report.skipped_count|default(0) }} existing,
+      failed {{ expanded_report.failed_count|default(0) }}.
+    </p>
+    {% if expanded_report.created_sources %}
+    <div class="industry-radar-expanded-report__block">
+      <h3 class="industry-radar-expanded-report__subtitle">Created sources</h3>
+      <ul class="industry-radar-expanded-report__list">
+        {% for name in expanded_report.created_sources %}
+        <li>{{ name|e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if expanded_report.skipped_sources %}
+    <div class="industry-radar-expanded-report__block">
+      <h3 class="industry-radar-expanded-report__subtitle">Skipped existing</h3>
+      <ul class="industry-radar-expanded-report__list muted">
+        {% for name in expanded_report.skipped_sources %}
+        <li>{{ name|e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if expanded_report.failed_sources %}
+    <div class="industry-radar-expanded-report__block">
+      <h3 class="industry-radar-expanded-report__subtitle">Failed candidate sources</h3>
+      <ul class="industry-radar-expanded-report__fail-list">
+        {% for fail in expanded_report.failed_sources %}
+        <li>
+          <strong>{{ fail.name|e }}</strong>
+          <ul class="muted">
+            {% for err in fail.errors %}
+            <li>{{ err.url|e }} — {{ err.error|e }}</li>
+            {% endfor %}
+            {% if not fail.errors %}
+            <li>No valid feed URL found among candidates.</li>
+            {% endif %}
+          </ul>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    <form method="post" action="{{ refresh_all_url }}" class="inline">
+      <button type="submit" class="btn btn--small btn--primary">Refresh All Sources</button>
+    </form>
+  </section>
+  {% endif %}
+
+  {% if rebuild_report %}
+  <section class="panel admin-card industry-radar-rebuild-report" aria-labelledby="ir-rebuild-report-title">
+    <h2 class="panel-title" id="ir-rebuild-report-title">Industry Radar rebuild report</h2>
+    <dl class="industry-radar-rebuild-stats">
+      <div><dt>Sources created</dt><dd>{{ rebuild_report.created_sources_count|default(0) }}</dd></div>
+      <div><dt>Sources skipped</dt><dd>{{ rebuild_report.skipped_sources_count|default(0) }}</dd></div>
+      <div><dt>Sources failed</dt><dd>{{ rebuild_report.failed_sources_count|default(0) }}</dd></div>
+      <div><dt>Items imported</dt><dd>{{ rebuild_report.imported_items_count|default(0) }}</dd></div>
+      <div><dt>Duplicate items skipped</dt><dd>{{ rebuild_report.skipped_duplicate_items_count|default(0) }}</dd></div>
+      <div><dt>Sources with fetch errors</dt><dd>{{ rebuild_report.sources_with_errors_count|default(0) }}</dd></div>
+      <div><dt>Items with images</dt><dd>{{ rebuild_report.items_with_images_count|default(0) }}</dd></div>
+      <div><dt>Items without images</dt><dd>{{ rebuild_report.items_without_images_count|default(0) }}</dd></div>
+    </dl>
+    {% if rebuild_report.created_sources %}
+    <div class="industry-radar-expanded-report__block">
+      <h3 class="industry-radar-expanded-report__subtitle">Created sources</h3>
+      <ul class="industry-radar-expanded-report__list">
+        {% for name in rebuild_report.created_sources %}
+        <li>{{ name|e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if rebuild_report.failed_sources %}
+    <div class="industry-radar-expanded-report__block">
+      <h3 class="industry-radar-expanded-report__subtitle">Failed sources</h3>
+      <ul class="industry-radar-expanded-report__fail-list">
+        {% for fail in rebuild_report.failed_sources %}
+        <li><strong>{{ fail.name|e }}</strong> — {{ fail.error|e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    <a href="{{ url_for('industry_radar_page') }}" class="btn btn--small btn--ghost">View Industry Radar</a>
+    <a href="{{ url_for('control_industry_news') }}" class="btn btn--small btn--ghost">Imported items</a>
+  </section>
+  {% endif %}
+
+  <section class="panel admin-card industry-radar-scheduler-panel" aria-labelledby="ir-scheduler-title">
+    <h2 class="panel-title" id="ir-scheduler-title">Automatic refresh</h2>
+    {% if scheduler_info.warning %}
+    <p class="industry-radar-scheduler-warning" role="status">{{ scheduler_info.warning }}</p>
+    {% endif %}
+    <dl class="industry-radar-scheduler-stats">
+      <div>
+        <dt>Auto refresh</dt>
+        <dd>
+          {% if scheduler_info.auto_refresh_enabled %}
+          <span class="industry-radar__badge industry-radar__badge--active">Enabled</span>
+          {% else %}
+          <span class="muted">Disabled</span>
+          <span class="industry-radar-scheduler-hint">Set <code>INDUSTRY_RADAR_AUTO_REFRESH=false</code> to disable. Restart after changing env.</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Refresh time</dt>
+        <dd>{{ scheduler_info.schedule_label }}</dd>
+      </div>
+      <div>
+        <dt>Scheduler running</dt>
+        <dd>{% if scheduler_info.scheduler_running %}<span class="industry-radar__badge industry-radar__badge--active">Yes</span>{% else %}<span class="muted">No</span>{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Next scheduled refresh</dt>
+        <dd>{% if scheduler_info.next_run_time %}{{ scheduler_info.next_run_time }}{% else %}<span class="muted">—</span>{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Last refresh</dt>
+        <dd>
+          {% if scheduler_info.last_run_at %}
+          {{ scheduler_info.last_run_at }}
+          {% if scheduler_info.last_trigger %}<span class="muted">({{ scheduler_info.last_trigger }})</span>{% endif %}
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Last result</dt>
+        <dd>
+          {% if scheduler_info.last_run_at %}
+          imported {{ scheduler_info.imported_count|default(0) }},
+          skipped {{ scheduler_info.skipped_count|default(0) }},
+          errors {{ scheduler_info.error_count|default(0) }}
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Sources with errors</dt>
+        <dd>
+          {% if scheduler_info.error_source_count %}
+          <span class="industry-radar-scheduler-errors">{{ scheduler_info.error_source_count }}</span>
+          {% else %}
+          <span class="muted">0</span>
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+    {% if scheduler_info.last_job_error %}
+    <p class="industry-radar-scheduler-last-error" role="status">Last job note: {{ scheduler_info.last_job_error|e }}</p>
+    {% endif %}
+    {% if scheduler_info.error_sources %}
+    <ul class="industry-radar-scheduler-error-list">
+      {% for err in scheduler_info.error_sources %}
+      <li><strong>{{ err.name|e }}</strong> — {{ err.last_error|truncate(160, True, '…')|e }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="muted industry-radar-scheduler-foot">Dashboard reads cached items only. Feeds refresh automatically while the app runs, or use manual refresh above.</p>
+  </section>
+
+  <section class="panel admin-card">
+    <h2 class="panel-title">Add source</h2>
+    <form method="post" action="{{ url_for('control_industry_news_sources_create') }}" class="industry-radar-source-form">
+      <div class="industry-radar-source-form__grid">
+        <label class="field"><span class="field-label">Name</span><input type="text" name="name" class="input" required maxlength="240"></label>
+        <label class="field"><span class="field-label">Type</span>
+          <select name="source_type" class="input"><option value="rss">RSS</option><option value="api">API</option></select>
+        </label>
+        <label class="field field--grow"><span class="field-label">Feed URL (RSS)</span><input type="url" name="feed_url" class="input" placeholder="https://…"></label>
+        <label class="field field--grow"><span class="field-label">API URL</span><input type="url" name="api_url" class="input" placeholder="https://…"></label>
+        <label class="field"><span class="field-label">API key env var</span><input type="text" name="api_key_name" class="input" placeholder="NEWS_API_KEY" autocomplete="off"></label>
+        <label class="field"><span class="field-label">Source group</span>
+          <select name="source_group" class="input">{% for grp in source_groups %}<option value="{{ grp }}">{{ source_group_labels.get(grp, grp) }}</option>{% endfor %}</select>
+        </label>
+        <label class="field"><span class="field-label">Default category</span>
+          <select name="default_category" class="input">{% for cat in categories %}<option value="{{ cat }}">{{ category_labels.get(cat, cat) }}</option>{% endfor %}</select>
+        </label>
+        <label class="field"><span class="field-label">Default region</span>
+          <select name="default_region" class="input">{% for reg in regions %}<option value="{{ reg }}">{{ region_labels.get(reg, reg) }}</option>{% endfor %}</select>
+        </label>
+        <label class="field field--grow"><span class="field-label">Keyword filter</span><input type="text" name="keyword_filter" class="input" placeholder="film, video, ai (comma-separated)"></label>
+        <div class="field industry-radar-source-form__active">
+          <span class="field-label">Status</span>
+          <label class="check check--select-btn industry-radar-source-form__select-btn">
+            <input type="checkbox" name="is_active" value="1" checked>
+            <span class="check-select-btn__text">Active</span>
+          </label>
+        </div>
+      </div>
+      <button type="submit" class="btn btn--primary">Add source</button>
+    </form>
+  </section>
+
+  <section class="panel admin-card">
+    <div class="industry-radar-sources-table-head">
+      <h2 class="panel-title">Sources ({{ sources|length }}{% if all_sources_count != sources|length %} of {{ all_sources_count }}{% endif %})</h2>
+      <form class="industry-radar__toolbar industry-radar-sources-group-filter" method="get" action="{{ url_for('updates_page') }}">
+        <input type="hidden" name="section" value="news">
+        <select name="group" class="input input--sm" onchange="this.form.submit()">
+          <option value="all"{% if group_filter == 'all' %} selected{% endif %}>All groups</option>
+          <option value="global_cinema"{% if group_filter == 'global_cinema' %} selected{% endif %}>Global Cinema</option>
+          <option value="egypt"{% if group_filter == 'egypt' %} selected{% endif %}>Egypt</option>
+          <option value="mena"{% if group_filter == 'mena' %} selected{% endif %}>MENA</option>
+          <option value="ai_cinema"{% if group_filter == 'ai_cinema' %} selected{% endif %}>AI Cinema</option>
+          <option value="film_tech"{% if group_filter == 'film_tech' %} selected{% endif %}>Film Tech</option>
+          <option value="post_production"{% if group_filter == 'post_production' %} selected{% endif %}>Post-production</option>
+        </select>
+      </form>
+    </div>
+    {% if not sources %}
+    <div class="industry-radar-sources-empty">
+      <p class="muted">No RSS sources in this group yet. Add default or expanded sources to start importing.</p>
+      <form method="post" action="{{ add_defaults_url }}" class="inline">
+        <button type="submit" class="btn btn--primary">Add Default Industry Sources</button>
+      </form>
+      <form method="post" action="{{ add_expanded_url }}" class="inline">
+        <button type="submit" class="btn btn--ghost">Add Egypt / MENA / AI Sources</button>
+      </form>
+    </div>
+    {% else %}
+    <div class="industry-radar-sources-table-wrap">
+      <table class="industry-radar-sources-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Group</th>
+            <th>Type</th>
+            <th>Category</th>
+            <th>Region</th>
+            <th>Keywords</th>
+            <th>Active</th>
+            <th>Last fetched</th>
+            <th>Last error</th>
+            <th>Imported items</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sources %}
+          {% set grp = infer_source_group(s) %}
+          <tr>
+            <td><strong>{{ s.name|e }}</strong></td>
+            <td>{{ source_group_labels.get(grp, grp)|e }}</td>
+            <td>{{ s.source_type|upper }}</td>
+            <td>{{ category_labels.get(s.default_category, s.default_category)|e }}</td>
+            <td>{{ region_labels.get(s.default_region, s.default_region)|e }}</td>
+            <td class="industry-radar-sources-table__keywords muted">{% if s.keyword_filter %}{{ s.keyword_filter|truncate(48, True, '…')|e }}{% else %}—{% endif %}</td>
+            <td>{% if s.is_active %}<span class="industry-radar__badge industry-radar__badge--active">Active</span>{% else %}<span class="muted">Inactive</span>{% endif %}</td>
+            <td class="muted">{% if s.last_fetched_at %}{{ s.last_fetched_at|fmt_cairo }}{% else %}—{% endif %}</td>
+            <td class="industry-radar-sources-table__error" title="{{ s.last_error|e if s.last_error else '' }}">{% if s.last_error %}{{ s.last_error|truncate(80, True, '…')|e }}{% else %}—{% endif %}</td>
+            <td>{{ item_counts.get(s.id, 0) }}</td>
+            <td class="industry-radar-sources-table__actions">
+              <form method="post" action="{{ url_for('control_industry_news_sources_refresh', source_id=s.id) }}" class="inline">
+                <button type="submit" class="btn btn--tiny btn--ghost">Refresh</button>
+              </form>
+              <form method="post" action="{{ url_for('control_industry_news_sources_toggle', source_id=s.id) }}" class="inline">
+                <button type="submit" class="btn btn--tiny btn--ghost">{% if s.is_active %}Deactivate{% else %}Activate{% endif %}</button>
+              </form>
+              <button
+                type="button"
+                class="btn btn--tiny btn--ghost ir-edit-source"
+                data-update-url="{{ url_for('control_industry_news_sources_update', source_id=s.id) }}"
+                data-name="{{ s.name|e }}"
+                data-source-type="{{ s.source_type|e }}"
+                data-feed-url="{{ (s.feed_url or '')|e }}"
+                data-api-url="{{ (s.api_url or '')|e }}"
+                data-api-key-name="{{ (s.api_key_name or '')|e }}"
+                data-source-group="{{ (s.source_group or infer_source_group(s))|e }}"
+                data-default-category="{{ s.default_category|e }}"
+                data-default-region="{{ s.default_region|e }}"
+                data-keyword-filter="{{ (s.keyword_filter or '')|e }}"
+                data-is-active="{{ '1' if s.is_active else '0' }}"
+                aria-haspopup="dialog"
+              >Edit</button>
+              <form method="post" action="{{ url_for('control_industry_news_sources_delete', source_id=s.id) }}" class="inline ir-delete-source" data-name="{{ s.name|e }}">
+                <button type="submit" class="btn btn--tiny btn--ghost btn--danger">Delete</button>
+              </form>
+              <button type="button" class="btn btn--tiny btn--ghost ir-test-source" data-url="{{ url_for('control_industry_news_sources_test', source_id=s.id) }}" data-name="{{ s.name|e }}" data-endpoint="{{ (s.feed_url or s.api_url or '')|e }}" data-source-type="{{ s.source_type|e }}">Test</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+<dialog id="ir-source-edit-modal" class="project-edit-modal ir-source-edit-modal" aria-labelledby="ir-source-edit-modal-title">
+  <div class="project-edit-modal__card ir-source-edit-modal__card">
+    <div class="project-task-modal-head">
+      <h2 id="ir-source-edit-modal-title" class="project-edit-modal__title">Edit source</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-ir-source-edit-close aria-label="Close">Close</button>
+    </div>
+    <form id="ir-source-edit-form" method="post" action="" class="industry-radar-source-form">
+      <div class="industry-radar-source-form__grid ir-source-edit-modal__grid">
+        <label class="field"><span class="field-label">Name</span><input type="text" name="name" class="input" required maxlength="240"></label>
+        <label class="field"><span class="field-label">Type</span>
+          <select name="source_type" class="input"><option value="rss">RSS</option><option value="api">API</option></select>
+        </label>
+        <label class="field field--grow"><span class="field-label">Feed URL (RSS)</span><input type="url" name="feed_url" class="input" placeholder="https://…"></label>
+        <label class="field field--grow"><span class="field-label">API URL</span><input type="url" name="api_url" class="input" placeholder="https://…"></label>
+        <label class="field"><span class="field-label">API key env var</span><input type="text" name="api_key_name" class="input" placeholder="NEWS_API_KEY" autocomplete="off"></label>
+        <label class="field"><span class="field-label">Source group</span>
+          <select name="source_group" class="input">{% for grp in source_groups %}<option value="{{ grp }}">{{ source_group_labels.get(grp, grp) }}</option>{% endfor %}</select>
+        </label>
+        <label class="field"><span class="field-label">Default category</span>
+          <select name="default_category" class="input">{% for cat in categories %}<option value="{{ cat }}">{{ category_labels.get(cat, cat) }}</option>{% endfor %}</select>
+        </label>
+        <label class="field"><span class="field-label">Default region</span>
+          <select name="default_region" class="input">{% for reg in regions %}<option value="{{ reg }}">{{ region_labels.get(reg, reg) }}</option>{% endfor %}</select>
+        </label>
+        <label class="field field--grow"><span class="field-label">Keyword filter</span><input type="text" name="keyword_filter" class="input" placeholder="film, video, ai (comma-separated)"></label>
+        <div class="field industry-radar-source-form__active">
+          <span class="field-label">Status</span>
+          <label class="check check--select-btn industry-radar-source-form__select-btn">
+            <input type="checkbox" name="is_active" value="1">
+            <span class="check-select-btn__text">Active</span>
+          </label>
+        </div>
+      </div>
+      <div class="project-edit-modal__actions">
+        <button type="button" class="btn btn--ghost" data-ir-source-edit-close>Cancel</button>
+        <button type="submit" class="btn btn--primary">Save changes</button>
+      </div>
+    </form>
+  </div>
+</dialog>

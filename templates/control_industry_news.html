@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% from 'partials/industry_radar_thumb.html' import industry_radar_thumb_row %}
+{% block title %}Industry News · {{ app_name }}{% endblock %}
+{% block body_class %}control-industry-news{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/industry-radar.css') }}">
+{% endblock %}
+{% block content %}
+<div class="industry-radar-admin">
+  <header class="industry-radar-admin__head">
+    <div>
+      <h1 class="admin-section-title">Imported Industry News</h1>
+      <p class="muted">Curate cached headlines — pin, feature, hide, or fix metadata.</p>
+    </div>
+    <div class="industry-radar-admin__actions">
+      <button type="button" class="btn btn--small btn--ghost" id="ir-fetch-missing-images" data-url="{{ url_for('control_industry_news_fetch_missing_thumbnails') }}">Fetch Missing Thumbnails</button>
+      <a href="{{ url_for('updates_page', section='news') }}" class="btn btn--ghost">News sources</a>
+      <a href="{{ url_for('industry_radar_page') }}" class="btn btn--ghost">View feed</a>
+    </div>
+  </header>
+
+  <div id="ir-fetch-missing-images-result" class="industry-radar-admin__status" hidden role="status" aria-live="polite"></div>
+
+  <form class="industry-radar__toolbar" method="get" action="{{ url_for('control_industry_news') }}">
+    <input type="search" name="q" class="input" value="{{ q|e }}" placeholder="Search…">
+    <select name="category" class="input input--sm"><option value="">All categories</option>{% for cat in categories %}<option value="{{ cat }}"{% if category == cat %} selected{% endif %}>{{ category_labels.get(cat, cat) }}</option>{% endfor %}</select>
+    <select name="region" class="input input--sm"><option value="">All regions</option>{% for reg in regions %}<option value="{{ reg }}"{% if region == reg %} selected{% endif %}>{{ region_labels.get(reg, reg) }}</option>{% endfor %}</select>
+    <select name="source_id" class="input input--sm"><option value="">All sources</option>{% for s in sources %}<option value="{{ s.id }}"{% if source_id == s.id %} selected{% endif %}>{{ s.name|e }}</option>{% endfor %}</select>
+    <select name="active" class="input input--sm">
+      <option value="">All visibility</option>
+      <option value="1"{% if active_filter == '1' %} selected{% endif %}>Active only</option>
+      <option value="0"{% if active_filter == '0' %} selected{% endif %}>Hidden only</option>
+    </select>
+    <button type="submit" class="btn btn--small btn--primary">Filter</button>
+  </form>
+
+  {% if items %}
+  <div class="industry-radar-admin-items">
+    {% for row in items %}
+    <article class="panel admin-card industry-radar-admin-item{% if not row.is_active %} industry-radar-admin-item--hidden{% endif %}">
+      <div class="industry-radar-admin-item__layout">
+        <div class="industry-radar-admin-thumb">
+          {{ industry_radar_thumb_row(row, 'industry-radar-thumb--admin', category_fallback_labels) }}
+        </div>
+        <div class="industry-radar-admin-item__main">
+          <div class="industry-radar__card-top industry-radar-meta">
+            <span class="industry-radar__badge industry-radar__badge--cat">{{ category_labels.get(row.category, row.category) }}</span>
+            <span class="industry-radar__badge industry-radar__badge--region">{{ region_labels.get(row.region, row.region) }}</span>
+            {% if row.is_featured %}<span class="industry-radar__badge industry-radar__badge--featured">Featured</span>{% endif %}
+            {% if row.is_pinned %}<span class="industry-radar__badge industry-radar__badge--pinned">Pinned</span>{% endif %}
+            {% if row.published_at %}<time class="muted">{{ row.published_at|fmt_cairo }}</time>{% endif %}
+          </div>
+          <h2 class="industry-radar-admin-item__title">{{ row.title|e }}</h2>
+          {% if row.summary %}<p class="muted industry-radar-admin-item__summary">{{ row.summary|truncate(300, True, '…')|e }}</p>{% endif %}
+          <p class="muted industry-radar-admin-item__meta">{{ (row.source_name or (row.source.name if row.source else ''))|e }} · <a href="{{ row.url|e }}" target="_blank" rel="noopener noreferrer">Open</a></p>
+          <div class="industry-radar-admin-item__actions">
+            <form method="post" action="{{ url_for('control_industry_news_toggle_pin', item_id=row.id) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" class="inline"><button type="submit" class="btn btn--tiny btn--ghost">{% if row.is_pinned %}Unpin{% else %}Pin{% endif %}</button></form>
+            <form method="post" action="{{ url_for('control_industry_news_toggle_feature', item_id=row.id) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" class="inline"><button type="submit" class="btn btn--tiny btn--ghost">{% if row.is_featured %}Unfeature{% else %}Feature{% endif %}</button></form>
+            <form method="post" action="{{ url_for('control_industry_news_toggle_active', item_id=row.id) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" class="inline"><button type="submit" class="btn btn--tiny btn--ghost">{% if row.is_active %}Hide{% else %}Show{% endif %}</button></form>
+            <form method="post" action="{{ url_for('control_industry_news_delete', item_id=row.id) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" class="inline" data-confirm="Delete this imported item?"><button type="submit" class="btn btn--tiny btn--danger">Delete</button></form>
+          </div>
+        </div>
+      </div>
+      <details class="industry-radar-admin-item__edit">
+        <summary class="btn btn--tiny btn--ghost">Edit metadata</summary>
+        <form method="post" action="{{ url_for('control_industry_news_update', item_id=row.id) }}{% if request.query_string %}?{{ request.query_string.decode() }}{% endif %}" class="industry-radar-source-form industry-radar-source-form--inline">
+          <label class="field"><span class="field-label">Title</span><input type="text" name="title" class="input" value="{{ row.title|e }}" required></label>
+          <label class="field field--grow"><span class="field-label">Summary</span><textarea name="summary" class="input" rows="3">{{ row.summary or '' }}</textarea></label>
+          <label class="field field--grow"><span class="field-label">Image URL</span><input type="url" name="image_url" class="input" value="{{ row.image_url or '' }}" placeholder="https://…" autocomplete="off"></label>
+          <label class="field industry-radar-source-form__active"><input type="checkbox" name="clear_image" value="1"> Clear image (use fallback visual)</label>
+          <label class="field"><span class="field-label">Category</span><select name="category" class="input">{% for cat in categories %}<option value="{{ cat }}"{% if row.category == cat %} selected{% endif %}>{{ category_labels.get(cat, cat) }}</option>{% endfor %}</select></label>
+          <label class="field"><span class="field-label">Region</span><select name="region" class="input">{% for reg in regions %}<option value="{{ reg }}"{% if row.region == reg %} selected{% endif %}>{{ region_labels.get(reg, reg) }}</option>{% endfor %}</select></label>
+          <button type="submit" class="btn btn--small btn--primary">Save</button>
+        </form>
+      </details>
+    </article>
+    {% endfor %}
+  </div>
+  {% if pagination.pages > 1 %}
+  <nav class="industry-radar__pagination" aria-label="Pagination">
+    <div class="industry-radar__pagination-slot industry-radar__pagination-slot--prev">
+      {% if pagination.has_prev %}
+      <a class="industry-radar__pagination-btn" href="{{ url_for('control_industry_news', page=pagination.prev_num, q=q, category=category, region=region, source_id=source_id or '', active=active_filter) }}">← Prev</a>
+      {% endif %}
+    </div>
+    <span class="industry-radar__pagination-status">Page {{ pagination.page }} of {{ pagination.pages }}</span>
+    <div class="industry-radar__pagination-slot industry-radar__pagination-slot--next">
+      {% if pagination.has_next %}
+      <a class="industry-radar__pagination-btn" href="{{ url_for('control_industry_news', page=pagination.next_num, q=q, category=category, region=region, source_id=source_id or '', active=active_filter) }}">Next →</a>
+      {% endif %}
+    </div>
+  </nav>
+  {% endif %}
+  {% else %}
+  <p class="muted industry-radar__empty">No imported items yet. Add sources and refresh feeds.</p>
+  {% endif %}
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/industry-radar.js') }}" defer></script>
+{% endblock %}

@@ -10207,7 +10207,7 @@ def create_app() -> Flask:
                 return redirect(url_for("index"))
         if ep == "updates_page" or ep.startswith("updates_api"):
             if acc is None or not account_can_access_admin_settings(acc):
-                flash("Only administrators can access Updates.", "error")
+                flash("Only administrators can access Updates & News.", "error")
                 return redirect(url_for("index"))
         if account_is_machine_room_role(acc):
             _path = request.path.rstrip("/")
@@ -32291,14 +32291,34 @@ def create_app() -> Flask:
     def updates_page():
         actor = account_from_session()
         if not account_can_access_admin_settings(actor):
-            flash("Only administrators can access Updates.", "error")
+            flash("Only administrators can access Updates & News.", "error")
             return redirect(url_for("index"))
-        payload = build_updates_admin_payload()
-        return render_template(
-            "updates.html",
-            updates_payload=payload,
-            update_category_labels=UPDATE_CATEGORY_LABELS,
-        )
+        section = str(request.args.get("section") or "product").strip().lower()
+        if section not in ("product", "news"):
+            section = "product"
+        template_kwargs = {
+            "active_section": section,
+            "update_category_labels": UPDATE_CATEGORY_LABELS,
+        }
+        if section == "news":
+            news_ctx = app.extensions.get("industry_news") or {}
+            template_kwargs.update(
+                industry_news_routes_mod.build_industry_news_sources_template_vars(
+                    news_ctx,
+                    app,
+                    group_filter=str(request.args.get("group") or "all"),
+                )
+            )
+            template_kwargs["updates_payload"] = {
+                "updates": [],
+                "projects": [],
+                "categories": list(UPDATE_CATEGORIES),
+                "categoryLabels": dict(UPDATE_CATEGORY_LABELS),
+                "importanceLevels": list(UPDATE_IMPORTANCE_LEVELS),
+            }
+        else:
+            template_kwargs["updates_payload"] = build_updates_admin_payload()
+        return render_template("updates.html", **template_kwargs)
 
     @app.route("/updates/api", methods=["GET"])
     def updates_api_list():

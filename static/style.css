@@ -20099,6 +20099,39 @@ body.vfx-dept-hub-body .vfx-dept-hub {
   padding-bottom: 48px;
 }
 
+.updates-page--news {
+  max-width: min(1180px, 100%);
+}
+
+.updates-page__nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 1.25rem;
+}
+
+.updates-page__nav-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.updates-page__nav-link:hover,
+.updates-page__nav-link:focus-visible {
+  border-color: var(--accent, #3b82f6);
+  outline: none;
+}
+
+.updates-page__nav-link.is-active {
+  border-color: var(--accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.12);
+}
+
 .updates-page__hero {
   display: flex;
   align-items: flex-start;

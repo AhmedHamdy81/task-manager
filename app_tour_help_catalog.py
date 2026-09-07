@@ -207,7 +207,7 @@ def build_tour_help_catalog(_: Callable[..., str]) -> dict[str, dict[str, Any]]:
                     ],
                     bullets=[
                         _("Browse by category and region when filters are available."),
-                        _("Admins manage sources and items under News sources / Industry news."),
+                        _("Admins manage sources and items under Updates & News / Industry news."),
                     ],
                     shots=[
                         shot(
@@ -2191,22 +2191,27 @@ def build_tour_help_catalog(_: Callable[..., str]) -> dict[str, dict[str, Any]]:
             ],
         ),
         "updates": page(
-            _("Updates"),
-            _("What’s New posts for the team."),
+            _("Updates & News"),
+            _("What’s New posts and Industry Radar feeds."),
             open_endpoint="updates_page",
-            open_label=_("Open Updates"),
+            open_label=_("Open Updates & News"),
             sections=[
                 section(
                     "overview",
                     _("What it does"),
                     paragraphs=[
-                        _("Updates is where administrators publish What’s New items that can appear on the Dashboard."),
+                        _("Updates & News is where administrators publish What’s New items for the Dashboard and manage Industry Radar feed sources."),
                     ],
                     shots=[
                         shot(
                             "updates.png",
-                            _("Updates"),
-                            _("Updates: What’s New posts."),
+                            _("Product updates"),
+                            _("Product updates: What’s New posts."),
+                        ),
+                        shot(
+                            "news-sources.png",
+                            _("News sources"),
+                            _("News sources: feeds for Industry Radar."),
                         )
                     ],
                 ),
@@ -2237,14 +2242,15 @@ def build_tour_help_catalog(_: Callable[..., str]) -> dict[str, dict[str, Any]]:
         "news-sources": page(
             _("News sources"),
             _("Feeds that power Industry Radar."),
-            open_endpoint="control_industry_news_sources",
+            open_endpoint="updates_page",
+            open_kwargs={"section": "news"},
             open_label=_("Open News sources"),
             sections=[
                 section(
                     "overview",
                     _("What it does"),
                     paragraphs=[
-                        _("News sources configure where Industry Radar content comes from."),
+                        _("News sources configure where Industry Radar content comes from. They live under Updates & News."),
                     ],
                     shots=[
                         shot(

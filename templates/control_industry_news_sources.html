@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Industry News Sources · {{ app_name }}{% endblock %}
+{% block body_class %}control-industry-news-sources{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/industry-radar.css') }}">
+{% endblock %}
+{% block content %}
+{% include "partials/industry_news_sources_body.html" %}
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/industry-radar.js') }}" defer></script>
+{% endblock %}

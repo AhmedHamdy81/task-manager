@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ _('Updates & News') }} · {{ app_name }}{% endblock %}
+{% block body_class %}updates-admin-page{% if active_section == 'news' %} updates-admin-page--news{% endif %}{% endblock %}
+{% block extra_head %}
+{% if active_section == 'news' %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/industry-radar.css') }}">
+{% endif %}
+{% endblock %}
+{% block content %}
+{% set active_section = active_section|default('product') %}
+<div class="updates-page{% if active_section == 'news' %} updates-page--news{% endif %}">
+  <header class="updates-page__hero">
+    <div class="updates-page__hero-text">
+      <h1>{{ _('Updates & News') }}</h1>
+      <p class="muted updates-page__lede">
+        {% if active_section == 'news' %}
+        Manage Industry Radar feeds and publish What’s New posts from one place.
+        {% else %}
+        Internal release notes — ship features, fixes, and workflow changes to the team dashboard.
+        {% endif %}
+      </p>
+    </div>
+    {% if active_section == 'product' %}
+    <button type="button" class="btn btn--primary" id="updates-create-open">New update</button>
+    {% endif %}
+  </header>
+
+  <nav class="updates-page__nav" aria-label="{{ _('Updates & News sections') }}">
+    <a class="updates-page__nav-link{% if active_section == 'product' %} is-active{% endif %}" href="{{ url_for('updates_page', section='product') }}" data-section="product">{{ _('Product updates') }}</a>
+    <a class="updates-page__nav-link{% if active_section == 'news' %} is-active{% endif %}" href="{{ url_for('updates_page', section='news') }}" data-section="news">{{ _('News sources') }}</a>
+  </nav>
+
+  {% if active_section == 'news' %}
+  {% include "partials/industry_news_sources_body.html" %}
+  {% else %}
+  <div class="updates-toolbar" role="toolbar" aria-label="Filter updates">
+    <label class="updates-toolbar__search">
+      <span class="sr-only">Search</span>
+      <input type="search" id="updates-search" class="input" placeholder="Search title, description, project…" autocomplete="off">
+    </label>
+    <div class="updates-toolbar__filters">
+      <select id="updates-filter-category" class="input input--sm" aria-label="Category">
+        <option value="">All categories</option>
+      </select>
+      <select id="updates-filter-publish" class="input input--sm" aria-label="Publish state">
+        <option value="">All entries</option>
+        <option value="published">Published to dashboard</option>
+        <option value="draft">Not published</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="updates-feed" class="updates-feed" aria-live="polite"></div>
+  <p id="updates-feed-empty" class="muted updates-feed__empty" hidden>No updates match your filters.</p>
+
+  <script type="application/json" id="updates-initial-payload">{{ updates_payload | tojson }}</script>
+
+  <dialog id="updates-create-dialog" class="updates-dialog">
+    <form id="updates-create-form" class="updates-dialog__inner" method="dialog">
+      <header class="updates-dialog__head">
+        <h2 id="updates-dialog-title">New update</h2>
+        <button type="button" class="btn btn--small btn--ghost updates-dialog__close" id="updates-dialog-close" aria-label="Close">×</button>
+      </header>
+      <label class="updates-field">
+        <span>Title</span>
+        <input type="text" name="title" id="updates-form-title" class="input" maxlength="240" required placeholder="Short headline">
+      </label>
+      <label class="updates-field">
+        <span>Description</span>
+        <textarea name="description" id="updates-form-description" class="input" rows="5" maxlength="50000" placeholder="What changed and why it matters…"></textarea>
+      </label>
+      <div class="updates-field-row">
+        <label class="updates-field">
+          <span>Category</span>
+          <select name="category" id="updates-form-category" class="input"></select>
+        </label>
+        <label class="updates-field">
+          <span>Importance</span>
+          <select name="importance" id="updates-form-importance" class="input">
+            <option value="minor">Minor</option>
+            <option value="normal" selected>Normal</option>
+            <option value="major">Major</option>
+            <option value="critical">Critical</option>
+          </select>
+        </label>
+      </div>
+      <label class="updates-field">
+        <span>Related project (optional)</span>
+        <select name="project_id" id="updates-form-project" class="input">
+          <option value="">— None —</option>
+        </select>
+      </label>
+      <label class="updates-publish-row">
+        <input type="checkbox" id="updates-form-publish" name="publish">
+        <span>Publish to Dashboard</span>
+      </label>
+      <p id="updates-form-msg" class="muted updates-form-msg" role="status"></p>
+      <footer class="updates-dialog__foot">
+        <button type="button" class="btn btn--ghost" id="updates-form-cancel">Cancel</button>
+        <button type="submit" class="btn btn--primary" id="updates-form-submit">Save update</button>
+      </footer>
+    </form>
+  </dialog>
+  {% endif %}
+</div>
+{% endblock %}
+{% block extra_scripts %}
+{% if active_section == 'news' %}
+<script src="{{ url_for('static', filename='js/industry-radar.js') }}" defer></script>
+{% else %}
+<script src="{{ url_for('static', filename='js/updates-admin.js') }}" defer></script>
+{% endif %}
+{% endblock %}

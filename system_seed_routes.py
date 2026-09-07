@@ -168,7 +168,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             last_seed_run=last_run,
             seed_report=seed_report,
             seed_run_url=url_for("control_system_seed_run"),
-            industry_radar_sources_url=url_for("control_industry_news_sources"),
+            industry_radar_sources_url=url_for("updates_page", section="news"),
             industry_radar_rebuild_url=url_for("control_industry_news_sources_rebuild"),
             seed_confirm_message=SEED_CONFIRM_MESSAGE,
             working_hours_backfill_url=url_for("control_working_hours_backfill"),
@@ -216,10 +216,26 @@ def register_system_seed_routes(app, ctx: dict) -> None:
     def control_system_setup_email():
         acc = _admin_required()
         payload = _mail_form_payload()
-        replace_password = (
+        replace_requested = (
             str(request.form.get("replace_password") or "").strip().lower()
             in {"1", "true", "yes", "on"}
-        ) and not (os.environ.get(mail_settings_mod.MAIL_PASSWORD_ENV) or "").strip()
+        )
+        submitted_password = str(payload.get("mail_password") or "")
+        password_is_env_locked = bool(
+            (os.environ.get(mail_settings_mod.MAIL_PASSWORD_ENV) or "").strip()
+        )
+        # First-time setup has no visible "Replace password" button, so accept
+        # the entered secret even if older JavaScript leaves the hidden flag at
+        # zero. Existing secrets still require the explicit replace action.
+        replace_password = bool(
+            submitted_password
+            and submitted_password != mail_settings_mod.MAIL_PASSWORD_PLACEHOLDER
+            and not password_is_env_locked
+            and (
+                replace_requested
+                or not mail_settings_mod.mail_password_configured(app_root=app_root)
+            )
+        )
         before = mail_settings_mod.resolve_mail_config(
             models.SystemSetting, app=app, app_root=app_root, include_password=True
         )

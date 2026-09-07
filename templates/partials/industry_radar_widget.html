@@ -1,0 +1,48 @@
+{% if show_industry_radar|default(false) %}
+<section class="industry-radar industry-radar--widget industry-radar-widget" id="industry-radar-widget" aria-labelledby="industry-radar-title">
+  <div class="industry-radar__head">
+    <div>
+      <h2 class="industry-radar__title" id="industry-radar-title">Industry Radar</h2>
+      <p class="muted industry-radar__lede">Cached cinema &amp; post-production headlines — no live fetch on this page.</p>
+    </div>
+  </div>
+
+  <div class="industry-radar__filters">
+    <div class="industry-radar__filter-chips" role="tablist" aria-label="Filter industry news">
+      <button type="button" class="industry-radar__chip industry-radar__chip--active" data-ir-filter="all" aria-pressed="true">All</button>
+      <button type="button" class="industry-radar__chip" data-ir-filter="cinema" aria-pressed="false">Cinema</button>
+      <button type="button" class="industry-radar__chip" data-ir-filter="awards" aria-pressed="false">Awards</button>
+      <button type="button" class="industry-radar__chip" data-ir-filter="festivals" aria-pressed="false">Festivals</button>
+      <button type="button" class="industry-radar__chip" data-ir-filter="post_production" aria-pressed="false">Post-production</button>
+      <button type="button" class="industry-radar__chip" data-ir-filter="vfx" aria-pressed="false">VFX</button>
+      <button type="button" class="industry-radar__chip" data-ir-filter="mena" data-ir-region="1" aria-pressed="false">Egypt / MENA</button>
+      <button type="button" class="industry-radar__chip" data-ir-filter="technology" aria-pressed="false">Technology</button>
+    </div>
+    <a href="{{ url_for('industry_radar_page') }}" class="btn btn--small btn--ghost industry-radar__view-all">View all</a>
+  </div>
+
+  {% if industry_radar_items %}
+  <div class="industry-radar-widget__scroll">
+  <ul class="industry-radar-widget__layout" role="list" id="industry-radar-list">
+    {% include 'partials/industry_radar_widget_items.html' %}
+  </ul>
+  </div>
+  <p
+    class="muted industry-radar__widget-foot"
+    id="industry-radar-widget-foot"
+    {% if industry_radar_total|default(0) <= industry_radar_items|length %}hidden{% endif %}
+  >
+    <span id="industry-radar-widget-foot-text">Showing {{ industry_radar_items|length }} of {{ industry_radar_total }} headlines.</span>
+    <a href="{{ url_for('industry_radar_page') }}" id="industry-radar-widget-foot-link">View all</a>
+  </p>
+  <p class="muted industry-radar__empty industry-radar__empty--filtered" id="industry-radar-filtered-empty" hidden>No items in this filter.</p>
+  {% else %}
+  <div class="industry-radar__empty">
+    <p class="muted">No industry updates yet.</p>
+    {% if current_account_is_admin %}
+    <p class="muted industry-radar__empty-hint">Add sources and refresh feeds from <a href="{{ url_for('updates_page', section='news') }}">Industry News Sources</a>.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}

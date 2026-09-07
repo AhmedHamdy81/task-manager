@@ -81,10 +81,13 @@
     var replaceFlag = document.getElementById("mail-replace-password");
     var replaceBtn = document.getElementById("mail-password-replace");
     var toggleBtn = document.getElementById("mail-password-toggle");
+    var cancelBtn = document.getElementById("mail-password-cancel");
     var testBtn = document.getElementById("mail-test-btn");
     var testRecipient = document.getElementById("mail-test-recipient");
     var testResult = document.getElementById("mail-test-result");
     var testing = false;
+    var passwordPlaceholder = passwordInput ? passwordInput.getAttribute("placeholder") || "" : "";
+    var initialFormState = "";
     var providers = {};
     try {
       providers = JSON.parse(form.getAttribute("data-providers") || "{}") || {};
@@ -107,6 +110,24 @@
       if (saveState) {
         saveState.textContent = "";
         saveState.classList.remove("is-dirty");
+      }
+    }
+
+    function currentFormState() {
+      return JSON.stringify(
+        Array.from(form.elements || []).map(function (el) {
+          var key = el.name || el.id || el.type || "";
+          var value = el.type === "checkbox" || el.type === "radio" ? !!el.checked : el.value || "";
+          return [key, value];
+        })
+      );
+    }
+
+    function syncDirtyState() {
+      if (currentFormState() === initialFormState) {
+        clearDirty();
+      } else {
+        markDirty();
       }
     }
 
@@ -163,6 +184,8 @@
       clearDirty();
     });
 
+    initialFormState = currentFormState();
+
     if (providerSelect) {
       providerSelect.addEventListener("change", function () {
         applyProviderPreset(providerSelect.value);
@@ -174,12 +197,32 @@
       replaceBtn.addEventListener("click", function () {
         replaceFlag.value = "1";
         passwordInput.readOnly = false;
+        passwordInput.type = "password";
         passwordInput.value = "";
         passwordInput.placeholder = "";
         passwordInput.focus();
         if (toggleBtn) toggleBtn.hidden = false;
+        if (cancelBtn) cancelBtn.hidden = false;
         replaceBtn.hidden = true;
         markDirty();
+      });
+    }
+
+    if (cancelBtn && passwordInput && replaceFlag) {
+      cancelBtn.addEventListener("click", function () {
+        var hadConfiguredPassword = !!passwordPlaceholder;
+        replaceFlag.value = hadConfiguredPassword ? "0" : "1";
+        passwordInput.type = "password";
+        passwordInput.value = "";
+        passwordInput.placeholder = passwordPlaceholder;
+        passwordInput.readOnly = hadConfiguredPassword;
+        if (toggleBtn) {
+          toggleBtn.hidden = hadConfiguredPassword;
+          toggleBtn.textContent = "Show";
+        }
+        cancelBtn.hidden = true;
+        if (replaceBtn) replaceBtn.hidden = !hadConfiguredPassword;
+        syncDirtyState();
       });
     }
 
