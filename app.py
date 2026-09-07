@@ -9803,6 +9803,10 @@ def create_app() -> Flask:
         if "ignored_missing_info" not in set(insp.get_table_names()):
             IgnoredMissingInfo.__table__.create(bind=db.engine, checkfirst=True)
 
+    def ensure_sqlite_safe_delete_challenge_table() -> None:
+        """Safe Delete bootstrap is not wired in this branch yet."""
+        return
+
     def ensure_seed_product_update_client_review_mode() -> None:
         """Publish one What's New entry for Client Review Mode (idempotent by title)."""
         title = "Client Review Mode — external review links"
@@ -9946,6 +9950,8 @@ def create_app() -> Flask:
                 f.write("ok\n")
         except OSError:
             pass
+
+    app_root = os.path.dirname(os.path.abspath(__file__))
 
     with app.app_context():
         db.create_all()
@@ -16950,8 +16956,6 @@ def create_app() -> Flask:
             ).count()
         )
 
-    @app.route("/")
-
     def count_dashboard_request_stats(
         project_ids: set[int] | list[int] | None, uid: int
     ) -> tuple[int, int]:
@@ -16960,6 +16964,7 @@ def create_app() -> Flask:
 
         return _wrs.count_open_for_dashboard(WorkRequest, project_ids, uid)
 
+    @app.route("/")
     def index():
         acc = db.session.get(Account, session.get("account_id"))
         vis = visible_project_ids_for_account(acc)
@@ -18326,6 +18331,11 @@ def create_app() -> Flask:
             initial_message_id=initial_message_id,
             initial_conference_id=initial_conference_id,
         )
+
+    @app.route("/tour")
+    def app_tour():
+        """Take a Tour landing page with links to illustrated help cards."""
+        return render_template("app_tour.html")
 
     @app.route("/tour/help/<slug>")
     def app_tour_help(slug: str):
@@ -34828,6 +34838,7 @@ def create_app() -> Flask:
         "ColorActivity": ColorActivity,
         "ColorEpisodeGalleryBatch": ColorEpisodeGalleryBatch,
         "ColorEpisodeGalleryFrame": ColorEpisodeGalleryFrame,
+        "ColorEpisodeGalleryFrameComment": None,
         "ColorEpisodeGalleryShare": ColorEpisodeGalleryShare,
         "EditingItem": EditingItem,
         "EditingItemVersion": EditingItemVersion,
