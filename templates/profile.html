@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block title %}{{ account.display_name }} · Profile · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/employment-structure-workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/account-approvals.css') }}?v=1">
+{% endblock %}
 {% block content %}
+{% if account_restricted %}
+<p class="profile-pending-role-notice">{{ account_status_label }} — limited profile access until an administrator approves your account.</p>
+{% elif pending_role_request %}
+<p class="profile-pending-role-notice">You have profile changes awaiting administrator approval. Your current approved role and department remain active.</p>
+{% endif %}
+{% if account_status_label %}
+<p>
+  <span class="account-status-badge {{ account_status_badge_class }}">{{ account_status_label }}</span>
+</p>
+{% endif %}
 <div class="page-head profile-page-head">
   <div class="profile-head-preview">
     <button type="button" class="profile-avatar-click" id="avatar-click" aria-haspopup="dialog" aria-expanded="false" aria-controls="avatar-modal" title="Update photo">
@@ -31,15 +45,62 @@
       <span class="field-label">Phone</span>
       <input type="tel" name="phone" maxlength="40" autocomplete="tel" value="{{ directory_user.phone if directory_user and directory_user.phone else '' }}" placeholder="Optional">
     </label>
+    {% if not account_restricted %}
     <label class="field">
-      <span class="field-label">Job title</span>
-      <select name="job_title_id" aria-label="Job title">
-        <option value="">— None —</option>
-        {% for jt in job_titles %}
-        <option value="{{ jt.id }}"{% if directory_user and directory_user.job_title_id == jt.id %} selected{% endif %}>{{ jt.name }}</option>
-        {% endfor %}
-      </select>
+      <span class="field-label">Company</span>
+      <input type="text" name="company" maxlength="160" value="{{ directory_user.company if directory_user and directory_user.company else '' }}" placeholder="Optional">
     </label>
+    <label class="field">
+      <span class="field-label">Department</span>
+      <input type="text" name="department_code" maxlength="40" value="{{ directory_user.department_code if directory_user and directory_user.department_code else '' }}" placeholder="e.g. editing">
+    </label>
+    <div class="field profile-job-titles-field">
+      <span class="field-label">Job titles</span>
+      <div class="profile-job-titles">
+        <div class="users-job-title-assigned profile-job-titles-assigned">
+          <ul class="users-job-title-chip-list" id="profile-job-title-list">
+            {% if directory_user %}
+            {% for jt in directory_user.assigned_job_titles() %}
+            <li class="users-job-title-assigned-item" data-job-title-id="{{ jt.id }}">
+              <span class="users-job-title-assigned-item__label">{% if jt.category and jt.category.name %}{{ jt.category.name }} / {% endif %}{{ jt.name }}</span>
+              <button type="button" class="users-job-title-assigned-item__remove" aria-label="Remove {{ jt.name }}">×</button>
+            </li>
+            {% endfor %}
+            {% endif %}
+          </ul>
+          <p class="muted users-job-title-assigned-empty" id="profile-job-title-empty"{% if directory_user and directory_user.assigned_job_titles() %} hidden{% endif %}>No job titles yet.</p>
+        </div>
+        <div class="users-job-title-picker profile-job-title-picker">
+          <label class="field users-job-title-picker-col">
+            <span class="field-label">Department</span>
+            <select id="profile-job-title-category" class="input" aria-label="Department">
+              <option value="">— None —</option>
+            </select>
+          </label>
+          <label class="field users-job-title-picker-col">
+            <span class="field-label">Add job title</span>
+            <select id="profile-job-title-select" class="input" aria-label="Job title to add" disabled>
+              <option value="">— None —</option>
+            </select>
+          </label>
+          <div class="users-job-title-add-wrap">
+            <span class="field-label users-job-title-add-label" aria-hidden="true">Add</span>
+            <button type="button" class="btn btn--small" id="profile-job-title-add">Add</button>
+          </div>
+        </div>
+        <div id="profile-job-title-hidden-inputs" hidden aria-hidden="true">
+          {% if directory_user %}
+          {% for jt in directory_user.assigned_job_titles() %}
+          <input type="hidden" name="job_title_ids" value="{{ jt.id }}">
+          {% endfor %}
+          {% endif %}
+        </div>
+      </div>
+      {% if job_title_picker_data is defined %}
+      <script type="application/json" id="profile-job-title-data">{{ job_title_picker_data | tojson }}</script>
+      {% endif %}
+    </div>
+    {% endif %}
     {% if account.username %}
     <p class="profile-readonly">
       <span class="field-label">Username</span>
@@ -51,6 +112,43 @@
     <button type="submit" class="btn btn--primary">Save profile</button>
   </form>
 </section>
+
+{% if employment_policy %}
+<section class="panel profile-panel profile-employment-panel">
+  <h2 class="panel-title">Employment structure</h2>
+  <p class="muted profile-employment-lede">Default post-production access for your employment category. Project membership and role permissions still apply.</p>
+  <div class="profile-employment-summary">
+    <span class="emp-badge {{ employment_policy.badge_class }}">{{ employment_policy.employment_name }}</span>
+    {% if employment_policy.flags %}
+    <ul class="profile-employment-flags muted">
+      <li>{% if employment_policy.flags.can_be_assigned_to_projects %}Can be assigned to projects{% else %}Not assignable to projects{% endif %}</li>
+      <li>{% if employment_policy.flags.can_access_internal_files %}Internal file access{% else %}No internal file access{% endif %}</li>
+      <li>{% if employment_policy.flags.can_access_external_review_links %}External review links{% else %}No external review links{% endif %}</li>
+    </ul>
+    {% endif %}
+  </div>
+  {% if employment_policy.scope_chips %}
+  <div class="profile-employment-scopes">
+    <span class="field-label">Employment allowed scopes</span>
+    <div class="emp-scope-chip-list">
+      {% for chip in employment_policy.scope_chips %}
+      <span class="emp-scope-chip" title="{{ chip.level|replace('_', ' ') }}">{{ chip.name }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if job_title_scope_chips is defined and job_title_scope_chips %}
+  <div class="profile-employment-scopes">
+    <span class="field-label">Eligible scopes (job title)</span>
+    <div class="emp-scope-chip-list">
+      {% for chip in job_title_scope_chips %}
+      <span class="emp-scope-chip" title="{{ chip.level|replace('_', ' ') }}">{{ chip.name }}</span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
 
 <section class="panel profile-panel">
   <h2 class="panel-title">Change password</h2>
@@ -71,6 +169,54 @@
     </label>
     <button type="submit" class="btn btn--primary">Update password</button>
   </form>
+</section>
+
+<section class="panel profile-panel">
+  <h2 class="panel-title">Appearance</h2>
+  <p class="muted profile-password-intro">Choose your preferred color theme and display mode. Changes apply right away on this device.</p>
+  <div class="profile-appearance-grid" id="profile-appearance">
+    <div class="profile-appearance-group">
+      <span class="field-label">Color theme</span>
+      <div class="profile-segmented" role="radiogroup" aria-label="Color theme">
+        <label class="profile-segment">
+          <input class="profile-segment-input" type="radio" name="appearance-accent" value="default" checked>
+          <span class="profile-segment-label">Default</span>
+        </label>
+        <label class="profile-segment">
+          <input class="profile-segment-input" type="radio" name="appearance-accent" value="ocean">
+          <span class="profile-segment-label">Ocean</span>
+        </label>
+        <label class="profile-segment">
+          <input class="profile-segment-input" type="radio" name="appearance-accent" value="violet">
+          <span class="profile-segment-label">Violet</span>
+        </label>
+        <label class="profile-segment">
+          <input class="profile-segment-input" type="radio" name="appearance-accent" value="amber">
+          <span class="profile-segment-label">Amber</span>
+        </label>
+      </div>
+      <p class="muted profile-appearance-note">Changes the accent color used by buttons, focus rings, and highlights.</p>
+    </div>
+
+    <div class="profile-appearance-group">
+      <span class="field-label">Mode</span>
+      <div class="profile-segmented" role="radiogroup" aria-label="Appearance mode">
+        <label class="profile-segment">
+          <input class="profile-segment-input" type="radio" name="appearance-mode" value="dark" checked>
+          <span class="profile-segment-label">Dark</span>
+        </label>
+        <label class="profile-segment">
+          <input class="profile-segment-input" type="radio" name="appearance-mode" value="light">
+          <span class="profile-segment-label">Light</span>
+        </label>
+        <label class="profile-segment">
+          <input class="profile-segment-input" type="radio" name="appearance-mode" value="system">
+          <span class="profile-segment-label">System</span>
+        </label>
+      </div>
+      <p class="muted profile-appearance-note">Dark and Light switch immediately. System follows your device preference.</p>
+    </div>
+  </div>
 </section>
 
 <p class="profile-page-foot muted">Your name and photo appear in the header. Sign-in still uses your email{% if account.username %} or @{{ account.username }}{% endif %}.</p>
@@ -103,5 +249,7 @@
 </div>
 {% endblock %}
 {% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/profile-job-titles.js') }}?v=2" defer></script>
 <script src="{{ url_for('static', filename='js/profile-avatar.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/profile-appearance.js') }}" defer></script>
 {% endblock %}

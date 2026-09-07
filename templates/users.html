@@ -1,101 +1,514 @@
 {% extends "base.html" %}
 {% block title %}Users · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/employment-structure-workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/account-approvals.css') }}?v=6">
+{% endblock %}
 {% block content %}
-<div class="page-head">
-  <h1>Users</h1>
-  <p class="muted">People who <strong>register</strong> appear here automatically. <strong>Administrators</strong> can set account type (including Super user) and <strong>job title</strong> for each user. Add others below for collaborators without a login. Deleting removes their tasks; <strong>registered</strong> rows cannot be deleted here.</p>
+<div class="page-head users-page-head">
+  <div class="users-page-head__copy">
+    <h1>Users</h1>
+    <p class="muted">People who <strong>register</strong> appear here automatically. <strong>Administrators</strong> set <strong>user type</strong>, <strong>job title</strong>, and <strong>access role</strong> for registered users. Use <strong>Create user</strong> for collaborators without a login.</p>
+  </div>
+  {% if current_account_is_admin and approval_queue_counts %}
+  <p class="users-approval-links">
+    <a href="{{ url_for('admin_approvals', tab='pending_users') }}" class="btn btn--small btn--ghost">Pending users ({{ approval_queue_counts.pending_users }})</a>
+    <a href="{{ url_for('admin_approvals', tab='role_requests') }}" class="btn btn--small btn--ghost">Role requests ({{ approval_queue_counts.role_requests }})</a>
+  </p>
+  {% endif %}
 </div>
 
-<section class="panel">
-  <h2 class="panel-title">Add external user</h2>
-  <form class="form-row" method="post" action="{{ url_for('users_create') }}">
-    <label class="field">
-      <span class="field-label">Name</span>
-      <input type="text" name="name" required autocomplete="name" placeholder="Jane Doe">
-    </label>
-    <label class="field">
-      <span class="field-label">Email</span>
-      <input type="email" name="email" required autocomplete="email" placeholder="jane@example.com">
-    </label>
-    <button type="submit" class="btn btn--primary">Create</button>
-  </form>
+<section class="panel users-add-panel">
+  <h2 class="panel-title">Directory</h2>
+  <div class="users-add-panel-toolbar">
+    {% if users %}
+    <div class="users-add-panel-filters" role="search" aria-label="Filter users">
+      <label class="field users-filter-field users-filter-field--search">
+        <span class="field-label">Search by name</span>
+        <input
+          type="search"
+          id="users-name-filter"
+          class="input"
+          placeholder="Name or email…"
+          autocomplete="off"
+          aria-controls="users-grid"
+          aria-label="Filter users by name or email"
+        >
+      </label>
+      <label class="field users-filter-field">
+        <span class="field-label">Account</span>
+        <select id="users-filter-account" class="input" aria-label="Filter by account type">
+          <option value="">All</option>
+          <option value="registered">Registered</option>
+          <option value="external">External</option>
+        </select>
+      </label>
+      <label class="field users-filter-field">
+        <span class="field-label">User type</span>
+        <select id="users-filter-user-type" class="input" aria-label="Filter by user type">
+          <option value="">All</option>
+          <option value="employee">Employee</option>
+          <option value="client">Client / Guest</option>
+        </select>
+      </label>
+      <label class="field users-filter-field">
+        <span class="field-label">Access role</span>
+        <select id="users-filter-role" class="input" aria-label="Filter by access role">
+          <option value="">All</option>
+          {% if user_access_config is defined and user_access_config.role_labels %}
+          {% for key, label in user_access_config.role_labels.items() %}
+          <option value="{{ key }}">{{ label }}</option>
+          {% endfor %}
+          {% else %}
+          {% for r in account_roles %}
+          <option value="{{ r }}">{{ role_labels[r] }}</option>
+          {% endfor %}
+          {% endif %}
+        </select>
+      </label>
+      <label class="field users-filter-field">
+        <span class="field-label">Post-production scope</span>
+        <select id="users-filter-post-scope" class="input" aria-label="Filter by post-production scope">
+          <option value="">All</option>
+          <option value="__none__">— None linked —</option>
+          {% for key, label, hint in post_scope_fields %}
+          <option value="{{ key }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field users-filter-field users-filter-field--job-title">
+        <span class="field-label">Job title</span>
+        <select id="users-filter-job-title" class="input js-searchable-select" aria-label="Filter by job title" data-searchable-placeholder="Search job titles…">
+          <option value="">All</option>
+          <option value="__none__">— None —</option>
+          {% for cat_name, titles in job_title_groups %}
+          <optgroup label="{{ cat_name }}">
+            {% for jt in titles %}
+            <option value="{{ jt.id }}">{{ jt.name }}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    {% endif %}
+    <div class="users-add-panel-actions">
+      <button
+        type="button"
+        class="btn btn--primary"
+        id="users-create-open"
+        aria-haspopup="dialog"
+        aria-controls="users-create-dialog"
+        aria-expanded="false"
+      >Create user</button>
+    </div>
+  </div>
 </section>
 
-<section class="panel panel--table">
+<dialog class="project-team-modal users-create-dialog" id="users-create-dialog" aria-labelledby="users-create-dialog-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="users-create-dialog-title" class="project-team-modal-title">Add external user</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-users-create-dialog-close aria-label="Close">Close</button>
+    </div>
+    <form class="form-stack users-create-form" method="post" action="{{ url_for('users_create') }}">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input type="text" name="name" required autocomplete="name" placeholder="Jane Doe">
+      </label>
+      <label class="field">
+        <span class="field-label">Email</span>
+        <input type="email" name="email" required autocomplete="email" placeholder="jane@example.com">
+      </label>
+      <p class="muted users-create-hint">External users have no login. After someone registers with this email, use <strong>Edit access</strong> to set their user type and job title.</p>
+      <button type="submit" class="btn btn--primary">Create</button>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="project-team-modal users-access-dialog" id="users-access-dialog" aria-labelledby="users-access-dialog-title"{% if current_account_is_admin %} data-is-admin="1"{% endif %}>
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="users-access-dialog-title" class="project-team-modal-title">Edit access</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-users-access-close aria-label="Close">Close</button>
+    </div>
+    <p class="muted users-access-dialog-user">User: <strong id="users-access-user-name"></strong></p>
+    <p class="muted users-access-dialog-hint">External users can edit name and email on the user card. Registered users keep these fields in sync with their login account.</p>
+    <form id="users-access-form" method="post" action="" class="form-stack users-access-form">
+      <label class="field">
+        <span class="field-label">User type <span class="field-required" aria-hidden="true">*</span></span>
+        <select name="user_type" id="users-access-user-type" class="input" required>
+          <option value="employee">Employee</option>
+          <option value="client">Client / Guest</option>
+        </select>
+      </label>
+
+      <div class="users-access-job-titles users-job-title-assigned">
+        <span class="field-label">Job titles <span class="field-required" aria-hidden="true">*</span></span>
+        <ul class="users-job-title-chip-list" id="users-access-job-title-chips"></ul>
+        <p class="muted users-job-title-assigned-empty" id="users-access-job-title-empty" hidden>No job titles selected.</p>
+        <p class="muted users-access-helper">Access role defaults from the first selected job title.</p>
+        <p class="users-access-employment-warn muted" id="users-access-employment-warn" hidden role="status">
+          This job title is not normally used with this employment type.
+        </p>
+      </div>
+
+      <div class="users-job-title-picker users-access-job-title-picker">
+        <label class="field users-job-title-picker-col">
+          <span class="field-label">Category</span>
+          <select id="users-access-job-category" class="input" aria-label="Job category">
+            <option value="">— Select category —</option>
+          </select>
+        </label>
+        <label class="field users-job-title-picker-col">
+          <span class="field-label">Job title</span>
+          <select id="users-access-job-title-select" class="input" aria-label="Job title to add" disabled>
+            <option value="">— Select job title —</option>
+          </select>
+        </label>
+        <div class="users-job-title-add-wrap">
+          <button type="button" class="btn btn--small" id="users-access-job-title-add">Add</button>
+        </div>
+      </div>
+
+      <label class="field users-access-manual-role-field" id="users-access-manual-role-wrap">
+        <span class="field-label">Access role</span>
+        <select name="role" id="users-access-manual-role" class="input">
+        </select>
+        <p class="muted users-access-helper" id="users-access-role-helper">Defaults from the job title; admins can choose a different role.</p>
+      </label>
+
+      <div class="users-access-mismatch" id="users-access-mismatch" hidden>
+        <p class="users-access-mismatch__text">
+          Access role is <strong id="users-access-mismatch-current"></strong>
+          but the job title default is <strong id="users-access-mismatch-default"></strong>.
+        </p>
+        <button type="button" class="btn btn--small btn--ghost users-access-apply-default" id="users-access-apply-default">Apply default role</button>
+      </div>
+
+      <div class="users-access-role-preview" id="users-access-role-preview" hidden>
+        <span class="field-label">Role summary</span>
+        <p class="users-access-role-preview__label" id="users-access-role-label"></p>
+        <p class="muted users-access-role-preview__desc" id="users-access-role-desc"></p>
+      </div>
+      <input type="hidden" name="role_override" id="users-access-role-override" value="1">
+
+      <p class="users-access-guest-reminder muted" id="users-access-guest-reminder" hidden>
+        Guest users can only see assigned projects. Add this guest to one or more projects after saving.
+      </p>
+
+      <div class="users-access-dialog-actions">
+        <button type="submit" class="btn btn--primary">Save access</button>
+      </div>
+    </form>
+    {% if user_employment_policy is defined %}
+    <script type="application/json" id="users-employment-policy">{{ user_employment_policy | tojson }}</script>
+    {% endif %}
+    {% if user_access_config is defined %}
+    <script type="application/json" id="users-access-config">{{ user_access_config | tojson }}</script>
+    {% endif %}
+  </div>
+</dialog>
+
+{% if job_title_picker_data is defined %}
+<script type="application/json" id="users-job-title-data">{{ job_title_picker_data | tojson }}</script>
+{% endif %}
+
+<dialog class="project-team-modal users-job-title-dialog" id="users-job-title-dialog" aria-labelledby="users-job-title-dialog-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="users-job-title-dialog-title" class="project-team-modal-title">Manage job titles</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-users-job-title-close aria-label="Close">Close</button>
+    </div>
+    <p class="muted users-job-title-dialog-user">User: <strong id="users-job-title-user-name"></strong></p>
+    <form id="users-job-title-form" method="post" action="" class="form-stack users-job-title-form">
+      <div class="users-job-title-assigned">
+        <span class="field-label">Assigned</span>
+        <ul class="users-job-title-chip-list" id="users-job-title-chip-list"></ul>
+        <p class="muted users-job-title-assigned-empty" id="users-job-title-assigned-empty" hidden>No job titles yet.</p>
+      </div>
+      <div class="users-job-title-picker">
+        <label class="field users-job-title-picker-col">
+          <span class="field-label">Department</span>
+          <select id="users-job-title-category" class="input" aria-label="Department">
+            <option value="">— None —</option>
+          </select>
+        </label>
+        <label class="field users-job-title-picker-col">
+          <span class="field-label">Add job title</span>
+          <select id="users-job-title-modal-select" class="input" aria-label="Job title to add" disabled>
+            <option value="">— None —</option>
+          </select>
+        </label>
+        <div class="users-job-title-add-wrap">
+          <button type="button" class="btn btn--small" id="users-job-title-add">Add</button>
+        </div>
+      </div>
+      <div id="users-job-title-hidden-inputs" hidden aria-hidden="true"></div>
+      <div class="users-job-title-dialog-actions">
+        <button type="submit" class="btn btn--primary">Save</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<dialog class="project-team-modal users-lifecycle-dialog" id="users-lifecycle-dialog" aria-labelledby="users-lifecycle-dialog-title">
+  <div class="project-team-modal-inner">
+    <div class="project-team-modal-head">
+      <h2 id="users-lifecycle-dialog-title" class="project-team-modal-title">Suspend account</h2>
+      <button type="button" class="btn btn--small btn--ghost" data-users-lifecycle-close aria-label="Close">Close</button>
+    </div>
+
+    <p class="muted">Suspension affects login and access immediately. Existing projects, tasks, and chat history remain unchanged.</p>
+
+    <form id="users-suspend-form" method="post" action="" class="form-stack users-lifecycle-form">
+      <input type="hidden" name="account_id" id="users-lifecycle-account-id-suspend">
+      <label class="field">
+        <span class="field-label">Reason <span class="field-required" aria-hidden="true">*</span></span>
+        <textarea name="reason" class="input" rows="4" required placeholder="Why is this account being suspended?"></textarea>
+      </label>
+      <label class="field">
+        <span class="field-label">Optional suspension end date</span>
+        <input type="date" name="end_date" class="input">
+      </label>
+      <label class="field">
+        <span class="field-label">Notes</span>
+        <textarea name="notes" class="input" rows="3" placeholder="Optional administrator notes."></textarea>
+      </label>
+      <div class="users-lifecycle-actions">
+        <button type="submit" class="btn btn--primary">Suspend</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<section class="panel users-dock-panel">
   {% if users %}
-  <table class="data-table data-table--users">
-    <thead>
-      <tr>
-        <th scope="col">Name</th>
-        <th scope="col">Email</th>
-        <th scope="col">Job title</th>
-        <th scope="col">Account</th>
-        <th scope="col">Role</th>
-        <th scope="col">Tasks</th>
-        <th scope="col"><span class="sr-only">Actions</span></th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for u in users %}
-      <tr>
-        <td>
-          <form id="edit-user-{{ u.id }}" method="post" action="{{ url_for('users_update', user_id=u.id) }}"></form>
-          <input form="edit-user-{{ u.id }}" type="text" name="name" value="{{ u.name }}" required class="input-inline">
-        </td>
-        <td>
-          <input form="edit-user-{{ u.id }}" type="email" name="email" value="{{ u.email }}" required class="input-inline" {% if u.account_id %}title="Linked to login — email stays in sync with the account"{% endif %}>
-        </td>
-        <td>
-          <form method="post" action="{{ url_for('users_set_job_title', user_id=u.id) }}" class="role-form">
-            <label class="sr-only" for="job-title-{{ u.id }}">Job title for {{ u.name }}</label>
-            <select name="job_title_id" id="job-title-{{ u.id }}" class="role-select" title="Job title" onchange="this.form.submit()">
-              <option value="">— None —</option>
-              {% for jt in job_titles %}
-              <option value="{{ jt.id }}"{% if u.job_title_id == jt.id %} selected{% endif %}>{{ jt.name }}</option>
-              {% endfor %}
-            </select>
-          </form>
-        </td>
-        <td>
+  <ul class="episode-dock-grid users-dock-grid" id="users-grid" role="list">
+    {% for u in users %}
+    {% set access = user_access_by_id.get(u.id) if user_access_by_id is defined else none %}
+    {% set emp_policy = user_employment_policy.get(u.id) if user_employment_policy is defined else none %}
+    {% set primary_titles = u.assigned_job_titles() %}
+    {% set primary_title = primary_titles[0] if primary_titles else none %}
+    {% set logical_role = access.display_role if access else ((u.account.role or '') if (u.account_id and u.account) else '') %}
+    {% set acc_status = user_account_status.get(u.id) if user_account_status is defined else none %}
+    {% set account_is_suspended = acc_status == 'suspended' %}
+    <li
+      class="episode-dock-card user-dock-card"
+      role="listitem"
+      data-user-id="{{ u.id }}"
+      data-user-search="{{ ((u.name or '') ~ ' ' ~ (u.email or ''))|lower|e }}"
+      data-account="{{ 'registered' if u.account_id else 'external' }}"
+      data-user-type="{{ access.user_type if access else '' }}"
+      data-role="{{ logical_role|e }}"
+      data-job-title-ids="{{ u.assigned_job_title_ids()|join(',') }}"
+      data-job-title-id="{{ u.assigned_job_title_ids()[0] if u.assigned_job_title_ids() else '' }}"
+      data-post-scope-keys="{{ (user_post_scope_keys.get(u.id, [])|join(','))|e }}"
+    >
+      <div class="episode-dock-card__inner user-dock-card__inner">
+        <div class="user-dock-card__avatar">
           {% if u.account_id %}
-          <span class="badge badge--registered">Registered</span>
-          {% else %}
-          <span class="badge badge--muted">External</span>
+          <span class="user-dock-card__account-badge badge badge--registered">Registered</span>
+          {% if acc_status and acc_status != 'active' %}
+          <span class="account-status-badge {{ 'account-status--' ~ acc_status|replace('_approval', '') }}">{{ acc_status|replace('_', ' ')|title }}</span>
           {% endif %}
-        </td>
-        <td>
-          {% if u.account_id and u.account %}
-            {% if current_account_is_admin %}
-            <form method="post" action="{{ url_for('users_set_role', user_id=u.id) }}" class="role-form">
-              <label class="sr-only" for="role-{{ u.id }}">Role for {{ u.name }}</label>
-              <select name="role" id="role-{{ u.id }}" class="role-select" onchange="this.form.submit()">
-                {% for r in account_roles %}
-                <option value="{{ r }}" {% if u.account.role == r %}selected{% endif %}>{{ role_labels[r] }}</option>
+          {% else %}
+          <span class="user-dock-card__account-badge badge badge--muted">External</span>
+          {% endif %}
+          {% set user_initials = ((u.name or '?').strip()[:1] or '?')|upper %}
+          <span class="user-dock-card__avatar-fallback" aria-hidden="true">{{ user_initials }}</span>
+          <img
+            class="user-dock-card__avatar-img"
+            src="{{ avatar_href_for_user(u) }}"
+            data-fallback="{{ avatar_preset_href_for_user(u) }}"
+            alt=""
+            loading="lazy"
+            width="320"
+            height="320"
+          >
+        </div>
+
+        <form id="edit-user-{{ u.id }}" method="post" action="{{ url_for('users_update', user_id=u.id) }}" class="user-dock-card__edit-form"></form>
+
+        <div class="episode-dock-card__title-line user-dock-card__title-line">
+          <h3 class="episode-dock-card__title user-dock-card__name">
+            <label class="sr-only" for="user-name-{{ u.id }}">Name</label>
+            <input
+              form="edit-user-{{ u.id }}"
+              type="text"
+              name="name"
+              id="user-name-{{ u.id }}"
+              value="{{ u.name }}"
+              required
+              class="input input--sm user-dock-card__name-input"
+              {% if u.account_id %}readonly aria-readonly="true" title="Linked to login — name is managed from the account"{% endif %}
+            >
+          </h3>
+        </div>
+
+        <label class="field user-dock-card__field">
+          <span class="field-label">Email</span>
+          <input
+            form="edit-user-{{ u.id }}"
+            type="email"
+            name="email"
+            id="user-email-{{ u.id }}"
+            value="{{ u.email }}"
+            required
+            class="input input--sm"
+            {% if u.account_id %}readonly aria-readonly="true" title="Linked to login — email stays in sync with the account"{% endif %}
+          >
+        </label>
+
+        <div class="user-dock-card__access-summary">
+          <div class="user-dock-card__access-row">
+            <span class="field-label">User type</span>
+            <span class="user-dock-card__access-value" id="users-card-user-type-{{ u.id }}">
+              {% if access %}
+              {{ 'Client / Guest' if access.user_type == 'client' else 'Employee' }}
+              {% elif u.account_id %}—{% else %}<span class="muted">—</span>{% endif %}
+            </span>
+          </div>
+          <div class="user-dock-card__access-row user-dock-card__access-row--job-title">
+            <span class="field-label">Job title</span>
+            <div class="user-dock-card__job-title-line">
+              <span class="user-dock-card__access-value" id="users-card-job-title-{{ u.id }}">
+                {% if primary_title %}{{ primary_title.name }}{% else %}<span class="muted">— None —</span>{% endif %}
+              </span>
+              {% if current_account_is_admin and not u.account_id %}
+              <button
+                type="button"
+                class="btn btn--link users-job-title-change users-job-title-quick"
+                data-user-id="{{ u.id }}"
+                data-user-name="{{ u.name|e }}"
+                data-job-title-ids="{{ u.assigned_job_title_ids()|join(',') }}"
+                data-action="{{ url_for('users_set_job_title', user_id=u.id) }}"
+                aria-haspopup="dialog"
+                aria-controls="users-job-title-dialog"
+                aria-expanded="false"
+              >{% if primary_title %}Edit{% else %}Add{% endif %}</button>
+              {% endif %}
+            </div>
+          </div>
+          {% if emp_policy %}
+          <div class="user-dock-card__access-row user-dock-card__access-row--employment">
+            <span class="field-label">Employment</span>
+            <div class="user-dock-card__employment-line">
+              <span class="emp-badge {{ emp_policy.badge_class }}">{{ emp_policy.employment_name }}</span>
+              {% if emp_policy.scope_chips %}
+              <span class="emp-scope-chip-list">
+                {% for chip in emp_policy.scope_chips[:4] %}
+                <span class="emp-scope-chip" title="{{ chip.level|replace('_', ' ') }}">{{ chip.name }}</span>
                 {% endfor %}
-              </select>
-            </form>
-            {% else %}
-            <span class="badge badge--role">{{ role_labels.get(u.account.role, u.account.role) }}</span>
-            {% endif %}
-          {% else %}
-          <span class="muted-table">—</span>
+              </span>
+              {% endif %}
+            </div>
+          </div>
           {% endif %}
-        </td>
-        <td><span class="badge">{{ u.tasks|length }}</span></td>
-        <td class="actions">
-          <button form="edit-user-{{ u.id }}" type="submit" class="btn btn--small">Save</button>
+          {% set jt_scopes = user_job_title_scope_chips.get(u.id, []) if user_job_title_scope_chips is defined else [] %}
+          {% if jt_scopes %}
+          <div class="user-dock-card__access-row user-dock-card__access-row--employment">
+            <span class="field-label">Job title scopes</span>
+            <span class="emp-scope-chip-list">
+              {% for chip in jt_scopes[:6] %}
+              <span class="emp-scope-chip" title="{{ chip.level|replace('_', ' ') }}">{{ chip.name }}</span>
+              {% endfor %}
+              {% if jt_scopes|length > 6 %}
+              <span class="emp-scope-chip emp-scope-chip--more">+{{ jt_scopes|length - 6 }}</span>
+              {% endif %}
+            </span>
+          </div>
+          {% endif %}
+          <div class="user-dock-card__access-row user-dock-card__access-row--role">
+            <span class="field-label">Access role</span>
+            <div class="user-dock-card__role-line">
+              <span class="user-dock-card__access-value" id="users-card-role-{{ u.id }}">
+                {% if access %}
+                {% set role_slug = (logical_role or 'user')|lower|replace(' ', '_')|replace('-', '_') %}
+                <span class="badge badge--role badge--role-{{ role_slug }}" data-role="{{ role_slug }}">{{ access.role_label }}</span>
+                {% elif u.account_id and u.account %}
+                {% set role_slug = (u.account.role or 'user')|lower|replace(' ', '_')|replace('-', '_') %}
+                <span class="badge badge--role badge--role-{{ role_slug }}" data-role="{{ role_slug }}">{{ role_labels.get(u.account.role, u.account.role) }}</span>
+                {% else %}
+                <span class="muted">—</span>
+                {% endif %}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {% if not u.account_id %}
+        <p class="user-dock-card__role-muted muted">No account — assign access after registration</p>
+        {% endif %}
+
+        <div class="episode-dock-card__actions user-dock-card__actions">
+          {% if u.account_id and u.account and current_account_is_admin %}
+          <div class="user-dock-card__access-actions">
+            <button
+              type="button"
+              class="btn btn--small btn--ghost users-access-edit"
+              data-user-id="{{ u.id }}"
+              data-user-name="{{ u.name|e }}"
+              data-action="{{ url_for('users_set_access', user_id=u.id) }}"
+              data-user-type="{{ access.user_type if access else 'employee' }}"
+              data-job-title-id="{{ primary_title.id if primary_title else '' }}"
+              data-job-title-ids="{{ u.assigned_job_title_ids()|join(',') }}"
+              data-logical-role="{{ logical_role|e }}"
+              data-mapped-role="{{ access.mapped_role if access else '' }}"
+              data-role-mismatch="{{ '1' if access and access.role_mismatch else '0' }}"
+              aria-haspopup="dialog"
+              aria-controls="users-access-dialog"
+            >Edit access</button>
+            <button
+              type="button"
+              class="btn btn--small users-account-suspend {% if account_is_suspended %}btn--warning{% else %}btn--ghost{% endif %}"
+              data-action="{% if account_is_suspended %}{{ url_for('admin_reactivate_account', account_id=u.account.id) }}{% else %}{{ url_for('admin_suspend_account', account_id=u.account.id) }}{% endif %}"
+              data-account-id="{{ u.account.id }}"
+              data-mode="{{ 'unsuspend' if account_is_suspended else 'suspend' }}"
+            >{{ 'Unsuspend' if account_is_suspended else 'Suspend' }}</button>
+          </div>
+          {% endif %}
           {% if not u.account_id %}
-          <form method="post" action="{{ url_for('users_delete', user_id=u.id) }}" class="inline danger-form" data-confirm="{{ ('Are you sure you want to delete ' ~ u.name ~ '? All of their tasks will be removed. This cannot be undone.')|e }}">
-            <button type="submit" class="btn btn--small btn--danger">Delete</button>
-          </form>
+          <button form="edit-user-{{ u.id }}" type="submit" class="btn btn--small btn--primary">Save</button>
           {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+          {% if current_account_is_admin and (not u.account_id or not current_account or u.account_id != current_account.id) %}
+          <button
+            type="button"
+            class="btn btn--small btn--danger user-dock-card__delete-btn"
+            data-safe-delete
+            data-entity-type="user"
+            data-entity-id="{{ u.id }}"
+            data-entity-label="User"
+            data-entity-name="{{ u.name|e }}"
+            data-delete-url="{{ url_for('users_delete', user_id=u.id) }}"
+            data-success-redirect="{{ url_for('users_list') }}"
+            data-warning-text="This permanently deletes the user profile{% if u.account_id %} and linked login account{% endif %}. Related assignments and history will be cleaned up. This cannot be undone."
+            data-confirm-label="Delete Permanently"
+          >Delete</button>
+          {% endif %}
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  <p id="users-filter-empty" class="empty users-filter-empty" hidden>No users match these filters.</p>
+  {% if pages > 1 %}
+  <nav class="users-pagination" aria-label="Users pagination">
+    {% if page > 1 %}
+    <a class="btn btn--small btn--ghost" href="{{ url_for('users_list', page=page - 1) }}">Previous</a>
+    {% endif %}
+    <span class="users-pagination-meta muted">Page {{ page }} of {{ pages }} · {{ total_users }} users</span>
+    {% if page < pages %}
+    <a class="btn btn--small btn--ghost" href="{{ url_for('users_list', page=page + 1) }}">Next</a>
+    {% endif %}
+  </nav>
+  {% endif %}
   {% else %}
-  <p class="empty">No users yet. Add someone above.</p>
+  <p class="empty">No users yet. Use <strong>Create user</strong> to add someone.</p>
   {% endif %}
 </section>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/searchable-select.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/users.js') }}?v=12" defer></script>
 {% endblock %}

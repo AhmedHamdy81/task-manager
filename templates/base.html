@@ -5,6 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
+  <script>
+    (function () {
+      var root = document.documentElement;
+      try {
+        var mode = window.localStorage.getItem("appearanceMode") || "dark";
+        var accent = window.localStorage.getItem("appearanceAccent") || "default";
+        if (mode === "light") {
+          root.setAttribute("data-theme", "light");
+        } else if (mode === "system") {
+          if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+            root.setAttribute("data-theme", "light");
+          } else {
+            root.removeAttribute("data-theme");
+          }
+        } else {
+          root.removeAttribute("data-theme");
+        }
+        if (accent && accent !== "default") {
+          root.setAttribute("data-accent-theme", accent);
+        } else {
+          root.removeAttribute("data-accent-theme");
+        }
+      } catch (e) {}
+    })();
+  </script>
   <link rel="icon" href="{{ url_for('static', filename='icons/logo.svg') }}" type="image/svg+xml">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap-grid.min.css" crossorigin="anonymous">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -120,10 +145,9 @@
             {% set tasks_notif_active = request.endpoint in ('control_panel', 'admin_task_log', 'admin_task_log_task_status_update', 'control_task_management_help', 'admin_notification_log', 'admin_notification_management', 'admin_notification_rule_edit', 'admin_notification_rule_toggle', 'admin_notification_rule_duplicate', 'admin_notification_rule_restore_default', 'admin_notification_rule_test', 'admin_notification_management_audit', 'admin_notification_event_create_rule', 'admin_notification_event_mark_deprecated') or (request.endpoint and (request.endpoint.startswith('control_task_') or request.endpoint.startswith('control_title_') or request.endpoint.startswith('control_scope_titles_') or request.endpoint.startswith('control_groups_') or request.endpoint.startswith('admin_notification'))) %}
             <a href="{% if can('control_panel', 'view') %}{{ url_for('control_panel') }}{% else %}{{ url_for('admin_notification_management') }}{% endif %}" class="app-nav-item{% if tasks_notif_active %} app-nav-item--active{% endif %}" data-nav="tasks_notifications" data-tooltip="{{ _('Tasks and Notifications') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg></span><span class="app-nav-item-label">{{ _('Tasks and Notifications') }}</span></a>
             {% if can("control_panel", "manage_permissions") %}
-            <a href="{{ url_for('control_access_control') }}" class="app-nav-item{% if request.endpoint in ('control_access_control', 'control_access_control_help') %} app-nav-item--active{% endif %}" data-nav="access" data-tooltip="{{ _('Access Control') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 3l7 4v5c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V7l7-4z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="app-nav-item-label">{{ _('Access Control') }}</span></a>
+            <a href="{{ url_for('control_access_control') }}" class="app-nav-item{% if request.endpoint in ('control_access_control', 'control_access_control_help') or (request.endpoint and request.endpoint.startswith('control_employment_structure')) %} app-nav-item--active{% endif %}" data-nav="access" data-tooltip="{{ _('Employment and Access') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M12 3l7 4v5c0 4.5-3 8.5-7 9-4-.5-7-4.5-7-9V7l7-4z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="app-nav-item-label">{{ _('Employment and Access') }}</span></a>
             {% endif %}
             {% if can("control_panel", "view") and current_account_is_admin %}
-            <a href="{{ url_for('control_employment_structure') }}" class="app-nav-item{% if request.endpoint == 'control_employment_structure' %} app-nav-item--active{% endif %}" data-nav="employment" data-tooltip="{{ _('Employment structure') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="app-nav-item-label">{{ _('Employment structure') }}</span></a>
             <a href="{{ url_for('control_edit_suites') }}" class="app-nav-item{% if request.endpoint == 'control_edit_suites' %} app-nav-item--active{% endif %}" data-nav="edit_suites" data-tooltip="{{ _('Edit suites') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M10 16v4M14 16v4"/><circle cx="8" cy="10" r="1" fill="currentColor"/><circle cx="12" cy="10" r="1" fill="currentColor"/><circle cx="16" cy="10" r="1" fill="currentColor"/></svg></span><span class="app-nav-item-label">{{ _('Edit suites') }}</span></a>
             {% endif %}
             {% if can("control_panel", "view") %}

@@ -34,24 +34,68 @@
       });
     });
 
-    var seedForm = document.getElementById("system-setup-seed-form");
-    if (seedForm) {
-      var seedBtn = seedForm.querySelector("button[type=submit][data-confirm]");
-      if (seedBtn) {
-        var seedMessage = seedBtn.getAttribute("data-confirm") || "";
-        seedForm.addEventListener("submit", function (ev) {
-          if (!seedMessage) return;
-          if (!window.confirm(seedMessage)) {
-            ev.preventDefault();
-          }
-        });
-      }
-    }
+    initSeedDialog();
 
     initEmailSection();
     initUploadSection();
     upgradeMailCheckSelectBtns();
   });
+
+  function initSeedDialog() {
+    var seedForm = document.getElementById("system-setup-seed-form");
+    if (!seedForm) return;
+
+    var seedBtn = seedForm.querySelector("button[type=submit][data-confirm]");
+    var seedDialog = document.getElementById("system-setup-seed-dialog");
+    var approved = false;
+
+    function closeSeedDialog() {
+      if (seedDialog && seedDialog.open) seedDialog.close();
+    }
+
+    if (!seedBtn) return;
+
+    seedForm.addEventListener("submit", function (ev) {
+      if (approved) {
+        approved = false;
+        return;
+      }
+      if (seedDialog && typeof seedDialog.showModal === "function") {
+        ev.preventDefault();
+        seedDialog.showModal();
+        return;
+      }
+      var seedMessage = seedBtn.getAttribute("data-confirm") || "";
+      if (seedMessage && !window.confirm(seedMessage)) {
+        ev.preventDefault();
+      }
+    });
+
+    if (!seedDialog) return;
+
+    seedDialog.querySelectorAll("[data-seed-dialog-close]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        closeSeedDialog();
+      });
+    });
+
+    var confirmBtn = seedDialog.querySelector("[data-seed-dialog-confirm]");
+    if (confirmBtn) {
+      confirmBtn.addEventListener("click", function () {
+        approved = true;
+        closeSeedDialog();
+        if (typeof seedForm.requestSubmit === "function") {
+          seedForm.requestSubmit();
+        } else {
+          seedForm.submit();
+        }
+      });
+    }
+
+    seedDialog.addEventListener("cancel", function () {
+      approved = false;
+    });
+  }
 
   function upgradeMailCheckSelectBtns() {
     document.querySelectorAll("#system-setup-email-form label.system-setup__check").forEach(function (label) {

@@ -7,25 +7,51 @@
 {% block content %}
 <div class="system-setup">
   <header class="system-setup__head">
-    <div>
+    <div class="system-setup__intro">
       <h1 class="admin-section-title">System Setup</h1>
       <p class="muted">Essential master data health and safe repair. Additive only — never deletes projects, users, tasks, or workflow data.</p>
     </div>
-    {% if not current_account_is_super_user|default(false) %}
-    <form method="post" action="{{ seed_run_url }}" class="inline system-setup__seed-form" id="system-setup-seed-form">
-      <button type="submit" class="btn btn--primary" data-confirm="{{ seed_confirm_message|e }}">
-        Seed / Repair Essential System Data
-      </button>
-    </form>
-    {% endif %}
   </header>
 
-  <nav class="system-setup__nav" aria-label="{{ _('System Setup sections') }}">
-    <a class="system-setup__nav-link{% if active_section == 'email' or not active_section %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='email') }}" data-section="email">{{ _('Email & Password Reset') }}</a>
-    <a class="system-setup__nav-link{% if active_section == 'connection' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='connection') }}" data-section="connection">{{ _('Connection') }}</a>
-    <a class="system-setup__nav-link{% if active_section == 'upload' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='upload') }}" data-section="upload">{{ _('Upload directory') }}</a>
-    <a class="system-setup__nav-link{% if active_section == 'health' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='health') }}" data-section="health">{{ _('Health') }}</a>
-  </nav>
+  <dialog class="project-team-modal" id="system-setup-seed-dialog" aria-labelledby="system-setup-seed-title">
+    <div class="project-team-modal-inner system-setup__seed-dialog">
+      <div class="project-team-modal-head">
+        <h2 id="system-setup-seed-title" class="project-team-modal-title">Seed / Repair Essential System Data?</h2>
+        <button type="button" class="btn btn--small btn--ghost" data-seed-dialog-close aria-label="Close">Close</button>
+      </div>
+      <p class="muted">This tool safely fills in missing essential setup records for the app. It is meant to repair incomplete setup, not replace or wipe existing work.</p>
+      <ul class="system-setup__seed-list">
+        <li>Adds missing core setup data only when it does not already exist.</li>
+        <li>Keeps existing projects, users, tasks, VFX, color, chat, bookings, and files untouched.</li>
+        <li>Does not delete records or overwrite your day-to-day production data.</li>
+        <li>Is useful after pulling a branch, restoring a database, or enabling new admin/setup features.</li>
+      </ul>
+      <p class="muted">{{ seed_confirm_message }}</p>
+      <div class="form-actions system-setup__seed-actions">
+        <button type="button" class="btn btn--ghost" data-seed-dialog-close>Cancel</button>
+        <button type="button" class="btn btn--primary" data-seed-dialog-confirm>Continue and run seed</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="system-setup__layout">
+    <aside class="system-setup__sidebar">
+      <nav class="system-setup__nav" aria-label="{{ _('System Setup sections') }}">
+        <a class="system-setup__nav-link{% if active_section == 'email' or not active_section %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='email') }}" data-section="email">{{ _('Email & Password Reset') }}</a>
+        <a class="system-setup__nav-link{% if active_section == 'connection' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='connection') }}" data-section="connection">{{ _('Connection') }}</a>
+        <a class="system-setup__nav-link{% if active_section == 'upload' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='upload') }}" data-section="upload">{{ _('Upload directory') }}</a>
+        <a class="system-setup__nav-link{% if active_section == 'health' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='health') }}" data-section="health">{{ _('Health') }}</a>
+        {% if not current_account_is_super_user|default(false) %}
+        <form method="post" action="{{ seed_run_url }}" class="system-setup__seed-form" id="system-setup-seed-form">
+          <button type="submit" class="btn btn--danger system-setup__seed-button" data-confirm="{{ seed_confirm_message|e }}">
+            Seed / Repair Essential System Data
+          </button>
+        </form>
+        {% endif %}
+      </nav>
+    </aside>
+
+    <div class="system-setup__content">
 
   <section class="panel admin-card system-setup__email" id="system-setup-email" data-setup-section="email">
     <div class="system-setup__email-head">
@@ -458,6 +484,8 @@
     </div>
   </section>
   {% endif %}
+    </div>
+  </div>
 </div>
 {% endblock %}
 {% block extra_scripts %}

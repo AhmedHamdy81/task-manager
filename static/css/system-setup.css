@@ -1,6 +1,7 @@
 .system-setup {
-  max-width: 960px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   padding: 1rem 0 2rem;
 }
 
@@ -8,14 +9,55 @@
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 1rem;
   margin-bottom: 1.25rem;
+}
+
+.system-setup__intro {
+  max-width: 56rem;
+}
+
+.system-setup__layout {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1fr) minmax(0, 3fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.system-setup__sidebar {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+}
+
+.system-setup__content {
+  min-width: 0;
 }
 
 .system-setup__warnings {
   border-left: 3px solid var(--color-warning, #c9a227);
   margin-bottom: 1rem;
+}
+
+.system-setup__seed-dialog {
+  max-width: min(40rem, calc(100vw - 2rem));
+}
+
+.system-setup__seed-list {
+  margin: 1rem 0;
+  padding-left: 1.25rem;
+}
+
+.system-setup__seed-list li + li {
+  margin-top: 0.4rem;
+}
+
+.system-setup__seed-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
 }
 
 .system-setup__warning-list {
@@ -36,16 +78,40 @@
 
 .system-setup__nav {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  margin: 0 0 1rem;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border, #333);
+  border-radius: 12px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.system-setup__seed-form {
+  margin: 0 0 0.35rem;
+}
+
+.system-setup__seed-button {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+  border-color: var(--danger, #c44c4c);
+  background: rgba(196, 76, 76, 0.22);
+  color: #ffd4d4;
+}
+
+.system-setup__seed-button:hover,
+.system-setup__seed-button:focus-visible {
+  background: rgba(196, 76, 76, 0.32);
+  border-color: var(--danger, #c44c4c);
+  color: #fff0f0;
 }
 
 .system-setup__nav-link {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  padding: 0.4rem 0.75rem;
-  border-radius: 6px;
+  padding: 0.55rem 0.8rem;
+  border-radius: 8px;
   border: 1px solid var(--border, #333);
   color: inherit;
   text-decoration: none;
@@ -287,6 +353,26 @@
 .field-hint[hidden],
 #mail-provider-help[hidden] {
   display: none !important;
+}
+
+@media (max-width: 980px) {
+  .system-setup__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .system-setup__sidebar {
+    position: static;
+  }
+
+  .system-setup__nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    margin: 0 0 1rem;
+  }
 }
 
 @media (max-width: 640px) {
