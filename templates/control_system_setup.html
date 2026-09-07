@@ -438,9 +438,13 @@
       <li>Errors: {{ working_hours_backfill_report.errors }}</li>
     </ul>
     {% endif %}
+    {% if working_hours_backfill_url %}
     <form method="post" action="{{ working_hours_backfill_url }}" class="inline">
       <button type="submit" class="btn btn--primary" data-confirm="{{ working_hours_backfill_confirm|e }}">Backfill Working Hours</button>
     </form>
+    {% else %}
+    <p class="muted">Working Hours backfill is not available on this branch.</p>
+    {% endif %}
   </section>
 
   <section class="panel admin-card system-setup__ir">

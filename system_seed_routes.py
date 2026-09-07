@@ -6,6 +6,7 @@ import os
 
 import click
 from flask import abort, flash, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.routing import BuildError
 
 import mail_service as mail_service_mod
 import mail_settings as mail_settings_mod
@@ -158,6 +159,10 @@ def register_system_seed_routes(app, ctx: dict) -> None:
         if section and section not in SYSTEM_SETUP_SECTIONS:
             section = ""
         ctx_mail = _mail_page_context()
+        try:
+            working_hours_backfill_url = url_for("control_working_hours_backfill")
+        except BuildError:
+            working_hours_backfill_url = None
         return render_template(
             "control_system_setup.html",
             health=health,
@@ -171,7 +176,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             industry_radar_sources_url=url_for("updates_page", section="news"),
             industry_radar_rebuild_url=url_for("control_industry_news_sources_rebuild"),
             seed_confirm_message=SEED_CONFIRM_MESSAGE,
-            working_hours_backfill_url=url_for("control_working_hours_backfill"),
+            working_hours_backfill_url=working_hours_backfill_url,
             working_hours_backfill_confirm=(
                 (app.extensions.get("working_hours") or {}).get("confirm_message") or ""
             ),
