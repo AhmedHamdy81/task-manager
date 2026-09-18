@@ -11,33 +11,12 @@
     return meta ? meta.getAttribute("content") || "" : "";
   }
 
-  function activateSection(section) {
-    if (!section) return;
-    var target = document.querySelector('[data-setup-section="' + section + '"]');
-    if (target && typeof target.scrollIntoView === "function") {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-    document.querySelectorAll(".system-setup__nav-link").forEach(function (link) {
-      link.classList.toggle("is-active", link.getAttribute("data-section") === section);
-    });
-  }
-
   document.addEventListener("DOMContentLoaded", function () {
-    var params = new URLSearchParams(window.location.search || "");
-    var section = (params.get("section") || "").trim().toLowerCase();
-    if (section) activateSection(section);
-
-    document.querySelectorAll(".system-setup__nav-link").forEach(function (link) {
-      link.addEventListener("click", function () {
-        var key = link.getAttribute("data-section") || "";
-        if (key) activateSection(key);
-      });
-    });
-
     initSeedDialog();
 
     initEmailSection();
     initUploadSection();
+    initProjectFoldersSection();
     upgradeMailCheckSelectBtns();
   });
 
@@ -485,6 +464,55 @@
       });
     });
 
+    uploadRoot.querySelectorAll("[data-upload-history-reveal]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var path = btn.getAttribute("data-upload-history-reveal") || "";
+        var url = btn.getAttribute("data-reveal-url") || "";
+        if (!path || !url) return;
+        var original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Opening…";
+        fetch(url, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken(),
+          },
+          credentials: "same-origin",
+          body: JSON.stringify({ upload_directory: path }),
+        })
+          .then(function (res) {
+            return res.text().then(function (text) {
+              var data = {};
+              try {
+                data = text ? JSON.parse(text) : {};
+              } catch (err) {
+                data = {
+                  ok: false,
+                  error: res.status === 400 ? "Bad request." : "Could not show that folder in Finder.",
+                };
+              }
+              return { ok: res.ok, data: data };
+            });
+          })
+          .then(function (result) {
+            if (result.ok && result.data.ok) return;
+            window.alert(
+              (result.data && result.data.error) || "Could not show that folder in Finder."
+            );
+          })
+          .catch(function () {
+            window.alert("Could not show that folder in Finder.");
+          })
+          .finally(function () {
+            btn.disabled = false;
+            btn.textContent = original;
+          });
+      });
+    });
+
     if (useDialog) {
       useDialog.querySelectorAll("[data-upload-use-cancel]").forEach(function (btn) {
         btn.addEventListener("click", function () {
@@ -535,6 +563,50 @@
         },
         true
       );
+    });
+  }
+
+  function initProjectFoldersSection() {
+    var root = document.getElementById("system-setup-project-folders");
+    if (!root) return;
+
+    root.querySelectorAll("[data-project-folder-reveal]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.disabled) return;
+        var url = btn.getAttribute("data-reveal-url") || "";
+        if (!url) return;
+        var original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Opening…";
+        fetch(url, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken(),
+          },
+          credentials: "same-origin",
+          body: JSON.stringify({}),
+        })
+          .then(function (res) {
+            return res.json().then(function (data) {
+              return { ok: res.ok, data: data || {} };
+            });
+          })
+          .then(function (result) {
+            if (result.ok && result.data.ok) return;
+            window.alert(
+              (result.data && result.data.error) || "Could not show that folder in Finder."
+            );
+          })
+          .catch(function () {
+            window.alert("Could not show that folder in Finder.");
+          })
+          .finally(function () {
+            btn.disabled = false;
+            btn.textContent = original;
+          });
+      });
     });
   }
 })();

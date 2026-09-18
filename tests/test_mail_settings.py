@@ -162,7 +162,7 @@ class MailSettingsRouteTests(unittest.TestCase):
     def test_access_denied_for_non_admin(self):
         user = self._make_account(role="user", email="user@test.local")
         self._login(user)
-        r = self.client.get("/control/system-setup?section=email", follow_redirects=False)
+        r = self.client.get("/control/system-setup/email", follow_redirects=False)
         self.assertIn(r.status_code, (302, 303, 403))
         if r.status_code in (302, 303):
             self.assertTrue((r.headers.get("Location") or "").endswith("/"))
@@ -176,7 +176,7 @@ class MailSettingsRouteTests(unittest.TestCase):
     def test_section_renders_for_admin(self):
         admin = self._make_account()
         self._login(admin)
-        r = self.client.get("/control/system-setup?section=email")
+        r = self.client.get("/control/system-setup/email")
         self.assertEqual(r.status_code, 200)
         body = r.get_data(as_text=True)
         self.assertIn("system-setup-email", body)
@@ -206,7 +206,7 @@ class MailSettingsRouteTests(unittest.TestCase):
         ):
             sseed.set_system_setting(db, self.SystemSetting, "mail_server", "smtp.example.com")
             db.session.commit()
-            r = self.client.get("/control/system-setup?section=email")
+            r = self.client.get("/control/system-setup/email")
         body = r.get_data(as_text=True)
         self.assertNotIn("super-secret-pw", body)
         self.assertNotIn("value=\"super-secret-pw\"", body)
@@ -239,6 +239,30 @@ class MailSettingsRouteTests(unittest.TestCase):
         self.assertEqual(
             mail_settings_mod.read_mail_password_secret(app_root=self.app_root),
             "keep-me",
+        )
+
+    def test_first_time_password_is_saved_without_replace_button_flag(self):
+        admin = self._make_account()
+        self._login(admin)
+        with mock.patch(
+            "system_seed_routes.mail_settings_mod.mail_password_configured",
+            return_value=False,
+        ), mock.patch(
+            "system_seed_routes.mail_settings_mod.write_mail_password_secret"
+        ) as write_pw:
+            payload = self._valid_payload(
+                mail_password="first-time-app-password",
+                replace_password="0",
+            )
+            r = self.client.post(
+                "/control/system-setup/email",
+                data=payload,
+                headers={"Accept": "application/json"},
+            )
+        self.assertEqual(r.status_code, 200)
+        write_pw.assert_called_once_with(
+            "first-time-app-password",
+            app_root=mock.ANY,
         )
 
     def test_save_starttls_and_ssl_config(self):
@@ -394,7 +418,7 @@ class MailSettingsRouteTests(unittest.TestCase):
         self._login(admin)
         with self.client.session_transaction() as sess:
             sess["lang"] = "ar"
-        r = self.client.get("/control/system-setup?section=email")
+        r = self.client.get("/control/system-setup/email")
         self.assertEqual(r.status_code, 200)
         body = r.get_data(as_text=True)
         self.assertIn('lang="ar"', body)

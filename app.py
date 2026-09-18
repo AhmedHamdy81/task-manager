@@ -99,6 +99,7 @@ import color_grading_routes as cg_routes
 import notification_events as notif_events
 import mail_service as mail_service_mod
 import mail_settings as mail_settings_mod
+import safe_delete_service as safe_delete_service_mod
 from guest_access import GUEST_NOTE_VISIBILITY_DEFAULT, build_guest_access
 
 db = SQLAlchemy()
@@ -3176,6 +3177,25 @@ def create_app() -> Flask:
     )
     app.extensions["log_security_event"] = log_security_event
 
+    class SafeDeleteChallenge(db.Model):
+        __tablename__ = "safe_delete_challenge"
+
+        id = db.Column(db.Integer, primary_key=True)
+        token = db.Column(db.String(128), nullable=False, unique=True, index=True)
+        account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False, index=True)
+        project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
+        entity_type = db.Column(db.String(64), nullable=False, default="", index=True)
+        entity_id = db.Column(db.Integer, nullable=False, index=True)
+        code_hash = db.Column(db.String(128), nullable=False, default="")
+        created_at = db.Column(db.DateTime, nullable=False, default=now_local, index=True)
+        expires_at = db.Column(db.DateTime, nullable=False, index=True)
+        attempt_count = db.Column(db.Integer, nullable=False, default=0)
+        is_consumed = db.Column(db.Boolean, nullable=False, default=False, index=True)
+        consumed_at = db.Column(db.DateTime, nullable=True)
+
+        account = db.relationship("Account", foreign_keys=[account_id])
+        project = db.relationship("Project", foreign_keys=[project_id])
+
     _approval_models = account_approval_support_mod.register_account_approval_models(db, now_local)
     UserApprovalRequest = _approval_models["UserApprovalRequest"]
     RoleChangeRequest = _approval_models["RoleChangeRequest"]
@@ -3499,6 +3519,7 @@ def create_app() -> Flask:
     MediaTranscodeJob = machine_room_dashboard_models.MediaTranscodeJob
     MissingMediaRecord = machine_room_dashboard_models.MissingMediaRecord
     DepartmentReadinessRecord = machine_room_dashboard_models.DepartmentReadinessRecord
+    ProjectStorageUsage = machine_room_dashboard_models.ProjectStorageUsage
     ProjectStorageBreakdown = machine_room_dashboard_models.ProjectStorageBreakdown
     MachineRoomAuditLog = machine_room_dashboard_models.MachineRoomAuditLog
 
@@ -9804,8 +9825,9 @@ def create_app() -> Flask:
             IgnoredMissingInfo.__table__.create(bind=db.engine, checkfirst=True)
 
     def ensure_sqlite_safe_delete_challenge_table() -> None:
-        """Safe Delete bootstrap is not wired in this branch yet."""
-        return
+        if db.engine.dialect.name != "sqlite":
+            return
+        SafeDeleteChallenge.__table__.create(bind=db.engine, checkfirst=True)
 
     def ensure_seed_product_update_client_review_mode() -> None:
         """Publish one What's New entry for Client Review Mode (idempotent by title)."""
@@ -10155,6 +10177,12 @@ def create_app() -> Flask:
         except (TypeError, ValueError):
             return None
         return db.session.get(Account, pk) if pk is not None else None
+
+    safe_delete_service = safe_delete_service_mod.SafeDeleteService(
+        db,
+        SafeDeleteChallenge,
+        now_fn=now_local,
+    )
 
     def absolute_url_for(endpoint: str, **values) -> str:
         path = url_for(endpoint, **values)
@@ -10815,6 +10843,140 @@ def create_app() -> Flask:
     require_permission = build_require_permission(perm_svc, account_from_session)
     app.extensions["permissions"] = perm_svc
     app.extensions["require_permission"] = require_permission
+
+    safe_delete_describers: dict[str, object] = {}
+
+    def register_safe_delete_entity(entity_type: str):
+        key = (entity_type or "").strip().lower()
+
+        def decorator(fn):
+            safe_delete_describers[key] = fn
+            return fn
+
+        return decorator
+
+    def _safe_delete_payload() -> dict:
+        return request.get_json(silent=True) or request.form or {}
+
+    def safe_delete_request_present() -> bool:
+        data = _safe_delete_payload()
+        return bool((data.get("challenge_token") or "").strip() and (data.get("entered_code") or "").strip())
+
+    def safe_delete_guard(entity_type: str, entity_id: int, *, project_id: int | None = None):
+        acc = account_from_session()
+        if acc is None:
+            return None, (jsonify({"ok": False, "error": "Authentication required."}), 401)
+        desc_fn = safe_delete_describers.get((entity_type or "").strip().lower())
+        if not callable(desc_fn):
+            return None, (jsonify({"ok": False, "error": "unavailable"}), 400)
+        info = desc_fn(acc, int(entity_id), project_id)
+        if not info or not info.get("exists"):
+            return None, (jsonify({"ok": False, "error": "not_found", "code": "gone"}), 404)
+        if not info.get("can_delete"):
+            return None, (jsonify({"ok": False, "error": "forbidden"}), 403)
+        data = _safe_delete_payload()
+        result = safe_delete_service.verify(
+            token=(data.get("challenge_token") or "").strip(),
+            entered_code=(data.get("entered_code") or "").strip(),
+            account_id=int(acc.id),
+            entity_type=(entity_type or "").strip().lower(),
+            entity_id=int(entity_id),
+            project_id=(int(project_id) if project_id is not None else None),
+        )
+        if not result.ok:
+            return None, (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": result.error,
+                        "code": result.code,
+                        "regenerate": result.regenerate,
+                    }
+                ),
+                result.http_status,
+            )
+        return result.challenge, None
+
+    app.extensions["safe_delete_service"] = safe_delete_service
+    app.extensions["safe_delete_guard"] = safe_delete_guard
+    app.extensions["safe_delete_request_present"] = safe_delete_request_present
+    app.extensions["register_safe_delete_entity"] = register_safe_delete_entity
+
+    @register_safe_delete_entity("project")
+    def _safe_delete_describe_project(acc, entity_id: int, project_id: int | None):
+        del project_id
+        row = db.session.get(Project, int(entity_id))
+        if row is None:
+            return {"exists": False, "can_delete": False, "display_name": ""}
+        return {
+            "exists": True,
+            "can_delete": bool(acc and acc.is_admin and account_can_access_project(acc, int(row.id))),
+            "display_name": (row.name or "").strip() or f"Project {row.id}",
+        }
+
+    @register_safe_delete_entity("scene")
+    def _safe_delete_describe_scene(acc, entity_id: int, project_id: int | None):
+        row = db.session.get(ShootingDayScene, int(entity_id))
+        if row is None:
+            return {"exists": False, "can_delete": False, "display_name": ""}
+        day = db.session.get(ShootingDay, int(row.shooting_day_id or 0))
+        pid = int(project_id or getattr(day, "project_id", 0) or 0)
+        if pid <= 0 or day is None:
+            return {"exists": False, "can_delete": False, "display_name": ""}
+        label = (getattr(row, "scene_label", None) or "").strip() or str(getattr(row, "scene_number", "") or row.id)
+        return {
+            "exists": True,
+            "can_delete": bool(acc and account_can_access_project(acc, pid) and account_may_edit_production_for(acc, pid)),
+            "display_name": f"Scene {label}",
+        }
+
+    @app.route("/safe-delete/challenge", methods=["POST"])
+    def safe_delete_challenge_create():
+        acc = account_from_session()
+        if acc is None:
+            return jsonify({"ok": False, "error": "Authentication required."}), 401
+        data = _safe_delete_payload()
+        entity_type = (data.get("entity_type") or "").strip().lower()
+        try:
+            entity_id = int(data.get("entity_id"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "invalid_entity"}), 400
+        raw_project_id = data.get("project_id")
+        try:
+            project_id = int(raw_project_id) if raw_project_id not in (None, "") else None
+        except (TypeError, ValueError):
+            project_id = None
+        desc_fn = safe_delete_describers.get(entity_type)
+        if not callable(desc_fn):
+            return jsonify({"ok": False, "error": "unavailable"}), 400
+        info = desc_fn(acc, entity_id, project_id)
+        if not info or not info.get("exists"):
+            return jsonify({"ok": False, "error": "not_found", "code": "gone"}), 404
+        if not info.get("can_delete"):
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        challenge, display_code, ttl_seconds = safe_delete_service.create_challenge(
+            account_id=int(acc.id),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            project_id=project_id,
+        )
+        log_security_event(
+            "safe_delete_challenge_created",
+            account_id=int(acc.id),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            project_id=project_id,
+            details={"challenge_id": int(challenge.id)},
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "challenge_token": challenge.token,
+                "display_code": display_code,
+                "expires_in_seconds": ttl_seconds,
+                "entity_name": info.get("display_name") or "",
+            }
+        )
 
     @app.before_request
     def enforce_access_permissions():
@@ -13283,9 +13445,31 @@ def create_app() -> Flask:
         return account_can_manage_project_team_for(acc, int(project_id))
 
     @app.template_global()
+    def can_manage_project_team_scope_for(project_id: int, scope_key: str | None = None) -> bool:
+        del scope_key
+        acc = db.session.get(Account, session.get("account_id"))
+        return account_can_manage_project_team_for(acc, int(project_id))
+
+    @app.template_global()
     def can_view_project_log_book_for(project_id: int) -> bool:
         acc = db.session.get(Account, session.get("account_id"))
         return account_can_view_project_log_book(acc, int(project_id))
+
+    @app.template_global()
+    def can_view_project_working_hours_for(project_id: int) -> bool:
+        if "project_working_hours" not in app.view_functions:
+            return False
+        acc = db.session.get(Account, session.get("account_id"))
+        return account_can_view_project_settings_for(acc, int(project_id))
+
+    @app.template_global()
+    def can_manage_project_audio_for(project_id: int) -> bool:
+        acc = db.session.get(Account, session.get("account_id"))
+        return account_can_manage_project_team_for(acc, int(project_id))
+
+    @app.template_global()
+    def has_endpoint(endpoint: str) -> bool:
+        return bool(endpoint and endpoint in app.view_functions)
 
     @app.template_global()
     def can_move_project_audio_folders_for(project_id: int) -> bool:
@@ -13829,9 +14013,17 @@ def create_app() -> Flask:
             return None
         ident_lower = ident.lower()
         if "@" in ident:
-            return Account.query.filter_by(email=ident_lower).first()
-        return Account.query.filter(
+            return Account.query.filter(
+                db.func.lower(Account.email) == ident_lower,
+            ).first()
+        by_username = Account.query.filter(
             db.func.lower(Account.username) == ident_lower,
+        ).first()
+        if by_username is not None:
+            return by_username
+        # Username-shaped input may still be an email without being typed as such.
+        return Account.query.filter(
+            db.func.lower(Account.email) == ident_lower,
         ).first()
 
     def _password_reset_serializer():
@@ -13845,6 +14037,34 @@ def create_app() -> Flask:
         return _password_reset_serializer().dumps(
             {"id": int(acc.id), "ph": _password_reset_stamp(acc)}
         )
+
+    def _is_loopback_http_origin(url: str) -> bool:
+        try:
+            host = (urlparse(url or "").hostname or "").lower()
+        except Exception:
+            return False
+        return host in {"localhost", "127.0.0.1", "::1"}
+
+    def _password_reset_url(token: str) -> str:
+        """Build an absolute reset URL that prefers a non-loopback public origin."""
+        path = url_for("reset_password", token=token)
+        try:
+            request_base = (request.url_root or "").rstrip("/")
+        except RuntimeError:
+            request_base = ""
+        stored = system_seed_mod.current_connection_http_address(
+            SystemSetting, fallback=""
+        )
+        base = stored or request_base
+        if _is_loopback_http_origin(base) and request_base and not _is_loopback_http_origin(
+            request_base
+        ):
+            base = request_base
+        if not base:
+            return path
+        if not path.startswith("/"):
+            path = "/" + path
+        return base.rstrip("/") + path
 
     def _account_from_password_reset_token(token: str):
         try:
@@ -13939,7 +14159,7 @@ def create_app() -> Flask:
             )
             if acc is not None and account_approval_support_mod.account_may_use_app(acc):
                 token = _password_reset_token(acc)
-                reset_url = absolute_url_for("reset_password", token=token)
+                reset_url = _password_reset_url(token)
                 log_security_event(
                     "password_reset_requested",
                     account_id=int(acc.id),
@@ -13959,6 +14179,10 @@ def create_app() -> Flask:
                     fallback = app.config.get("MAIL_ADMIN_FALLBACK_ON_FAILURE", True)
                     if fallback:
                         _notify_admins_password_reset_failed(acc)
+                else:
+                    app.logger.info(
+                        "Password reset email delivered for account_id=%s", int(acc.id)
+                    )
             else:
                 log_security_event(
                     "password_reset_requested",
@@ -14260,6 +14484,11 @@ def create_app() -> Flask:
             if not title_ids and jt_raw:
                 title_ids = [jt_raw]
             company_raw = (request.form.get("company") or "").strip()[:160] or None
+            choice = (request.form.get("company_choice") or "").strip().lower()
+            if choice == "bigbang":
+                company_raw = "BigBang - employee"
+            elif choice == "other":
+                company_raw = (request.form.get("company_other") or "").strip()[:160] or None
             dept_raw = (request.form.get("department_code") or "").strip()[:40] or None
             emp_raw = (request.form.get("employment_type_code") or "").strip()[:40] or None
 
@@ -32005,6 +32234,22 @@ def create_app() -> Flask:
         db.session.flush()
         ProjectAudioLibrary.query.filter_by(project_id=pid).delete(synchronize_session=False)
 
+        ingest_batch_ids = [
+            int(b.id) for b in MediaIngestBatch.query.filter_by(project_id=pid).all()
+        ]
+        if ingest_batch_ids:
+            MediaIngestSource.query.filter(
+                MediaIngestSource.batch_id.in_(ingest_batch_ids)
+            ).delete(synchronize_session=False)
+        MediaIngestBatch.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        MediaIngestRecord.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        MediaTranscodeJob.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        MissingMediaRecord.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        DepartmentReadinessRecord.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        ProjectStorageBreakdown.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        ProjectStorageUsage.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        StorageVolumeProjectLink.query.filter_by(project_id=pid).delete(synchronize_session=False)
+
         ce_ids = [
             int(ce.id) for ce in ColorEpisode.query.filter_by(project_id=pid).all()
         ]
@@ -32083,6 +32328,32 @@ def create_app() -> Flask:
         StickyNote.query.filter_by(project_id=pid).delete(synchronize_session=False)
         ScriptDocument.query.filter_by(project_id=pid).delete(synchronize_session=False)
         AudioUsage.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        ProjectActivityLog.query.filter_by(project_id=pid).delete(synchronize_session=False)
+
+        # NOT NULL project_id + Project backref without delete cascade: SQLAlchemy
+        # would SET project_id=NULL on parent delete and fail the commit.
+        ConformTaskDetail.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        HandoffPackage.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        vsi_ids = [
+            int(i.id) for i in VfxSceneItem.query.filter_by(project_id=pid).all()
+        ]
+        if vsi_ids:
+            VfxSceneItemSource.query.filter(
+                VfxSceneItemSource.vfx_scene_item_id.in_(vsi_ids)
+            ).delete(synchronize_session=False)
+        VfxSceneItem.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        VfxSceneInclusion.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        EntityMoveAudit.query.filter_by(project_id=pid).delete(synchronize_session=False)
+        SceneEditorialAssignment.query.filter_by(project_id=pid).delete(
+            synchronize_session=False
+        )
+
+        # Working-hours tables may exist without ORM models in this scope.
+        for table_name in ("work_sessions", "project_work_ledger"):
+            db.session.execute(
+                db.text(f'DELETE FROM "{table_name}" WHERE project_id = :pid'),
+                {"pid": pid},
+            )
 
         sv_ids = [
             int(sv.id) for sv in SceneVersion.query.filter_by(project_id=pid).all()
@@ -32101,11 +32372,24 @@ def create_app() -> Flask:
     def projects_delete(project_id: int):
         actor = account_from_session()
         if actor is None or not actor.is_admin:
-            abort(403)
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+        if not safe_delete_request_present():
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "safe_delete_required",
+                        "message": "Deleting a project requires Safe Delete confirmation.",
+                    }
+                ),
+                400,
+            )
+        safe_challenge, sd_err = safe_delete_guard("project", project_id)
+        if sd_err is not None:
+            return sd_err
         p = db.session.get(Project, project_id)
         if p is None:
-            flash("That project no longer exists.", "info")
-            return redirect(url_for("projects_list"))
+            return jsonify({"ok": False, "error": "not_found", "code": "gone"}), 404
         _purge_project_dependents(p)
         # Remove dependent rows first before deleting the project.
         for b in Booking.query.filter_by(project_id=p.id).all():
@@ -32168,17 +32452,21 @@ def create_app() -> Flask:
         deleted_name = (p.name or "").strip()
         deleted_pid = int(p.id)
         db.session.delete(p)
+        safe_delete_service.consume(safe_challenge)
         db.session.commit()
         log_security_event(
-            "project_delete",
+            "safe_delete_executed",
             account_id=actor.id if actor else None,
             entity_type="project",
             entity_id=deleted_pid,
             project_id=deleted_pid,
-            details={"name": deleted_name},
+            details={
+                "challenge_id": safe_challenge.id,
+                "delete_kind": "permanent",
+                "name": deleted_name,
+            },
         )
-        flash("Project and its tasks were removed.", "success")
-        return redirect(url_for("projects_list"))
+        return jsonify({"ok": True, "redirect": url_for("projects_list")})
 
     @app.route("/projects/<int:project_id>/archive", methods=["POST"])
     def projects_archive(project_id: int):
@@ -34772,6 +35060,8 @@ def create_app() -> Flask:
         "User": User,
         "Project": Project,
         "ProjectMember": ProjectMember,
+        "SafeDeleteChallenge": SafeDeleteChallenge,
+        "SecurityAuditLog": SecurityAuditLog,
         "Notification": Notification,
         "Task": Task,
         "JobCategory": JobCategory,
@@ -34786,12 +35076,14 @@ def create_app() -> Flask:
         "ShootingDayScene": ShootingDayScene,
         "SceneEditorialAssignment": SceneEditorialAssignment,
         "ProductionEpisode": ProductionEpisode,
+        "ProjectActivityLog": ProjectActivityLog,
         "PermissionPage": PermissionPage,
         "RolePermission": RolePermission,
         "JobTitlePermission": JobTitlePermission,
         "UserPermissionOverride": UserPermissionOverride,
     }
     app.extensions["tm_test_helpers"] = {
+        "safe_delete_service": safe_delete_service,
         "build_editorial_episode_statistics": build_editorial_episode_statistics,
         "calculate_editorial_episode_scene_set": calculate_editorial_episode_scene_set,
         "get_effective_editorial_episode": get_effective_editorial_episode,
@@ -34980,6 +35272,7 @@ def create_app() -> Flask:
         "IndustryNewsSource": IndustryNewsSource,
         "IndustryNewsItem": IndustryNewsItem,
         "SystemMasterEntry": SystemMasterEntry,
+        "Project": Project,
         "EmploymentScopeLink": EmploymentScopeLink,
         "JobTitleEmploymentTypeLink": JobTitleEmploymentTypeLink,
         "JobCategoryPostScopeLink": JobCategoryPostScopeLink,

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% set active_section = active_section|default('email') %}
 {% block title %}System Setup · {{ app_name }}{% endblock %}
 {% block body_class %}control-system-setup{% endblock %}
 {% block extra_head %}
@@ -13,6 +14,7 @@
     </div>
   </header>
 
+  {% if active_section == 'health' and not current_account_is_super_user|default(false) %}
   <dialog class="project-team-modal" id="system-setup-seed-dialog" aria-labelledby="system-setup-seed-title">
     <div class="project-team-modal-inner system-setup__seed-dialog">
       <div class="project-team-modal-head">
@@ -33,15 +35,15 @@
       </div>
     </div>
   </dialog>
+  {% endif %}
 
   <div class="system-setup__layout">
     <aside class="system-setup__sidebar">
       <nav class="system-setup__nav" aria-label="{{ _('System Setup sections') }}">
-        <a class="system-setup__nav-link{% if active_section == 'email' or not active_section %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='email') }}" data-section="email">{{ _('Email & Password Reset') }}</a>
-        <a class="system-setup__nav-link{% if active_section == 'connection' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='connection') }}" data-section="connection">{{ _('Connection') }}</a>
-        <a class="system-setup__nav-link{% if active_section == 'upload' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='upload') }}" data-section="upload">{{ _('Upload directory') }}</a>
-        <a class="system-setup__nav-link{% if active_section == 'health' %} is-active{% endif %}" href="{{ url_for('control_system_setup', section='health') }}" data-section="health">{{ _('Health') }}</a>
-        {% if not current_account_is_super_user|default(false) %}
+        {% for item in setup_nav %}
+        <a class="system-setup__nav-link{% if active_section == item.key %} is-active{% endif %}" href="{{ item.url }}">{{ _(item.label) }}</a>
+        {% endfor %}
+        {% if active_section == 'health' and not current_account_is_super_user|default(false) %}
         <form method="post" action="{{ seed_run_url }}" class="system-setup__seed-form" id="system-setup-seed-form">
           <button type="submit" class="btn btn--danger system-setup__seed-button" data-confirm="{{ seed_confirm_message|e }}">
             Seed / Repair Essential System Data
@@ -53,7 +55,8 @@
 
     <div class="system-setup__content">
 
-  <section class="panel admin-card system-setup__email" id="system-setup-email" data-setup-section="email">
+  {% if active_section == 'email' %}
+  <section class="panel admin-card system-setup__email" id="system-setup-email">
     <div class="system-setup__email-head">
       <div>
         <h2 class="panel-title">{{ _('Email & Password Reset') }}</h2>
@@ -229,8 +232,8 @@
       <p class="muted">{{ _('This preview never generates a real password-reset token.') }}</p>
     </div>
   </section>
-
-  <section class="panel admin-card system-setup__connection" id="system-setup-connection" data-setup-section="connection">
+  {% elif active_section == 'connection' %}
+  <section class="panel admin-card system-setup__connection" id="system-setup-connection">
     <h2 class="panel-title">{{ _('Connection address') }}</h2>
     <p class="muted">{{ _('HTTP address used to connect to this BigBang server — desktop app, share links, and emails. Use http:// or https:// (for example a LAN host or http://127.0.0.1:5001).') }}</p>
     <form method="post" action="{{ connection_save_url }}" class="system-setup__connection-form">
@@ -251,8 +254,8 @@
       <button type="submit" class="btn btn--primary">{{ _('Save connection address') }}</button>
     </form>
   </section>
-
-  <section class="panel admin-card system-setup__upload" id="system-setup-upload" data-setup-section="upload">
+  {% elif active_section == 'upload' %}
+  <section class="panel admin-card system-setup__upload" id="system-setup-upload">
     <h2 class="panel-title">Upload directory</h2>
     <p class="muted">Folder where this server stores uploaded files (avatars, chat attachments, media, scripts, and related assets). Defaults to the app <code>instance</code> directory. Restart the server after saving so new uploads use the path.</p>
     {% if upload_directory_active and upload_directory_active != upload_directory %}
@@ -302,6 +305,13 @@
             <button
               type="button"
               class="btn btn--small btn--ghost"
+              data-upload-history-reveal="{{ path|e }}"
+              data-reveal-url="{{ upload_directory_reveal_url }}"
+              title="{{ _('Show in Finder') }}"
+            >{{ _('Show in Finder') }}</button>
+            <button
+              type="button"
+              class="btn btn--small btn--ghost"
               data-upload-history-use="{{ path|e }}"
               {% if upload_directory_env_locked %}disabled{% endif %}
             >Use</button>
@@ -319,7 +329,7 @@
               data-confirm-label="Remove from history"
               data-modal-title="Safe Delete"
               data-modal-desc="You are about to remove this directory from history:"
-              data-success-redirect="{{ url_for('control_system_setup') }}"
+              data-success-redirect="{{ url_for('control_system_setup_upload') }}"
               {% if upload_directory_env_locked or not history_entity_id %}disabled{% endif %}
             >Remove</button>
             {% endif %}
@@ -346,7 +356,74 @@
       </div>
     </div>
   </dialog>
+  {% elif active_section == 'project-folders' %}
+  <section class="panel admin-card system-setup__project-folders" id="system-setup-project-folders">
+    <h2 class="panel-title">{{ _('Project folders') }}</h2>
+    <p class="muted">{{ _('Disk folder for each project (root path + folder name). Separate from the global Upload directory above. Open a project’s settings to change its path or create the folder tree.') }}</p>
+    <dl class="system-setup__dl system-setup__project-folders-summary">
+      <div>
+        <dt>{{ _('Projects') }}</dt>
+        <dd>{{ project_folder_total }}</dd>
+      </div>
+      <div>
+        <dt>{{ _('Root configured') }}</dt>
+        <dd>{{ project_folder_configured_count }}</dd>
+      </div>
+      <div>
+        <dt>{{ _('Exists on disk') }}</dt>
+        <dd>{{ project_folder_on_disk_count }}</dd>
+      </div>
+    </dl>
 
+    {% if project_folder_rows %}
+    <div class="system-setup__upload-history system-setup__project-folders-list">
+      <h3 class="system-setup__upload-history-title">{{ _('All project folders') }}</h3>
+      <ul class="system-setup__upload-history-list">
+        {% for row in project_folder_rows %}
+        <li class="system-setup__upload-history-item system-setup__project-folder-item{% if row.exists_on_disk %} is-on-disk{% elif row.configured %} is-configured{% endif %}">
+          <div class="system-setup__project-folder-main">
+            <div class="system-setup__project-folder-title-row">
+              <strong class="system-setup__project-folder-name">{{ row.name|e }}</strong>
+              <span class="system-setup__badge{% if row.status == 'archived' %} system-setup__badge--info{% elif row.status == 'pending' %} system-setup__badge--warn{% else %} system-setup__badge--ok{% endif %}">{{ row.status|project_status_label }}</span>
+              {% if row.exists_on_disk %}
+              <span class="system-setup__badge system-setup__badge--ok">{{ _('On disk') }}</span>
+              {% elif row.configured %}
+              <span class="system-setup__badge system-setup__badge--warn">{{ _('Missing on disk') }}</span>
+              {% else %}
+              <span class="system-setup__badge system-setup__badge--info">{{ _('Not configured') }}</span>
+              {% endif %}
+            </div>
+            {% if row.final_path %}
+            <code class="system-setup__upload-history-path" title="{{ row.final_path|e }}">{{ row.final_path|e }}</code>
+            {% else %}
+            <span class="muted">{{ _('No full path — set a project root in Settings.') }}</span>
+            {% endif %}
+            <p class="muted system-setup__project-folder-meta">
+              {{ _('Template') }}: {{ row.template_label|e }}
+              {% if row.root_path %} · {{ _('Root') }}: <code>{{ row.root_path|e }}</code>{% endif %}
+              {% if row.folder_name %} · {{ _('Folder') }}: <code>{{ row.folder_name|e }}</code>{% endif %}
+            </p>
+          </div>
+          <div class="system-setup__upload-history-actions">
+            <button
+              type="button"
+              class="btn btn--small btn--ghost"
+              data-project-folder-reveal
+              data-reveal-url="{{ row.reveal_url }}"
+              title="{{ _('Show in Finder') }}"
+              {% if not row.configured %}disabled{% endif %}
+            >{{ _('Show in Finder') }}</button>
+            <a class="btn btn--small btn--ghost" href="{{ row.settings_url }}">{{ _('Settings') }}</a>
+          </div>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% else %}
+    <p class="muted">{{ _('No projects yet.') }}</p>
+    {% endif %}
+  </section>
+  {% elif active_section == 'health' %}
   {% if warnings %}
   <section class="panel admin-card system-setup__warnings" role="alert">
     <h2 class="panel-title">Missing essential data</h2>
@@ -413,7 +490,7 @@
   </section>
   {% endif %}
 
-  <section class="panel admin-card system-setup__health" id="system-setup-health" data-setup-section="health">
+  <section class="panel admin-card system-setup__health" id="system-setup-health">
     <h2 class="panel-title">Master data counts</h2>
     <div class="system-setup__table-wrap">
       <table class="system-setup__table">
@@ -483,6 +560,7 @@
       </form>
     </div>
   </section>
+  {% endif %}
   {% endif %}
     </div>
   </div>

@@ -10,6 +10,7 @@ from werkzeug.routing import BuildError
 
 import mail_service as mail_service_mod
 import mail_settings as mail_settings_mod
+import folder_structure_support as folder_structure_support_mod
 import system_seed as sseed
 
 
@@ -18,14 +19,35 @@ SEED_CONFIRM_MESSAGE = (
     "It will not delete projects, users, tasks, VFX, color, chat, bookings, or files."
 )
 
+# Legacy ?section= values still accepted for redirects to dedicated pages.
 SYSTEM_SETUP_SECTIONS = frozenset(
-    {"overview", "connection", "email", "upload", "health", "working-hours", "industry"}
+    {
+        "overview",
+        "connection",
+        "email",
+        "upload",
+        "project-folders",
+        "health",
+        "working-hours",
+        "industry",
+    }
 )
+SYSTEM_SETUP_PAGES = frozenset(
+    {"email", "connection", "upload", "project-folders", "health"}
+)
+SYSTEM_SETUP_PAGE_ENDPOINTS = {
+    "email": "control_system_setup_email",
+    "connection": "control_system_setup_connection",
+    "upload": "control_system_setup_upload",
+    "project-folders": "control_system_setup_project_folders",
+    "health": "control_system_setup_health",
+}
 
 
 def register_system_seed_routes(app, ctx: dict) -> None:
     db = ctx["db"]
     models = ctx["system_seed_models"]
+    Project = ctx["Project"]
     account_from_session = ctx["account_from_session"]
     account_can_access_admin_settings = ctx["account_can_access_admin_settings"]
     log_security_event = ctx.get("log_security_event")
@@ -40,6 +62,10 @@ def register_system_seed_routes(app, ctx: dict) -> None:
         if not account_can_access_admin_settings(acc):
             abort(403)
         return acc
+
+    def _request_is_local_host() -> bool:
+        """True when the browser is on the same machine as this server process."""
+        return (request.remote_addr or "").strip() in {"127.0.0.1", "::1"}
 
     def _wants_json() -> bool:
         accept = (request.headers.get("Accept") or "").lower()
@@ -149,54 +175,119 @@ def register_system_seed_routes(app, ctx: dict) -> None:
                 "display_name": path,
             }
 
-    @app.route("/control/system-setup")
-    def control_system_setup():
-        _admin_required()
-        health = sseed.build_health_report(db, models, _seed_ctx())
-        last_run = sseed.last_seed_run(models)
-        seed_report = session.pop("system_seed_report", None)
+    def _setup_section_url(section: str) -> str:
+        endpoint = SYSTEM_SETUP_PAGE_ENDPOINTS.get(section) or "control_system_setup_email"
+        return url_for(endpoint)
+
+    def _legacy_section_redirect():
         section = (request.args.get("section") or "").strip().lower()
-        if section and section not in SYSTEM_SETUP_SECTIONS:
-            section = ""
-        ctx_mail = _mail_page_context()
-        try:
-            working_hours_backfill_url = url_for("control_working_hours_backfill")
-        except BuildError:
-            working_hours_backfill_url = None
+        if section == "working-hours" or section == "industry" or section == "overview":
+            section = "health"
+        if section in SYSTEM_SETUP_PAGES:
+            return redirect(_setup_section_url(section))
+        return redirect(url_for("control_system_setup_email"))
+
+    def _shared_setup_nav_context(*, active_section: str) -> dict:
+        return {
+            "active_section": active_section,
+            "setup_nav": [
+                {
+                    "key": "email",
+                    "label": "Email & Password Reset",
+                    "url": url_for("control_system_setup_email"),
+                },
+                {
+                    "key": "connection",
+                    "label": "Connection",
+                    "url": url_for("control_system_setup_connection"),
+                },
+                {
+                    "key": "upload",
+                    "label": "Upload directory",
+                    "url": url_for("control_system_setup_upload"),
+                },
+                {
+                    "key": "project-folders",
+                    "label": "Project folders",
+                    "url": url_for("control_system_setup_project_folders"),
+                },
+                {
+                    "key": "health",
+                    "label": "Health",
+                    "url": url_for("control_system_setup_health"),
+                },
+            ],
+            "seed_run_url": url_for("control_system_seed_run"),
+            "seed_confirm_message": SEED_CONFIRM_MESSAGE,
+        }
+
+    def _project_folder_rows() -> list[dict]:
+        rows: list[dict] = []
+        projects = Project.query.order_by(Project.name.asc(), Project.id.asc()).all()
+        for project in projects:
+            root = folder_structure_support_mod.effective_project_root_path(project)
+            folder_name = folder_structure_support_mod.effective_project_folder_name(project)
+            # Only treat as a full disk path when a root is configured; otherwise
+            # build_project_folder_path() returns just the folder name slug.
+            final_path = (
+                folder_structure_support_mod.build_project_folder_path(project) if root else ""
+            )
+            status = (getattr(project, "project_status", None) or "active").strip().lower()
+            rows.append(
+                {
+                    "id": int(project.id),
+                    "name": (project.name or "").strip() or f"Project {project.id}",
+                    "status": status,
+                    "root_path": root or "",
+                    "folder_name": folder_name or "",
+                    "final_path": final_path or "",
+                    "template_label": folder_structure_support_mod.folder_template_label_for_project(
+                        project
+                    ),
+                    "configured": bool(root),
+                    "exists_on_disk": bool(final_path and os.path.isdir(final_path)),
+                    "created_at": getattr(project, "folder_structure_created_at", None),
+                    "validated_at": getattr(project, "folder_structure_validated_at", None),
+                    "settings_url": url_for("project_settings", project_id=int(project.id)),
+                    "reveal_url": url_for(
+                        "control_system_setup_project_folder_reveal",
+                        project_id=int(project.id),
+                    ),
+                }
+            )
+        return rows
+
+    def _render_setup_email_page():
         return render_template(
             "control_system_setup.html",
-            health=health,
-            groups=health["groups"],
-            warnings=health["warnings"],
-            has_missing_essential=health["has_missing_essential"],
-            latest_backup_path=sseed.latest_backup_path(app),
-            last_seed_run=last_run,
-            seed_report=seed_report,
-            seed_run_url=url_for("control_system_seed_run"),
-            industry_radar_sources_url=url_for("updates_page", section="news"),
-            industry_radar_rebuild_url=url_for("control_industry_news_sources_rebuild"),
-            seed_confirm_message=SEED_CONFIRM_MESSAGE,
-            working_hours_backfill_url=working_hours_backfill_url,
-            working_hours_backfill_confirm=(
-                (app.extensions.get("working_hours") or {}).get("confirm_message") or ""
-            ),
-            working_hours_backfill_report=session.pop("working_hours_backfill_report", None),
+            **_shared_setup_nav_context(active_section="email"),
+            **_mail_page_context(),
+        )
+
+    def _render_setup_connection_page():
+        return render_template(
+            "control_system_setup.html",
+            **_shared_setup_nav_context(active_section="connection"),
             connection_http_address=sseed.current_connection_http_address(
                 models.SystemSetting,
                 fallback=(request.url_root or "").rstrip("/"),
             ),
             connection_save_url=url_for("control_system_setup_connection"),
+        )
+
+    def _render_setup_upload_page():
+        fallback = app.config.get("UPLOAD_DATA_DIR") or sseed.default_instance_directory()
+        return render_template(
+            "control_system_setup.html",
+            **_shared_setup_nav_context(active_section="upload"),
             upload_directory=sseed.current_upload_directory(
                 models.SystemSetting,
-                fallback=app.config.get("UPLOAD_DATA_DIR")
-                or sseed.default_instance_directory(),
+                fallback=fallback,
             ),
-            upload_directory_active=app.config.get("UPLOAD_DATA_DIR")
-            or sseed.default_instance_directory(),
+            upload_directory_active=fallback,
             upload_directory_history=_upload_directory_history_for_page(
                 models.SystemSetting,
-                fallback=app.config.get("UPLOAD_DATA_DIR")
-                or sseed.default_instance_directory(),
+                fallback=fallback,
             ),
             upload_directory_history_stored=sseed.get_upload_directory_history(
                 models.SystemSetting
@@ -213,12 +304,61 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             upload_directory_browse_url=url_for(
                 "control_system_setup_upload_directory_browse"
             ),
-            active_section=section,
-            **ctx_mail,
+            upload_directory_reveal_url=url_for(
+                "control_system_setup_upload_directory_reveal"
+            ),
         )
 
-    @app.route("/control/system-setup/email", methods=["POST"])
+    def _render_setup_project_folders_page():
+        rows = _project_folder_rows()
+        configured_count = sum(1 for row in rows if row["configured"])
+        on_disk_count = sum(1 for row in rows if row["exists_on_disk"])
+        return render_template(
+            "control_system_setup.html",
+            **_shared_setup_nav_context(active_section="project-folders"),
+            project_folder_rows=rows,
+            project_folder_total=len(rows),
+            project_folder_configured_count=configured_count,
+            project_folder_on_disk_count=on_disk_count,
+        )
+
+    def _render_setup_health_page():
+        health = sseed.build_health_report(db, models, _seed_ctx())
+        last_run = sseed.last_seed_run(models)
+        seed_report = session.pop("system_seed_report", None)
+        try:
+            working_hours_backfill_url = url_for("control_working_hours_backfill")
+        except BuildError:
+            working_hours_backfill_url = None
+        return render_template(
+            "control_system_setup.html",
+            **_shared_setup_nav_context(active_section="health"),
+            health=health,
+            groups=health["groups"],
+            warnings=health["warnings"],
+            has_missing_essential=health["has_missing_essential"],
+            latest_backup_path=sseed.latest_backup_path(app),
+            last_seed_run=last_run,
+            seed_report=seed_report,
+            industry_radar_sources_url=url_for("updates_page", section="news"),
+            industry_radar_rebuild_url=url_for("control_industry_news_sources_rebuild"),
+            working_hours_backfill_url=working_hours_backfill_url,
+            working_hours_backfill_confirm=(
+                (app.extensions.get("working_hours") or {}).get("confirm_message") or ""
+            ),
+            working_hours_backfill_report=session.pop("working_hours_backfill_report", None),
+        )
+
+    @app.route("/control/system-setup")
+    def control_system_setup():
+        _admin_required()
+        return _legacy_section_redirect()
+
+    @app.route("/control/system-setup/email", methods=["GET", "POST"])
     def control_system_setup_email():
+        if request.method == "GET":
+            _admin_required()
+            return _render_setup_email_page()
         acc = _admin_required()
         payload = _mail_form_payload()
         replace_requested = (
@@ -256,7 +396,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json():
                 return jsonify({"ok": False, "errors": errors}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup", section="email"))
+            return redirect(url_for("control_system_setup_email"))
         mail_settings_mod.apply_mail_config_to_app(app, mail)
         changed = mail_settings_mod.changed_mail_setting_keys(
             before,
@@ -277,7 +417,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
         if _wants_json():
             return jsonify({"ok": True, "mail": mail.public_dict(), "changed": changed})
         flash("Email & password-reset settings saved.", "success")
-        return redirect(url_for("control_system_setup", section="email"))
+        return redirect(url_for("control_system_setup_email"))
 
     @app.route("/control/system-setup/email/test", methods=["POST"])
     def control_system_setup_email_test():
@@ -288,7 +428,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json() or request.is_json:
                 return jsonify({"ok": False, "error": msg, "retry_after": retry_after}), 429
             flash(msg, "error")
-            return redirect(url_for("control_system_setup", section="email"))
+            return redirect(url_for("control_system_setup_email"))
 
         data = request.get_json(silent=True) or {}
         recipient = (
@@ -301,7 +441,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json() or request.is_json:
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup", section="email"))
+            return redirect(url_for("control_system_setup_email"))
 
         # Prefer unsaved form values when present; otherwise use saved settings.
         if request.form.get("mail_server") is not None or (
@@ -348,7 +488,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json() or request.is_json:
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup", section="email"))
+            return redirect(url_for("control_system_setup_email"))
 
         mapping = cfg.flask_mail_mapping()
         mapping["MAIL_ENABLED"] = "1"
@@ -382,7 +522,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json() or request.is_json:
                 return jsonify({"ok": False, "error": safe}), 502
             flash(safe, "error")
-            return redirect(url_for("control_system_setup", section="email"))
+            return redirect(url_for("control_system_setup_email"))
 
         mail_settings_mod.mark_test_email_sent(int(acc.id))
         if log_security_event is not None:
@@ -396,10 +536,13 @@ def register_system_seed_routes(app, ctx: dict) -> None:
         if _wants_json() or request.is_json:
             return jsonify({"ok": True, "message": ok_msg})
         flash(ok_msg, "success")
-        return redirect(url_for("control_system_setup", section="email"))
+        return redirect(url_for("control_system_setup_email"))
 
-    @app.route("/control/system-setup/connection", methods=["POST"])
+    @app.route("/control/system-setup/connection", methods=["GET", "POST"])
     def control_system_setup_connection():
+        if request.method == "GET":
+            _admin_required()
+            return _render_setup_connection_page()
         _admin_required()
         normalized = sseed.normalize_connection_http_address(
             request.form.get("connection_http_address")
@@ -409,7 +552,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json():
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_connection"))
         sseed.set_system_setting(
             db,
             models.SystemSetting,
@@ -421,7 +564,82 @@ def register_system_seed_routes(app, ctx: dict) -> None:
         if _wants_json():
             return jsonify({"ok": True, "connection_http_address": normalized})
         flash(f"Connection address saved: {normalized}", "success")
-        return redirect(url_for("control_system_setup"))
+        return redirect(url_for("control_system_setup_connection"))
+
+    @app.route("/control/system-setup/upload", methods=["GET"])
+    def control_system_setup_upload():
+        _admin_required()
+        return _render_setup_upload_page()
+
+    @app.route("/control/system-setup/project-folders", methods=["GET"])
+    def control_system_setup_project_folders():
+        _admin_required()
+        return _render_setup_project_folders_page()
+
+    @app.route(
+        "/control/system-setup/project-folders/<int:project_id>/reveal",
+        methods=["POST"],
+    )
+    def control_system_setup_project_folder_reveal(project_id: int):
+        """Open a project's folder path in Finder / file manager on the server host."""
+        _admin_required()
+        if not _request_is_local_host():
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Show in Finder is only available when using this server "
+                            "from the same computer (localhost), or from the desktop app."
+                        ),
+                    }
+                ),
+                403,
+            )
+
+        project = db.session.get(Project, int(project_id))
+        if project is None:
+            return jsonify({"ok": False, "error": "Project not found."}), 404
+
+        root = folder_structure_support_mod.effective_project_root_path(project)
+        if not root:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "Set a project root path in Project Settings first.",
+                    }
+                ),
+                400,
+            )
+
+        target = folder_structure_support_mod.build_project_folder_path(project)
+        if not target:
+            return jsonify({"ok": False, "error": "Project folder path is empty."}), 400
+
+        # Prefer the project folder; fall back to the root if the leaf is not created yet.
+        open_target = target if os.path.isdir(target) else root
+        if not os.path.isdir(open_target):
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "That folder does not exist on disk yet.",
+                        "path": target,
+                    }
+                ),
+                400,
+            )
+
+        opened, result = folder_structure_support_mod.open_folder_in_os(open_target)
+        if opened:
+            return jsonify({"ok": True, "path": result, "opened": True})
+        return jsonify({"ok": False, "error": result or "Could not open that folder."}), 400
+
+    @app.route("/control/system-setup/health", methods=["GET"])
+    def control_system_setup_health():
+        _admin_required()
+        return _render_setup_health_page()
 
     @app.route("/control/system-setup/upload-directory/browse", methods=["POST"])
     def control_system_setup_upload_directory_browse():
@@ -434,8 +652,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             )
             return jsonify({"ok": False, "error": msg}), 400
 
-        remote = (request.remote_addr or "").strip()
-        if remote not in {"127.0.0.1", "::1"}:
+        if not _request_is_local_host():
             return (
                 jsonify(
                     {
@@ -471,6 +688,64 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             )
         return jsonify({"ok": True, "upload_directory": normalized})
 
+    @app.route("/control/system-setup/upload-directory/reveal", methods=["POST"])
+    def control_system_setup_upload_directory_reveal():
+        """Open a known upload-directory path in Finder / file manager on the server host."""
+        _admin_required()
+        if not _request_is_local_host():
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Show in Finder is only available when using this server "
+                            "from the same computer (localhost), or from the desktop app."
+                        ),
+                    }
+                ),
+                403,
+            )
+
+        data = request.get_json(silent=True) or {}
+        raw_path = data.get("upload_directory") or request.form.get("upload_directory")
+        normalized = sseed.normalize_upload_directory(raw_path)
+        if not normalized:
+            return jsonify({"ok": False, "error": "Choose a valid directory path."}), 400
+
+        fallback = _upload_directory_fallback()
+        allowed = set(_upload_directory_history_for_page(models.SystemSetting, fallback=fallback))
+        current = sseed.current_upload_directory(models.SystemSetting, fallback=fallback)
+        if current:
+            allowed.add(current)
+        if normalized not in allowed:
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "That path is not in Upload directory history.",
+                    }
+                ),
+                400,
+            )
+
+        opened, result = folder_structure_support_mod.open_folder_in_os(normalized)
+        if opened:
+            return jsonify({"ok": True, "upload_directory": result, "opened": True})
+        # Keep the API message short; raw LaunchServices text is not useful in UI.
+        err = (result or "").strip()
+        if (
+            len(err) > 180
+            or "NSOSStatusErrorDomain" in err
+            or "Connection Invalid" in err
+            or "osascript" in err.lower()
+            or "hiservices-xpcservice" in err
+        ):
+            err = (
+                "Could not open Finder from this server process. "
+                "Restart the app from Terminal (or the desktop app), then try again."
+            )
+        return jsonify({"ok": False, "error": err or "Could not open that folder."}), 400
+
     @app.route("/control/system-setup/upload-directory", methods=["POST"])
     def control_system_setup_upload_directory():
         _admin_required()
@@ -482,7 +757,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json():
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_upload"))
         normalized = sseed.normalize_upload_directory(request.form.get("upload_directory"))
         if not normalized:
             msg = (
@@ -492,7 +767,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json():
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_upload"))
         try:
             os.makedirs(normalized, exist_ok=True)
             os.makedirs(os.path.join(normalized, "uploads"), exist_ok=True)
@@ -502,7 +777,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json():
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_upload"))
         sseed.set_system_setting(
             db,
             models.SystemSetting,
@@ -518,7 +793,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             f"Upload directory saved: {normalized}. Restart the server to apply it to new uploads.",
             "success",
         )
-        return redirect(url_for("control_system_setup"))
+        return redirect(url_for("control_system_setup_upload"))
 
     @app.route("/control/system-setup/upload-directory/history/remove", methods=["POST"])
     def control_system_setup_upload_directory_history_remove():
@@ -543,21 +818,21 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             if _wants_json() or request.is_json:
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_upload"))
         entity_id = sseed.upload_directory_history_entity_id(normalized)
         if entity_id is None:
             msg = "Choose a valid directory from history to remove."
             if _wants_json() or request.is_json:
                 return jsonify({"ok": False, "error": msg}), 400
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_upload"))
 
         if safe_delete_guard is None or safe_delete_service is None:
             msg = "Safe Delete is unavailable."
             if _wants_json() or request.is_json:
                 return jsonify({"ok": False, "error": msg}), 503
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_upload"))
 
         data_json = request.get_json(silent=True) or {}
         if not data_json.get("challenge_token"):
@@ -574,7 +849,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
                     400,
                 )
             flash(msg, "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_upload"))
 
         safe_challenge, sd_err = safe_delete_guard(
             sseed.UPLOAD_DIRECTORY_HISTORY_SAFE_DELETE_TYPE,
@@ -593,11 +868,11 @@ def register_system_seed_routes(app, ctx: dict) -> None:
                 {
                     "ok": True,
                     "upload_directory_history": history,
-                    "redirect": url_for("control_system_setup"),
+                    "redirect": url_for("control_system_setup_upload"),
                 }
             )
         flash(f"Removed from history: {normalized}", "success")
-        return redirect(url_for("control_system_setup"))
+        return redirect(url_for("control_system_setup_upload"))
 
     @app.route("/control/system-seed/run", methods=["POST"])
     def control_system_seed_run():
@@ -617,7 +892,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             flash(msg, "error")
             if result.get("warnings"):
                 flash("; ".join(result["warnings"][:3]), "error")
-            return redirect(url_for("control_system_setup"))
+            return redirect(url_for("control_system_setup_health"))
 
         if _wants_json():
             return jsonify({"ok": True, **result})
@@ -638,7 +913,7 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             flash(f"Backup saved: {result['backup_path']}", "success")
         for warning in (result.get("warnings") or [])[:5]:
             flash(warning, "warning")
-        return redirect(url_for("control_system_setup"))
+        return redirect(url_for("control_system_setup_health"))
 
     @app.cli.command("seed-system-data")
     @click.option("--skip-backup", is_flag=True, help="Skip pre-seed database backup (not recommended).")

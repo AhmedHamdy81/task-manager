@@ -71,6 +71,7 @@
 .system-setup__connection,
 .system-setup__email,
 .system-setup__upload,
+.system-setup__project-folders,
 .system-setup__working-hours,
 .system-setup__ir {
   margin-bottom: 1rem;
@@ -566,4 +567,41 @@
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.75rem;
+}
+
+.system-setup__project-folders-summary {
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  margin-top: 1rem;
+}
+
+.system-setup__project-folder-item {
+  align-items: flex-start;
+}
+
+.system-setup__project-folder-item.is-on-disk {
+  border-color: rgba(46, 160, 67, 0.45);
+}
+
+.system-setup__project-folder-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.system-setup__project-folder-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+}
+
+.system-setup__project-folder-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.system-setup__project-folder-meta {
+  margin: 0;
+  font-size: 0.85rem;
 }

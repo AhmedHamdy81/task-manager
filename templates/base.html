@@ -46,6 +46,7 @@
   {% endif %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/help-shot.css') }}">
   <script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/appearance.js') }}"></script>
   <script src="{{ url_for('static', filename='js/safe-delete.js') }}" defer></script>
   <script src="{{ url_for('static', filename='js/escape-modal-lock.js') }}"></script>
   <script src="{{ url_for('static', filename='js/dts.js') }}" defer></script>
@@ -159,23 +160,14 @@
             <a href="{{ url_for('updates_page') }}" class="app-nav-item{% if updates_news_active %} app-nav-item--active{% endif %}" data-nav="updates_news" data-tooltip="{{ _('Updates & News') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h6"/></svg></span><span class="app-nav-item-label">{{ _('Updates & News') }}</span></a>
             {% endif %}
             {% if current_account_is_admin %}
-            <a href="{{ url_for('control_system_setup') }}" class="app-nav-item{% if request.endpoint in ('control_system_setup', 'control_system_seed_run') %} app-nav-item--active{% endif %}" data-nav="system_setup" data-tooltip="{{ _('System Setup') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span><span class="app-nav-item-label">{{ _('System Setup') }}</span></a>
+            <a href="{{ url_for('control_system_setup') }}" class="app-nav-item{% if request.endpoint in ('control_system_setup', 'control_system_setup_email', 'control_system_setup_connection', 'control_system_setup_upload', 'control_system_setup_project_folders', 'control_system_setup_health', 'control_system_seed_run') %} app-nav-item--active{% endif %}" data-nav="system_setup" data-tooltip="{{ _('System Setup') }}"><span class="app-nav-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span><span class="app-nav-item-label">{{ _('System Setup') }}</span></a>
             {% endif %}
             {% endif %}
             {% endif %}
-          </nav>
-          {% else %}
-          <nav class="app-sidebar-nav" aria-label="{{ _('Account') }}">
-            <a href="{{ url_for('account_pending') }}" class="app-nav-item{% if request.endpoint == 'account_pending' %} app-nav-item--active{% endif %}">{{ _('Account status') }}</a>
-            <a href="{{ url_for('profile') }}" class="app-nav-item{% if request.endpoint == 'profile' %} app-nav-item--active{% endif %}">{{ _('Profile') }}</a>
-            <a href="{{ url_for('account_support') }}" class="app-nav-item{% if request.endpoint == 'account_support' %} app-nav-item--active{% endif %}">{{ _('Support') }}</a>
-          </nav>
-          {% endif %}
-          <div class="app-sidebar-spacer">
-            {% if account_may_use_app|default(true) %}
+            <p class="app-sidebar-section-title">{{ _('Help') }}</p>
             <a
               href="{{ url_for('app_tour') }}"
-              class="app-nav-item app-sidebar-tour{% if request.endpoint == 'app_tour' %} app-nav-item--active{% endif %}"
+              class="app-nav-item{% if request.endpoint == 'app_tour' or (request.endpoint and request.endpoint.startswith('app_tour')) %} app-nav-item--active{% endif %}"
               data-nav="tour"
               data-tooltip="{{ _('Take a Tour') }}"
             >
@@ -188,8 +180,15 @@
               </span>
               <span class="app-nav-item-label">{{ _('Take a Tour') }}</span>
             </a>
-            {% endif %}
-          </div>
+          </nav>
+          {% else %}
+          <nav class="app-sidebar-nav" aria-label="{{ _('Account') }}">
+            <a href="{{ url_for('account_pending') }}" class="app-nav-item{% if request.endpoint == 'account_pending' %} app-nav-item--active{% endif %}">{{ _('Account status') }}</a>
+            <a href="{{ url_for('profile') }}" class="app-nav-item{% if request.endpoint == 'profile' %} app-nav-item--active{% endif %}">{{ _('Profile') }}</a>
+            <a href="{{ url_for('account_support') }}" class="app-nav-item{% if request.endpoint == 'account_support' %} app-nav-item--active{% endif %}">{{ _('Support') }}</a>
+          </nav>
+          {% endif %}
+          <div class="app-sidebar-spacer" aria-hidden="true"></div>
           <div class="app-sidebar-lang">
             {% include 'partials/language_switcher.html' %}
           </div>

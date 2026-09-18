@@ -1140,7 +1140,7 @@ def register_working_hours_routes(app: Any, ctx: dict[str, Any]) -> None:
             ),
             "success" if not report["errors"] else "warning",
         )
-        return redirect(url_for("control_system_setup"))
+        return redirect(url_for("control_system_setup_health"))
 
     @app.cli.command("backfill-working-hours")
     def backfill_working_hours_command() -> None:
