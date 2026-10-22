@@ -308,6 +308,102 @@
   gap: 0.5rem;
   margin-top: auto;
 }
+.mr-mc__start-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+.mr-mc__estimate {
+  margin: 0;
+}
+.mr-mc__estimate-inputs {
+  display: inline-flex;
+  height: 2.75rem;
+  align-items: center;
+  gap: 0.4rem;
+}
+.mr-mc__estimate-inputs select {
+  height: 100%;
+  box-sizing: border-box;
+  width: 4.6rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.mr-mc__estimate-sep {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.mr-mc__ready {
+  margin-top: 1.75rem;
+}
+.mr-mc__ready-count {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: rgba(110, 231, 168, 0.14);
+  color: var(--mr-mc-ok);
+}
+.mr-mc__ready-wrap {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.mr-mc__ready-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.mr-mc__ready-table th {
+  padding: 0.6rem 0.85rem;
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.6);
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.mr-mc__ready-table td {
+  padding: 0.65rem 0.85rem;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.mr-mc__ready-table tbody tr:last-child td { border-bottom: 0; }
+.mr-mc__ready-table tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
+.mr-mc__ready-project { font-weight: 650; }
+.mr-mc__ready-nowrap { white-space: nowrap; }
+.mr-mc__ready-sub {
+  display: block;
+  font-size: 0.75rem;
+  color: rgba(226, 232, 240, 0.55);
+}
+.mr-mc__ready-actions {
+  white-space: nowrap;
+  text-align: right;
+}
+.mr-mc__ready-actions .btn,
+.mr-mc__ready-actions .mr-mc__icon-btn {
+  vertical-align: middle;
+}
+.mr-mc__ready-actions .mr-mc__icon-btn {
+  margin-left: 0.35rem;
+}
+.mr-mc__ready-actions .mr-mc__icon-btn[data-tooltip]::after {
+  left: auto;
+  right: calc(100% + 0.4rem);
+  bottom: auto;
+  top: 50%;
+  transform: translate(3px, -50%);
+}
+.mr-mc__ready-actions .mr-mc__icon-btn[data-tooltip]:hover::after,
+.mr-mc__ready-actions .mr-mc__icon-btn[data-tooltip]:focus-visible::after {
+  transform: translate(0, -50%);
+}
 .mr-mc__card-icons {
   display: inline-flex;
   gap: 0.4rem;

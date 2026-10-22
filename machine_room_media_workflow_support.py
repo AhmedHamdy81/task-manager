@@ -12,6 +12,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
+import notification_events as notif_events
+
 # Stages (ordered)
 STAGE_RECEIVE = "receive"
 STAGE_BACKUP = "backup"
@@ -190,6 +192,51 @@ TERM_HELP: dict[str, str] = {
     "verification": "Checking that the operation completed correctly.",
 }
 
+NOTIFY_EVENT_KEY = "machine_room_media_workflow_step"
+
+# Workflow history event → (step label for the notification, severity).
+NOTIFY_STEPS: dict[str, tuple[str, str]] = {
+    "workflow_created": ("Workflow started", "info"),
+    "material_received": ("Material received", "info"),
+    "backup_started": ("Backup started", "info"),
+    "backup_copy_finished": ("Backup copy finished", "info"),
+    "backup_verified": ("Backup verified", "info"),
+    "backup_verify_failed": ("Backup verification failed", "error"),
+    "transcode_started": ("Transcoding started", "info"),
+    "transcode_finished": ("Transcoding finished", "info"),
+    "proxies_verified": ("Proxies verified", "info"),
+    "ready_for_editing": ("Ready for editing", "info"),
+    "problem_reported": ("Problem reported", "warning"),
+    "problem_resolved": ("Problem resolved", "info"),
+    "workflow_ended": ("Workflow ended", "warning"),
+    "workflow_resumed": ("Workflow resumed", "info"),
+    "workflow_reopened": ("Workflow reopened", "warning"),
+}
+
+notif_events.register_notification_event(
+    NOTIFY_EVENT_KEY,
+    {
+        "label": "Machine Room Media Workflow Step",
+        "category": "system",
+        "description": (
+            "Sent to the project team at each Daily Media Processing step: received, backup, "
+            "transcoding, ready for editing, problems, and end/resume."
+        ),
+        "source": "Machine Room",
+        "source_file": "machine_room_media_workflow_routes.py",
+        "source_function": "_notify_step",
+        "source_feature": "Daily Media Processing",
+        "default_title": "{{ notification_title }}",
+        "default_body": "{{ notification_body }}",
+        "default_cta_label": "",
+        "default_cta_url": "",
+        "default_recipients": {"preset": "project_team"},
+        "variables": list(notif_events.COMMON_VARIABLES)
+        + ["workflow_id", "workflow_step", "shooting_days"],
+        "is_active": True,
+    },
+)
+
 # Map existing StorageVolume.storage_role → workflow roles
 ROLE_SHUTTLE = "transfer"
 ROLE_PROJECTS_BACKUP = "project_backup"
@@ -254,6 +301,7 @@ def register_machine_room_media_workflow_models(db, now_local) -> Any:
         )
         backup_destination_name = db.Column(db.String(160), nullable=False, default="")
         backup_destination_path = db.Column(db.String(512), nullable=False, default="")
+        backup_estimated_minutes = db.Column(db.Integer, nullable=True)
         backup_started_at = db.Column(db.DateTime, nullable=True)
         backup_finished_at = db.Column(db.DateTime, nullable=True)
         backup_verified_at = db.Column(db.DateTime, nullable=True)
@@ -299,6 +347,7 @@ def register_machine_room_media_workflow_models(db, now_local) -> Any:
         shooting_day = db.relationship("ShootingDay")
         assigned_operator = db.relationship("User", foreign_keys=[assigned_operator_id])
         ended_by = db.relationship("User", foreign_keys=[ended_by_id])
+        completed_by = db.relationship("User", foreign_keys=[completed_by_id])
         day_links = db.relationship(
             "MachineRoomMediaWorkflowDay",
             back_populates="workflow",
@@ -537,6 +586,7 @@ def _ensure_workflow_columns(db) -> None:
         ("ended_at", "DATETIME"),
         ("ended_by_id", "INTEGER"),
         ("end_reason", "TEXT NOT NULL DEFAULT ''"),
+        ("backup_estimated_minutes", "INTEGER"),
     )
     for col_name, col_def in additions:
         if col_name in cols:
@@ -783,7 +833,29 @@ def can_start_backup(workflow) -> tuple[bool, str]:
         return False, "Select a Projects Backup destination."
     if workflow.shuttle_volume_id == workflow.backup_destination_id:
         return False, "Source and destination must be different volumes."
+    if not workflow.backup_estimated_minutes:
+        return False, "Enter the estimated backup time (HH : MM)."
     return True, ""
+
+
+def format_hhmm(minutes: int | None) -> str:
+    """Minutes as HH:MM, e.g. 90 -> "01:30"."""
+    total = max(0, int(minutes or 0))
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+MAX_ESTIMATE_MINUTES = 48 * 60 + 59
+
+
+def parse_estimate_minutes(raw) -> int | None:
+    """Accept minutes as int/str; return None when missing, 0, or out of range."""
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if val <= 0 or val > MAX_ESTIMATE_MINUTES:
+        return None
+    return val
 
 
 def can_verify_backup(workflow) -> tuple[bool, str]:
@@ -811,10 +883,6 @@ def can_start_transcode(workflow) -> tuple[bool, str]:
         return False, "Backup verification is not complete."
     if not workflow.proxy_destination_id:
         return False, "Select an In-house Storage destination."
-    if not (workflow.proxy_preset or "").strip():
-        return False, "Select a proxy preset."
-    if not checks_complete(workflow.transcode_pre_checks, TRANSCODE_PRE_CHECKS):
-        return False, "Complete the pre-transcode checklist."
     return True, ""
 
 
@@ -959,6 +1027,14 @@ def serialize_workflow_card(workflow, *, operator_name: str = "") -> dict[str, A
         "current_stage": workflow.current_stage,
         "current_stage_label": STAGE_LABELS.get(workflow.current_stage, workflow.current_stage),
         "media_prep": workflow.media_prep_label(),
+        "completed_at": workflow.completed_at.isoformat() if workflow.completed_at else "",
+        "completed_at_display": (
+            workflow.completed_at.strftime("%d %b %Y · %H:%M") if workflow.completed_at else "—"
+        ),
+        "completed_by": workflow.completed_by.name if workflow.completed_by else "—",
+        "backup_destination_name": workflow.backup_destination_name or "—",
+        "proxy_destination_name": workflow.proxy_destination_name or "—",
+        "proxy_preset": workflow.proxy_preset or "",
         "stages": stages,
         "steps_done": sum(1 for s in stages if s["state"] == "completed"),
         "blocked": bool(workflow.blocked_by_issue),

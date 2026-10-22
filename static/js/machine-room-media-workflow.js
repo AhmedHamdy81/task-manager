@@ -532,9 +532,26 @@
       });
     }
 
+    var estH = active.querySelector("[data-mr-wf-est-h]");
+    var estM = active.querySelector("[data-mr-wf-est-m]");
+    function backupEstimateMinutes() {
+      if (!estH || !estM) return null;
+      return (parseInt(estH.value, 10) || 0) * 60 + (parseInt(estM.value, 10) || 0);
+    }
+    [estH, estM].forEach(function (sel) {
+      if (!sel) return;
+      sel.addEventListener("change", function () {
+        postJson(backupUrl, {
+          action: "save",
+          backup_estimated_minutes: backupEstimateMinutes(),
+        }).then(applyGates);
+      });
+    });
+
     clickAction("[data-mr-wf-backup-start]", backupUrl, function () {
       return {
         action: "start",
+        backup_estimated_minutes: backupEstimateMinutes(),
         backup_destination_id: checkedCardId("data-mr-wf-backup-dest"),
       };
     });

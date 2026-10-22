@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from flask import (
@@ -41,6 +41,8 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
     MR_STREAM_CONVERT_TITLE = ctx.get("MR_STREAM_CONVERT_TITLE", "Convert")
     notify_mr_stream_task_status = ctx.get("notify_mr_stream_task_status")
     emit_shooting_day_created_activity = ctx.get("emit_shooting_day_created_activity")
+    notification_recipient_user_ids = ctx.get("notification_recipient_user_ids")
+    notification_push_realtime_for_project = ctx.get("notification_push_realtime_for_project")
 
     StorageVolumeProjectLink = mr_support.register_machine_room_dashboard_models(
         db, now_local
@@ -109,26 +111,59 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             )
         return warnings
 
-    def _notify_workflow(acc, *, title: str, body: str, workflow, event_key: str | None = None):
-        if not send_managed_notification:
+    def _notify_step(w, event_type: str, message: str, event_row_id: int) -> None:
+        """Tell the workflow's project team about a step (managed rule, project-team fallback).
+
+        Each notification points at its history row so successive steps of one workflow
+        don't share a notification key and overwrite each other.
+        """
+        step = wf.NOTIFY_STEPS.get(event_type)
+        if step is None or send_managed_notification is None or not w.project_id:
             return
+        label, severity = step
+        project = db.session.get(Project, w.project_id)
+        if project is None:
+            return
+        acc = account_from_session()
+        days = wf.format_days_label(w.days)
+        title = f"{project.name or 'Project'} · {days}: {label}"
+        recipients = (
+            notification_recipient_user_ids(int(w.project_id), actor=acc)
+            if notification_recipient_user_ids
+            else []
+        )
         try:
-            project = db.session.get(Project, workflow.project_id)
-            send_managed_notification(
-                event_key or "mr_media_workflow_update",
+            sent = send_managed_notification(
+                wf.NOTIFY_EVENT_KEY,
                 project=project,
                 actor=acc,
-                title=title,
-                body=body,
                 context={
-                    "workflow_id": workflow.id,
-                    "project_id": workflow.project_id,
-                    "shooting_day_id": workflow.shooting_day_id,
+                    "notification_title": title,
+                    "notification_body": message,
+                    "notification_severity": severity,
+                    "entity_type": "mr_media_workflow_step",
+                    "entity_id": int(event_row_id),
+                    "workflow_id": int(w.id),
+                    "workflow_step": label,
+                    "shooting_days": days,
                 },
+                fallback_title=title,
+                fallback_body=message,
+                fallback_recipient_user_ids=recipients,
             )
+            if sent and notification_push_realtime_for_project:
+                notification_push_realtime_for_project(int(w.project_id), actor=acc)
         except Exception:
-            # Notification rules may not define this event yet — never block workflow.
-            pass
+            app.logger.exception("Machine Room workflow notification failed")
+
+    def _add_event(db_, models_, w, **kwargs):
+        """Record a workflow history event and notify the project team for step events."""
+        row = wf.add_workflow_event(db_, models_, w, **kwargs)
+        event_type = kwargs.get("event_type", "")
+        if event_type in wf.NOTIFY_STEPS:
+            db_.session.flush()
+            _notify_step(w, event_type, kwargs.get("message", ""), row.id)
+        return row
 
     def build_mission_control_bundle(actor) -> dict[str, Any]:
         """Context for progress tab Mission Control + optional active workflow."""
@@ -148,6 +183,12 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             if w.assigned_operator:
                 op_name = w.assigned_operator.name or ""
             cards.append(wf.serialize_workflow_card(w, operator_name=op_name))
+        ready_rows = sorted(
+            (c for c in cards if c["status"] == wf.STATUS_READY),
+            key=lambda c: c["completed_at"],
+            reverse=True,
+        )
+        cards = [c for c in cards if c["status"] != wf.STATUS_READY]
         cards.sort(key=lambda c: (c["status"] == wf.STATUS_ENDED, -c["steps_done"]))
 
         projects = Project.query.order_by(Project.name.asc()).all()
@@ -192,6 +233,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             "mr_workflow_enabled": True,
             "mr_wf_counts": counts,
             "mr_wf_cards": cards,
+            "mr_wf_ready_rows": ready_rows,
             "mr_wf_active": active_detail,
             "mr_wf_active_id": active.id if active else None,
             "mr_wf_project_choices": project_choices,
@@ -359,6 +401,15 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             "received_at": w.received_at.isoformat(timespec="minutes") if w.received_at else "",
             "backup_destination_id": w.backup_destination_id,
             "backup_destination": _vol_dict(backup_vol) if backup_vol else None,
+            "backup_estimated_minutes": w.backup_estimated_minutes or 0,
+            "backup_estimate_hhmm": (
+                wf.format_hhmm(w.backup_estimated_minutes) if w.backup_estimated_minutes else ""
+            ),
+            "backup_expected_finish": (
+                (w.backup_started_at + timedelta(minutes=w.backup_estimated_minutes)).strftime("%H:%M")
+                if w.backup_started_at and w.backup_estimated_minutes
+                else ""
+            ),
             "backup_started_at": w.backup_started_at.isoformat(timespec="minutes")
             if w.backup_started_at
             else "",
@@ -374,6 +425,9 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             "receive_checks_summary": wf.checks_summary(w.receive_checks, wf.RECEIVE_CHECKS),
             "backup_checks": w.backup_checks,
             "backup_checks_summary": wf.checks_summary(w.backup_checks, wf.BACKUP_CHECKS),
+            "transcode_pre_checks_summary": wf.checks_summary(
+                w.transcode_pre_checks, wf.TRANSCODE_PRE_CHECKS
+            ),
             "proxy_destination_id": w.proxy_destination_id,
             "proxy_destination": _vol_dict(proxy_vol) if proxy_vol else None,
             "proxy_preset": w.proxy_preset or "",
@@ -586,6 +640,21 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             return _conflict_response(exc.conflicts)
         if not created and not row.assigned_operator_id and uid:
             row.assigned_operator_id = uid
+        if created:
+            started = (
+                models.MachineRoomMediaWorkflowEvent.query.filter_by(
+                    workflow_id=row.id, event_type="workflow_created"
+                )
+                .order_by(models.MachineRoomMediaWorkflowEvent.id.desc())
+                .first()
+            )
+            if started is not None:
+                _notify_step(
+                    row,
+                    "workflow_created",
+                    f"Daily Media Processing started for {wf.format_days_label(row.days)}.",
+                    started.id,
+                )
         db.session.commit()
 
         if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -644,7 +713,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 wf.set_workflow_days(db, models, w, days)
                 if had_later:
                     wf.invalidate_downstream_after_receive_change(w, now_local)
-                wf.add_workflow_event(
+                _add_event(
                     db,
                     models,
                     w,
@@ -674,7 +743,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     )
                 if w.shuttle_volume_id and w.shuttle_volume_id != vid and w.backup_verified_at:
                     wf.invalidate_downstream_after_receive_change(w, now_local)
-                    wf.add_workflow_event(
+                    _add_event(
                         db,
                         models,
                         w,
@@ -715,7 +784,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 if len(backups) == 1:
                     w.backup_destination_id = backups[0].id
                     w.backup_destination_name = wf.volume_label(backups[0])
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
@@ -749,6 +818,9 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         data = request.get_json(silent=True) or {}
         action = (data.get("action") or "save").strip()
 
+        if "backup_estimated_minutes" in data and not w.backup_started_at:
+            w.backup_estimated_minutes = wf.parse_estimate_minutes(data.get("backup_estimated_minutes"))
+
         if "backup_destination_id" in data:
             try:
                 vid = int(data["backup_destination_id"]) if data.get("backup_destination_id") else None
@@ -766,7 +838,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     and w.backup_verified_at
                 ):
                     wf.invalidate_downstream_after_backup_change(w, now_local)
-                    wf.add_workflow_event(
+                    _add_event(
                         db,
                         models,
                         w,
@@ -816,18 +888,23 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     project_id=w.project_id,
                     user_id=assignee,
                     copy_started_at=now_local(),
+                    copy_estimated_minutes=w.backup_estimated_minutes,
                     copy_day_name=_task_day_name(w),
                     copy_unit_number=getattr(day, "unit_number", None) or 1,
                 )
                 db.session.add(t)
                 db.session.flush()
                 w.backup_copy_task_id = t.id
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
                 event_type="backup_started",
-                message="Backup started — operator to COPY (not move) to Projects Backup",
+                message=(
+                    "Backup started — estimated "
+                    f"{wf.format_hhmm(w.backup_estimated_minutes)} — "
+                    "operator to COPY (not move) to Projects Backup"
+                ),
                 actor_user_id=_user_id(acc),
                 stage=wf.STAGE_BACKUP,
                 now_fn=now_local,
@@ -854,7 +931,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 if t and t.status != "done":
                     # Leave open until verify — just note finish time already on workflow
                     pass
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
@@ -904,7 +981,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 if t and t.status != "done":
                     t.status = "done"
                     t.completed_at = now_local()
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
@@ -924,7 +1001,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         if action == "fail_verify":
             w.backup_verification_method = wf.VERIFY_FAILED
             w.status = wf.STATUS_PROBLEM
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
@@ -933,12 +1010,6 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 actor_user_id=_user_id(acc),
                 stage=wf.STAGE_BACKUP,
                 now_fn=now_local,
-            )
-            _notify_workflow(
-                acc,
-                title="Backup verification failed",
-                body=f"Workflow #{w.id} backup verification failed.",
-                workflow=w,
             )
             db.session.commit()
             return jsonify({"ok": True, "workflow": _workflow_detail(w, acc)})
@@ -1044,12 +1115,15 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 db.session.add(t)
                 db.session.flush()
                 w.convert_task_id = t.id
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
                 event_type="transcode_started",
-                message=f"Transcoding started — preset: {w.proxy_preset or 'unset'}",
+                message=(
+                    f"Transcoding started — preset: {w.proxy_preset or 'not recorded'} — "
+                    f"{wf.checks_summary(w.transcode_pre_checks, wf.TRANSCODE_PRE_CHECKS)}"
+                ),
                 actor_user_id=_user_id(acc),
                 stage=wf.STAGE_TRANSCODE,
                 now_fn=now_local,
@@ -1071,7 +1145,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             if not w.transcode_started_at:
                 return _json_error("Start transcoding first.")
             w.transcode_finished_at = now_local()
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
@@ -1103,7 +1177,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 if t and t.status != "done":
                     t.status = "done"
                     t.completed_at = now_local()
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
@@ -1147,7 +1221,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             w.completed_by_id = _user_id(acc)
             w.status = wf.STATUS_READY
             w.current_stage = wf.STAGE_COMPLETE
-            wf.add_workflow_event(
+            _add_event(
                 db,
                 models,
                 w,
@@ -1157,12 +1231,6 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 stage=wf.STAGE_COMPLETE,
                 verification_kind="operator",
                 now_fn=now_local,
-            )
-            _notify_workflow(
-                acc,
-                title="Shooting day ready for editing",
-                body=f"{w.project.name if w.project else 'Project'} — media preparation complete.",
-                workflow=w,
             )
             db.session.commit()
             return jsonify({"ok": True, "workflow": _workflow_detail(w, acc)})
@@ -1207,7 +1275,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         if issue.is_critical:
             w.blocked_by_issue = True
             w.status = wf.STATUS_PROBLEM
-        wf.add_workflow_event(
+        _add_event(
             db,
             models,
             w,
@@ -1215,12 +1283,6 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             message=f"Problem reported: {wf.PROBLEM_CATEGORY_LABELS.get(category, category)}",
             actor_user_id=_user_id(acc),
             now_fn=now_local,
-        )
-        _notify_workflow(
-            acc,
-            title="Machine Room problem reported",
-            body=description[:200],
-            workflow=w,
         )
         db.session.commit()
         return jsonify({"ok": True, "workflow": _workflow_detail(w, acc), "issue_id": issue.id})
@@ -1259,7 +1321,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             created_at=now_local(),
         )
         db.session.add(ov)
-        wf.add_workflow_event(
+        _add_event(
             db,
             models,
             w,
@@ -1315,7 +1377,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             created_at=now_local(),
         )
         db.session.add(ov)
-        wf.add_workflow_event(
+        _add_event(
             db,
             models,
             w,
@@ -1364,7 +1426,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             created_at=now_local(),
         )
         db.session.add(ov)
-        wf.add_workflow_event(
+        _add_event(
             db,
             models,
             w,
@@ -1415,7 +1477,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         w.ended_at = now_local()
         w.ended_by_id = _user_id(acc)
         w.end_reason = reason[:4000]
-        wf.add_workflow_event(
+        _add_event(
             db,
             models,
             w,
@@ -1443,7 +1505,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         w.ended_at = None
         w.ended_by_id = None
         w.end_reason = ""
-        wf.add_workflow_event(
+        _add_event(
             db,
             models,
             w,

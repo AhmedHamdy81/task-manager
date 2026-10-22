@@ -167,10 +167,65 @@
       </li>
       {% endfor %}
     </ul>
+    {% elif mr_wf_ready_rows %}
+    <p class="empty">No workflows in progress. Start one above.</p>
     {% else %}
     <p class="empty">No media workflows yet. Start one above.</p>
     {% endif %}
   </div>
+
+  {% if mr_wf_ready_rows %}
+  <div class="mr-mc__ready">
+    <h2 class="mr-mc__section-title">Ready for editing <span class="mr-mc__ready-count">{{ mr_wf_ready_rows|length }}</span></h2>
+    <div class="mr-mc__ready-wrap">
+      <table class="mr-mc__ready-table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col">Shooting days</th>
+            <th scope="col">Completed</th>
+            <th scope="col">Completed by</th>
+            <th scope="col">Backup</th>
+            <th scope="col">Proxies</th>
+            <th scope="col"><span class="visually-hidden">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in mr_wf_ready_rows %}
+          <tr>
+            <td class="mr-mc__ready-project">{{ r.project_name }}</td>
+            <td>{{ r.shooting_day_label }}{% if r.day_count > 1 %} <span class="mr-mc__card-days">{{ r.day_count }} days</span>{% endif %}</td>
+            <td class="mr-mc__ready-nowrap">{{ r.completed_at_display }}</td>
+            <td>{{ r.completed_by }}</td>
+            <td>{{ r.backup_destination_name }}</td>
+            <td>{{ r.proxy_destination_name }}{% if r.proxy_preset %}<span class="mr-mc__ready-sub">{{ r.proxy_preset }}</span>{% endif %}</td>
+            <td class="mr-mc__ready-actions">
+              <a class="btn btn-secondary btn-sm" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress', workflow_id=r.id) }}">View</a>
+              <button
+                type="button"
+                class="mr-mc__icon-btn mr-mc__icon-btn--danger"
+                data-tooltip="Delete workflow"
+                aria-label="Delete workflow"
+                data-safe-delete
+                data-entity-type="mr_media_workflow"
+                data-entity-id="{{ r.id }}"
+                data-entity-label="Workflow"
+                data-entity-name="{{ r.project_name }} · {{ r.shooting_day_label }}"
+                data-delete-url="{{ url_for('machine_room_workflow_remove', workflow_id=r.id) }}"
+                data-success-redirect="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}"
+                data-warning-text="This permanently deletes the workflow and its activity history. Its shooting days become free to process again. Files on disk are not touched. This cannot be undone."
+                data-confirm-label="Delete Permanently"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/></svg>
+              </button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
 
   <dialog class="mr-mc__modal" data-mr-wf-card-end-modal>
     <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-card-end-form>
@@ -183,7 +238,7 @@
       <p class="mr-mc__new-day-error" data-mr-wf-card-end-error hidden></p>
       <div class="mr-mc__actions-row">
         <button type="submit" class="btn btn-primary" value="submit">End workflow</button>
-        <button type="submit" class="btn btn-secondary" value="cancel">Cancel</button>
+        <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
       </div>
     </form>
   </dialog>

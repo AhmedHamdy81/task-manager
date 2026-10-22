@@ -144,15 +144,37 @@
     <p class="mr-mc__danger" role="note">Do not delete or move original files. Copy only.</p>
     {{ vol_cards(w.stage_volumes.backup, 'mr-wf-backup-dest', 'data-mr-wf-backup-dest', w.backup_destination_id, 'project_backup', 'Projects Backup', w.project_name) }}
     {% if not w.backup_started_at %}
+    {% set est = w.backup_estimated_minutes or 0 %}
+    <div class="mr-mc__start-row">
+    <div class="mr-mc__field mr-mc__estimate">
+      <span>Estimated backup time <span class="muted">(HH : MM)</span></span>
+      <div class="mr-mc__estimate-inputs" data-mr-wf-backup-estimate>
+        <select aria-label="Hours" data-mr-wf-est-h>
+          {% for h in range(0, 49) %}
+          <option value="{{ h }}"{% if h == est // 60 %} selected{% endif %}>{{ '%02d'|format(h) }}</option>
+          {% endfor %}
+        </select>
+        <span class="mr-mc__estimate-sep" aria-hidden="true">:</span>
+        <select aria-label="Minutes" data-mr-wf-est-m>
+          {% for m in range(0, 60) %}
+          <option value="{{ m }}"{% if m == est % 60 %} selected{% endif %}>{{ '%02d'|format(m) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
     <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-backup-start
       {% if not w.gates.backup_start.ok %}disabled title="{{ w.gates.backup_start.error }}"{% endif %}>
       Start backup
     </button>
+    </div>
     <p class="muted">Starts the recorded backup workflow. You still copy files with your approved tools — this app does not copy automatically.</p>
     {% else %}
     <div class="mr-mc__running">
       <p><strong>Backup in progress</strong> (recorded)</p>
       <p class="muted">Started: {{ w.backup_started_at }}{% if w.backup_finished_at %} · Finished: {{ w.backup_finished_at }}{% endif %}</p>
+      {% if w.backup_estimate_hhmm %}
+      <p class="muted">Estimated: {{ w.backup_estimate_hhmm }}{% if w.backup_expected_finish and not w.backup_finished_at %} · Expected to finish around {{ w.backup_expected_finish }}{% endif %}</p>
+      {% endif %}
       {% if not w.backup_finished_at %}
       <button type="button" class="btn btn-secondary" data-mr-wf-backup-finish>Copy finished</button>
       {% endif %}
@@ -203,7 +225,7 @@
     {{ vol_cards(w.stage_volumes.transcode, 'mr-wf-proxy-dest', 'data-mr-wf-proxy-dest', w.proxy_destination_id, 'working_storage', 'In-house Storage', w.project_name) }}
     <div class="mr-mc__fields">
       <label class="mr-mc__field">
-        <span>Proxy preset</span>
+        <span>Proxy preset <span class="muted">(optional — saved to the report)</span></span>
         <select data-mr-wf-preset>
           <option value="">Select preset…</option>
           {% for p in mr_wf_proxy_presets %}
@@ -214,7 +236,7 @@
     </div>
     {% if not w.transcode_started_at %}
     <fieldset class="mr-mc__checklist">
-      <legend>Pre-transcode checklist</legend>
+      <legend>Pre-transcode checklist <span class="muted">(optional — saved to the report)</span></legend>
       {% for key in mr_wf_transcode_pre_checks %}
       <label class="mr-mc__check">
         <input type="checkbox" value="{{ key }}" data-mr-wf-pre-check{% if key in w.transcode_pre_checks %} checked{% endif %}>
@@ -279,6 +301,8 @@
         <span class="muted">Backup checklist: {{ w.backup_checks_summary }}</span>
       </p>
       <p><strong>Editing proxies</strong><br>Projects Backup → In-house Storage<br>
+        <span class="muted">Proxy preset: {{ w.proxy_preset or 'Not recorded' }}</span><br>
+        <span class="muted">Pre-transcode checklist: {{ w.transcode_pre_checks_summary }}</span><br>
         Proxies: {% if w.transcode_verified_at %}Verified{% else %}Pending{% endif %}
       </p>
     </div>
@@ -332,7 +356,7 @@
       <p class="mr-mc__new-day-error" data-mr-wf-end-error hidden></p>
       <div class="mr-mc__actions-row">
         <button type="submit" class="btn btn-primary" value="submit">End workflow</button>
-        <button type="submit" class="btn btn-secondary" value="cancel">Cancel</button>
+        <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
       </div>
     </form>
   </dialog>
@@ -389,7 +413,7 @@
     </label>
     <div class="mr-mc__actions-row">
       <button type="submit" class="btn btn-primary" value="submit">Submit</button>
-      <button type="submit" class="btn btn-secondary" value="cancel">Cancel</button>
+      <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
     </div>
   </form>
 </dialog>

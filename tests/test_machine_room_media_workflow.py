@@ -51,6 +51,8 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         ):
             db.session.query(table).delete()
         db.session.query(self.StorageVolume).delete()
+        db.session.query(self.M["Notification"]).delete()
+        db.session.query(self.M["ProjectMember"]).delete()
         db.session.query(self.M["ShootingDay"]).delete()
         db.session.query(self.M["Project"]).delete()
         db.session.query(self.M["User"]).delete()
@@ -208,7 +210,7 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         r = self.client.post(
             f"/machine-room/workflows/{wid}/backup",
             data=json.dumps(
-                {"action": "start", "backup_destination_id": self.backup.id}
+                {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 90}
             ),
             headers=self._csrf_headers(),
         )
@@ -292,6 +294,16 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         page = self.client.get(f"/machine-room/tasks/progress?workflow_id={wid}")
         self.assertEqual(page.status_code, 200)
         self.assertIn("Shooting day ready", page.get_data(as_text=True))
+
+        # Ready workflows move from the card grid to the Ready for editing list
+        bundle = app.extensions["mr_media_workflow_bundle"]
+        with app.test_request_context("/machine-room/tasks/progress"):
+            ctx = bundle(self.mr_acc)
+        self.assertEqual([r["id"] for r in ctx["mr_wf_ready_rows"]], [wid])
+        self.assertNotIn(wid, [c["id"] for c in ctx["mr_wf_cards"]])
+        self.assertEqual(ctx["mr_wf_ready_rows"][0]["completed_by"], "MR Operator")
+        list_page = self.client.get("/machine-room/tasks/progress").get_data(as_text=True)
+        self.assertIn("mr-mc__ready-table", list_page)
 
     def test_critical_issue_blocks(self):
         wid = self._create_workflow()
@@ -540,7 +552,7 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         )
         self.client.post(
             f"/machine-room/workflows/{wid}/backup",
-            data=json.dumps({"action": "start", "backup_destination_id": self.backup.id}),
+            data=json.dumps({"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 90}),
             headers=h,
         )
         self.client.post(
@@ -559,6 +571,26 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         self.assertTrue(body["workflow"]["backup_checks_summary"].startswith("2 of 6 checks ticked"))
         messages = [e["message"] for e in body["workflow"]["events"]]
         self.assertTrue(any("2 of 6 checks ticked" in m for m in messages))
+
+        # Proxy preset and pre-transcode checklist are optional; only the destination is required.
+        r = self.client.post(
+            f"/machine-room/workflows/{wid}/transcode",
+            data=json.dumps({"action": "start"}),
+            headers=h,
+        )
+        if self.inhouse.id != body["workflow"].get("proxy_destination_id"):
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("In-house Storage", r.get_json()["error"])
+        r = self.client.post(
+            f"/machine-room/workflows/{wid}/transcode",
+            data=json.dumps({"action": "start", "proxy_destination_id": self.inhouse.id}),
+            headers=h,
+        )
+        started = r.get_json()
+        self.assertTrue(started.get("ok"), r.get_data(as_text=True)[:800])
+        self.assertTrue(started["workflow"]["transcode_pre_checks_summary"].startswith("0 of 6"))
+        messages = [e["message"] for e in started["workflow"]["events"]]
+        self.assertTrue(any("preset: not recorded" in m for m in messages))
 
     def test_end_blocks_actions_and_resume_restores(self):
         wid = self._create_workflow()
@@ -623,6 +655,81 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
             headers=h,
         ).get_json()
         self.assertTrue(again.get("created"))
+
+    def test_each_step_notifies_project_team(self):
+        editor_acc = self.M["Account"](email="editor-wf@test.local", password_hash="x", role="user")
+        db.session.add(editor_acc)
+        db.session.flush()
+        editor = self.M["User"](name="Editor", email="editor-wf@test.local", account_id=editor_acc.id)
+        outsider = self.M["User"](name="Outsider", email="outsider-wf@test.local")
+        db.session.add_all([editor, outsider])
+        db.session.flush()
+        db.session.add(self.M["ProjectMember"](project_id=self.project.id, user_id=editor.id))
+        db.session.commit()
+
+        wid = self._create_workflow()
+        h = self._csrf_headers()
+        self.client.post(
+            f"/machine-room/workflows/{wid}/receive",
+            data=json.dumps({"action": "continue", "shuttle_volume_id": self.shuttle.id}),
+            headers=h,
+        )
+        self.client.post(
+            f"/machine-room/workflows/{wid}/backup",
+            data=json.dumps({"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 90}),
+            headers=h,
+        )
+
+        Notification = self.M["Notification"]
+        titles = [
+            n.title
+            for n in Notification.query.filter_by(user_id=editor.id, entity_type="mr_media_workflow_step")
+            .order_by(Notification.id)
+            .all()
+        ]
+        self.assertTrue(any(t.endswith(": Workflow started") for t in titles), titles)
+        self.assertTrue(any(t.endswith(": Material received") for t in titles), titles)
+        self.assertTrue(any(t.endswith(": Backup started") for t in titles), titles)
+        self.assertTrue(all(t.startswith("Ras Al Afaa · ") for t in titles), titles)
+        self.assertEqual(
+            Notification.query.filter_by(user_id=outsider.id, entity_type="mr_media_workflow_step").count(),
+            0,
+        )
+
+    def test_backup_start_requires_estimate(self):
+        wid = self._create_workflow()
+        h = self._csrf_headers()
+        self.client.post(
+            f"/machine-room/workflows/{wid}/receive",
+            data=json.dumps({"action": "continue", "shuttle_volume_id": self.shuttle.id}),
+            headers=h,
+        )
+        url = f"/machine-room/workflows/{wid}/backup"
+        for bad in (None, 0, "abc", 49 * 60 + 1):
+            r = self.client.post(
+                url,
+                data=json.dumps(
+                    {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": bad}
+                ),
+                headers=h,
+            )
+            self.assertEqual(r.status_code, 400, bad)
+            self.assertIn("estimated backup time", r.get_json()["error"])
+
+        saved = self.client.post(
+            url, data=json.dumps({"action": "save", "backup_estimated_minutes": 95}), headers=h
+        ).get_json()
+        self.assertTrue(saved["workflow"]["gates"]["backup_start"]["ok"])
+        self.assertEqual(saved["workflow"]["backup_estimate_hhmm"], "01:35")
+
+        started = self.client.post(url, data=json.dumps({"action": "start"}), headers=h).get_json()
+        self.assertTrue(started.get("ok"))
+        self.assertTrue(started["workflow"]["backup_expected_finish"])
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, wid)
+        task = db.session.get(self.M["Task"], w.backup_copy_task_id)
+        self.assertEqual(task.copy_estimated_minutes, 95)
+        messages = [e["message"] for e in started["workflow"]["events"]]
+        self.assertTrue(any("estimated 01:35" in m for m in messages))
 
     def test_receive_requires_shuttle_volume(self):
         wid = self._create_workflow()
