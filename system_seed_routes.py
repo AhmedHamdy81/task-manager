@@ -10,6 +10,7 @@ from werkzeug.routing import BuildError
 
 import mail_service as mail_service_mod
 import mail_settings as mail_settings_mod
+import oauth_settings as oauth_settings_mod
 import folder_structure_support as folder_structure_support_mod
 import system_seed as sseed
 
@@ -25,6 +26,7 @@ SYSTEM_SETUP_SECTIONS = frozenset(
         "overview",
         "connection",
         "email",
+        "signin",
         "upload",
         "project-folders",
         "health",
@@ -33,10 +35,11 @@ SYSTEM_SETUP_SECTIONS = frozenset(
     }
 )
 SYSTEM_SETUP_PAGES = frozenset(
-    {"email", "connection", "upload", "project-folders", "health"}
+    {"email", "signin", "connection", "upload", "project-folders", "health"}
 )
 SYSTEM_SETUP_PAGE_ENDPOINTS = {
     "email": "control_system_setup_email",
+    "signin": "control_system_setup_signin",
     "connection": "control_system_setup_connection",
     "upload": "control_system_setup_upload",
     "project-folders": "control_system_setup_project_folders",
@@ -197,6 +200,11 @@ def register_system_seed_routes(app, ctx: dict) -> None:
                     "url": url_for("control_system_setup_email"),
                 },
                 {
+                    "key": "signin",
+                    "label": "Sign-in",
+                    "url": url_for("control_system_setup_signin"),
+                },
+                {
                     "key": "connection",
                     "label": "Connection",
                     "url": url_for("control_system_setup_connection"),
@@ -262,6 +270,29 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             "control_system_setup.html",
             **_shared_setup_nav_context(active_section="email"),
             **_mail_page_context(),
+        )
+
+    def _signin_page_context() -> dict:
+        cfg = oauth_settings_mod.resolve_oauth_config(
+            models.SystemSetting,
+            app_root=app_root,
+            include_secret=False,
+        )
+        origin = (request.url_root or "").rstrip("/")
+        return {
+            "oauth": cfg,
+            "oauth_secret_placeholder": oauth_settings_mod.SECRET_PLACEHOLDER,
+            "oauth_save_url": url_for("control_system_setup_signin"),
+            "oauth_google_redirect_uri": f"{origin}/login/google/callback",
+            "oauth_apple_redirect_uri": f"{origin}/login/apple/callback",
+            "oauth_google_origin": origin,
+        }
+
+    def _render_setup_signin_page():
+        return render_template(
+            "control_system_setup.html",
+            **_shared_setup_nav_context(active_section="signin"),
+            **_signin_page_context(),
         )
 
     def _render_setup_connection_page():
@@ -418,6 +449,46 @@ def register_system_seed_routes(app, ctx: dict) -> None:
             return jsonify({"ok": True, "mail": mail.public_dict(), "changed": changed})
         flash("Email & password-reset settings saved.", "success")
         return redirect(url_for("control_system_setup_email"))
+
+    @app.route("/control/system-setup/signin", methods=["GET", "POST"])
+    def control_system_setup_signin():
+        if request.method == "GET":
+            _admin_required()
+            return _render_setup_signin_page()
+        acc = _admin_required()
+        payload = {
+            "google_client_id": request.form.get("google_client_id") or "",
+            "google_client_secret": request.form.get("google_client_secret") or "",
+            "apple_client_id": request.form.get("apple_client_id") or "",
+        }
+        submitted_secret = str(payload.get("google_client_secret") or "")
+        env_locked = oauth_settings_mod.google_secret_env_locked()
+        replace_secret = bool(
+            submitted_secret
+            and submitted_secret != oauth_settings_mod.SECRET_PLACEHOLDER
+            and not env_locked
+        )
+        oauth_settings_mod.save_oauth_settings(
+            db,
+            models.SystemSetting,
+            payload,
+            app_root=app_root,
+            replace_secret=replace_secret,
+        )
+        if log_security_event is not None:
+            log_security_event(
+                "system_setup_oauth_settings_updated",
+                account_id=int(acc.id) if acc and getattr(acc, "id", None) else None,
+                entity_type="system_setting",
+                details={
+                    "google_configured": oauth_settings_mod.resolve_oauth_config(
+                        models.SystemSetting, app_root=app_root
+                    ).google_configured,
+                    "apple_configured": bool((payload.get("apple_client_id") or "").strip()),
+                },
+            )
+        flash("Sign-in settings saved.", "success")
+        return redirect(url_for("control_system_setup_signin"))
 
     @app.route("/control/system-setup/email/test", methods=["POST"])
     def control_system_setup_email_test():

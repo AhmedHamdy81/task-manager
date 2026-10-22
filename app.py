@@ -84,9 +84,13 @@ import employment_structure_support as employment_structure_support_mod
 import employment_structure_routes as employment_structure_routes_mod
 import machine_room_dashboard_support as machine_room_dashboard_support_mod
 import machine_room_dashboard_routes as machine_room_dashboard_routes_mod
+import machine_room_media_workflow_support as machine_room_media_workflow_support_mod
+import machine_room_media_workflow_routes as machine_room_media_workflow_routes_mod
 import project_storage_routes as project_storage_routes_mod
 import job_titles_master_support as job_titles_master_support_mod
 import account_approval_support as account_approval_support_mod
+import oauth_login_support as oauth_login_support_mod
+import oauth_settings as oauth_settings_mod
 import account_approval_routes as account_approval_routes_mod
 import workflow_engine as workflow_engine_mod
 import workflow_types as workflow_types_mod
@@ -701,6 +705,28 @@ def create_app() -> Flask:
             if u is not None and (u.name or "").strip():
                 return u.name.strip()
             return self.display_login
+
+        oauth_identities = db.relationship(
+            "AccountOAuthIdentity",
+            back_populates="account",
+            cascade="all, delete-orphan",
+            lazy=True,
+        )
+
+    class AccountOAuthIdentity(db.Model):
+        """Linked Google or Apple subject for passwordless sign-in."""
+
+        __tablename__ = "account_oauth_identity"
+        __table_args__ = (db.UniqueConstraint("provider", "subject", name="uq_account_oauth_provider_subject"),)
+
+        id = db.Column(db.Integer, primary_key=True)
+        account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False, index=True)
+        provider = db.Column(db.String(24), nullable=False, index=True)
+        subject = db.Column(db.String(255), nullable=False)
+        email = db.Column(db.String(255), nullable=True)
+        created_at = db.Column(db.DateTime, default=now_local, nullable=False)
+
+        account = db.relationship("Account", back_populates="oauth_identities")
 
     class JobCategory(db.Model):
         """Employment category grouping directory job titles."""
@@ -6398,6 +6424,13 @@ def create_app() -> Flask:
                 )
             )
 
+    def ensure_sqlite_account_oauth_identity_table() -> None:
+        if db.engine.dialect.name != "sqlite":
+            return
+        insp = inspect(db.engine)
+        if "account_oauth_identity" not in set(insp.get_table_names()):
+            AccountOAuthIdentity.__table__.create(bind=db.engine, checkfirst=True)
+
     def ensure_sqlite_account_approval_schema() -> None:
         account_approval_support_mod.ensure_sqlite_account_approval_columns(db, Account, User)
         account_approval_support_mod.backfill_existing_accounts_active(db, Account, ROLE_ADMIN)
@@ -9997,6 +10030,7 @@ def create_app() -> Flask:
         ensure_role_mapping_guest_titles()
         ensure_sqlite_users_profile_columns()
         ensure_sqlite_accounts_username_role_columns()
+        ensure_sqlite_account_oauth_identity_table()
         ensure_sqlite_editing_item_review_note_visibility_column()
         ensure_sqlite_projects_sort_order_column()
         ensure_sqlite_projects_episodes_shooting_columns()
@@ -10086,8 +10120,20 @@ def create_app() -> Flask:
             mail_settings_mod.apply_mail_config_to_app(app, _mail_cfg)
         except Exception:
             app.logger.exception("Could not apply saved mail settings at startup")
+        try:
+            oauth_settings_mod.ensure_oauth_setting_defaults(db, SystemSetting)
+            oauth_login_support_mod.set_oauth_config_loader(
+                lambda: oauth_settings_mod.resolve_oauth_config(
+                    SystemSetting,
+                    app_root=app_root,
+                    include_secret=True,
+                )
+            )
+        except Exception:
+            app.logger.exception("Could not apply saved Google/Apple sign-in settings at startup")
         employment_structure_support_mod.ensure_employment_structure_tables(db)
         machine_room_dashboard_support_mod.ensure_machine_room_dashboard_tables(db, now_local)
+        machine_room_media_workflow_support_mod.ensure_machine_room_media_workflow_tables(db, now_local)
         job_titles_master_support_mod.ensure_job_titles_master_tables(db)
         job_titles_master_support_mod.ensure_retired_post_scope_master_codes_migrated(
             db,
@@ -10104,7 +10150,18 @@ def create_app() -> Flask:
         ensure_sqlite_stored_instant_utc_to_cairo_v1()
 
     PUBLIC_ENDPOINTS = frozenset(
-        {"login", "register", "logout", "static", "forgot_password", "reset_password"}
+        {
+            "login",
+            "login_google",
+            "login_google_callback",
+            "login_apple",
+            "login_apple_callback",
+            "register",
+            "logout",
+            "static",
+            "forgot_password",
+            "reset_password",
+        }
     )
 
     def account_is_super_user_effective(acc: Account | None) -> bool:
@@ -10318,6 +10375,8 @@ def create_app() -> Flask:
             "avatar_preset_href_for_user": avatar_preset_href_for_user,
             "app_name": app.config["APP_NAME"],
             "allow_public_register": bool(app.config.get("ALLOW_PUBLIC_REGISTER")),
+            "google_login_configured": oauth_login_support_mod.google_configured(),
+            "apple_login_configured": oauth_login_support_mod.apple_configured(),
             "role_labels": ROLE_LABELS,
             "account_roles": ACCOUNT_ROLES,
             "guest_access_levels": GUEST_ACCESS_LEVELS,
@@ -13197,16 +13256,43 @@ def create_app() -> Flask:
             "has_title_presets": TaskGroupTitle.query.count() > 0,
         }
 
+    def _account_may_use_machine_room_tasks(actor: Account | None) -> bool:
+        """MR operators, plus elevated/producer supervisors for Mission Control."""
+        if actor is None:
+            return False
+        if account_is_machine_room_role(actor):
+            return True
+        return bool(account_is_elevated(actor) or account_can_create_projects(actor))
+
     def machine_room_tasks_page_bundle(
         actor: Account | None, *, fragment_tab_slug: str | None = None
     ) -> dict | None:
         """Template context for /machine-room/tasks/<tab>; None if not MR or not logged in."""
-        if actor is None or not account_is_machine_room_role(actor):
+        if actor is None or not _account_may_use_machine_room_tasks(actor):
             return None
-        mr_user_ids = mr_operator_user_ids(actor)
+        mr_user_ids = mr_operator_user_ids(actor) if account_is_machine_room_role(actor) else []
+        if not mr_user_ids and not account_is_machine_room_role(actor):
+            # Supervisors still need operator id list for legacy task stream filters
+            mr_user_ids = mr_operator_user_ids(actor) or []
         filt = _mr_machine_room_tasks_parse_request(fragment_tab_slug)
         per = MR_MACHINE_ROOM_TASKS_PER_PAGE
-        task_create_ctx = _mr_tasks_task_create_context(actor)
+        task_create_ctx = _mr_tasks_task_create_context(actor) if account_is_machine_room_role(actor) else {
+            "post_scope_fields": [],
+            "scope_groups": [],
+            "titles_by_group": {},
+            "projects": [],
+            "users": [],
+            "user_project_ids": {},
+            "has_title_presets": False,
+        }
+        wf_bundle_fn = app.extensions.get("mr_media_workflow_bundle")
+        wf_extra = {}
+        if filt.get("tab") == "progress" and callable(wf_bundle_fn):
+            try:
+                wf_extra = wf_bundle_fn(actor) or {}
+            except Exception:
+                app.logger.exception("Machine Room media workflow bundle failed")
+                wf_extra = {"mr_workflow_enabled": False}
         if not mr_user_ids:
             return {
                 "mr_operator_ids_empty": True,
@@ -13217,7 +13303,16 @@ def create_app() -> Flask:
                 "mr_status_next_url": url_for("machine_room_tasks_tab", tab_slug="progress"),
                 "project_choices": [],
                 "user_choices": [],
+                "progress_tasks": [],
+                "finished_tasks": [],
+                "total_progress": 0,
+                "total_finished": 0,
+                "progress_page": 1,
+                "finished_page": 1,
+                "progress_page_count": 1,
+                "finished_page_count": 1,
                 **task_create_ctx,
+                **wf_extra,
             }
 
         q_progress = _mr_machine_room_tasks_base_query(mr_user_ids, "progress", filt)
@@ -13264,6 +13359,7 @@ def create_app() -> Flask:
             "mr_url": mr_url,
             "mr_status_next_url": mr_url(),
             **task_create_ctx,
+            **wf_extra,
         }
 
     def all_tasks_for_tasks_list_page(acc: Account | None) -> list[Task]:
@@ -13930,6 +14026,203 @@ def create_app() -> Flask:
         session["lang"] = i18n_support_mod.normalize_lang(lang)
         return i18n_support_mod.redirect_after_language_change()
 
+    def _login_restricted_account(acc: Account, *, details: dict | None = None):
+        status = account_approval_support_mod.normalized_account_status(
+            getattr(acc, "status", None)
+        )
+        if status == account_approval_support_mod.STATUS_PENDING_APPROVAL:
+            flash("Your account is awaiting administrator approval.", "error")
+        elif status == account_approval_support_mod.STATUS_REJECTED:
+            msg = "Your registration request has not been approved."
+            if getattr(acc, "status_notes", None):
+                msg += f" {acc.status_notes}"
+            flash(msg, "error")
+        elif status == account_approval_support_mod.STATUS_SUSPENDED:
+            flash("Your account has been suspended.", "error")
+        else:
+            flash("Your account is not active.", "error")
+        session.clear()
+        session["account_id"] = acc.id
+        log_security_event(
+            "login_success",
+            account_id=acc.id,
+            details={"restricted": True, "status": status, **(details or {})},
+        )
+        return redirect(url_for("account_pending"))
+
+    def _login_active_account(acc: Account, next_url: str, *, details: dict | None = None):
+        session.clear()
+        session["account_id"] = acc.id
+        log_security_event("login_success", account_id=acc.id, details=details)
+        return redirect(next_url)
+
+    def _complete_account_login(acc: Account, next_url: str, *, details: dict | None = None):
+        if not account_approval_support_mod.account_may_use_app(acc):
+            return _login_restricted_account(acc, details=details)
+        return _login_active_account(acc, next_url, details=details)
+
+    def _link_oauth_identity(acc: Account, profile: dict[str, str]) -> None:
+        provider = (profile.get("provider") or "").strip()
+        subject = (profile.get("sub") or "").strip()
+        email = (profile.get("email") or "").strip().lower() or None
+        if not provider or not subject:
+            return
+        row = AccountOAuthIdentity.query.filter_by(provider=provider, subject=subject).first()
+        if row is None:
+            db.session.add(
+                AccountOAuthIdentity(
+                    account_id=acc.id,
+                    provider=provider,
+                    subject=subject,
+                    email=email,
+                )
+            )
+            return
+        if row.account_id != acc.id:
+            raise oauth_login_support_mod.OAuthLoginError(
+                "That Google or Apple account is already linked to a different login."
+            )
+        if email and row.email != email:
+            row.email = email
+
+    def _provision_oauth_account(profile: dict[str, str]) -> Account:
+        email = (profile.get("email") or "").strip().lower()
+        name = (profile.get("name") or "").strip() or _display_name_from_email(email)
+        acc = Account(
+            email=email,
+            password_hash=generate_password_hash(
+                secrets.token_urlsafe(48), method="pbkdf2:sha256"
+            ),
+            role=ROLE_USER,
+            status=account_approval_support_mod.STATUS_PENDING_APPROVAL,
+            is_active=False,
+        )
+        db.session.add(acc)
+        db.session.flush()
+        _link_oauth_identity(acc, profile)
+        link_account_to_directory_user(acc, display_name=name)
+        du = User.query.filter_by(account_id=acc.id).first()
+        legacy_req = UserApprovalRequest(
+            account_id=acc.id,
+            user_id=du.id if du else 0,
+            status=account_approval_support_mod.REQUEST_PENDING,
+            full_name=name,
+            email=email,
+        )
+        db.session.add(legacy_req)
+        db.session.flush()
+        workflow_engine.create_request(
+            request_type=workflow_types_mod.REQUEST_TYPE_USER_REGISTRATION,
+            created_by=acc,
+            target_user_id=du.id if du else None,
+            title=f"Registration: {name}",
+            description="New user registration awaiting approval.",
+            payload={
+                "account_id": int(acc.id),
+                "user_id": int(du.id) if du else None,
+                "full_name": name,
+                "email": email,
+                "oauth_provider": profile.get("provider"),
+            },
+            priority=workflow_types_mod.PRIORITY_HIGH,
+            legacy_request_type="user_approval_request",
+            legacy_request_id=int(legacy_req.id),
+            request=request,
+        )
+        account_approval_support_mod.write_approval_audit(
+            db,
+            AccountApprovalAuditLog,
+            action="registration",
+            actor_account_id=acc.id,
+            target_account_id=acc.id,
+            target_user_id=du.id if du else None,
+            entity_type="user_approval_request",
+            request=request,
+        )
+        return acc
+
+    def _account_from_oauth_profile(profile: dict[str, str]) -> Account:
+        provider = (profile.get("provider") or "").strip()
+        subject = (profile.get("sub") or "").strip()
+        email = (profile.get("email") or "").strip().lower()
+        if provider and subject:
+            linked = AccountOAuthIdentity.query.filter_by(
+                provider=provider, subject=subject
+            ).first()
+            if linked is not None:
+                acc = db.session.get(Account, linked.account_id)
+                if acc is not None:
+                    if email and linked.email != email:
+                        linked.email = email
+                    return acc
+        acc = Account.query.filter(db.func.lower(Account.email) == email).first() if email else None
+        if acc is not None:
+            _link_oauth_identity(acc, profile)
+            return acc
+        if not app.config.get("ALLOW_PUBLIC_REGISTER"):
+            raise oauth_login_support_mod.OAuthLoginError(
+                "No account uses that email. Ask an administrator to create one, then try again."
+            )
+        try:
+            return _provision_oauth_account(profile)
+        except sa_exc.IntegrityError as exc:
+            db.session.rollback()
+            raise oauth_login_support_mod.OAuthLoginError(
+                "Could not create an account for that email."
+            ) from exc
+
+    def _begin_oauth_login(provider: str, next_url: str):
+        if session.get("account_id"):
+            return redirect(next_url)
+        nonce = secrets.token_urlsafe(24)
+        state = oauth_login_support_mod.dump_oauth_state(
+            app.config["SECRET_KEY"],
+            {"p": provider, "n": nonce, "next": next_url},
+        )
+        if provider == oauth_login_support_mod.PROVIDER_GOOGLE:
+            if not oauth_login_support_mod.google_configured():
+                flash(
+                    "Google sign-in isn't set up yet. An administrator can add a Google client ID and secret in System Setup → Sign-in.",
+                    "error",
+                )
+                return redirect(url_for("login", next=next_url))
+            return redirect(
+                oauth_login_support_mod.google_authorize_url(
+                    redirect_uri=url_for("login_google_callback", _external=True),
+                    state=state,
+                    nonce=nonce,
+                )
+            )
+        if not oauth_login_support_mod.apple_configured():
+            flash(
+                "Apple sign-in isn't set up yet. An administrator can add an Apple Services ID in System Setup → Sign-in.",
+                "error",
+            )
+            return redirect(url_for("login", next=next_url))
+        return redirect(
+            oauth_login_support_mod.apple_authorize_url(
+                redirect_uri=url_for("login_apple_callback", _external=True),
+                state=state,
+                nonce=nonce,
+            )
+        )
+
+    def _oauth_state_payload(provider: str, state: str) -> dict[str, str]:
+        data = oauth_login_support_mod.load_oauth_state(app.config["SECRET_KEY"], state)
+        if data.get("p") != provider:
+            raise oauth_login_support_mod.OAuthLoginError(
+                "Sign-in could not be verified. Try again."
+            )
+        return data
+
+    def _finish_oauth_login(profile: dict[str, str], next_url: str):
+        acc = _account_from_oauth_profile(profile)
+        db.session.commit()
+        details = {"method": "oauth", "provider": profile.get("provider")}
+        if not account_approval_support_mod.account_may_use_app(acc):
+            return _login_restricted_account(acc, details=details)
+        return _complete_account_login(acc, next_url, details=details)
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if session.get("account_id"):
@@ -13959,36 +14252,78 @@ def create_app() -> Flask:
                 flash("Invalid sign-in or password.", "error")
                 return render_template("login.html", next_url=next_url)
 
-            if not account_approval_support_mod.account_may_use_app(acc):
-                status = account_approval_support_mod.normalized_account_status(
-                    getattr(acc, "status", None)
-                )
-                if status == account_approval_support_mod.STATUS_PENDING_APPROVAL:
-                    flash("Your account is awaiting administrator approval.", "error")
-                elif status == account_approval_support_mod.STATUS_REJECTED:
-                    msg = "Your registration request has not been approved."
-                    if getattr(acc, "status_notes", None):
-                        msg += f" {acc.status_notes}"
-                    flash(msg, "error")
-                elif status == account_approval_support_mod.STATUS_SUSPENDED:
-                    flash("Your account has been suspended.", "error")
-                else:
-                    flash("Your account is not active.", "error")
-                session.clear()
-                session["account_id"] = acc.id
-                log_security_event(
-                    "login_success",
-                    account_id=acc.id,
-                    details={"restricted": True, "status": status},
-                )
-                return redirect(url_for("account_pending"))
-
-            session.clear()
-            session["account_id"] = acc.id
-            log_security_event("login_success", account_id=acc.id)
-            return redirect(next_url)
+            return _complete_account_login(acc, next_url)
 
         return render_template("login.html", next_url=_safe_next_url(request.args.get("next")))
+
+    @app.route("/login/google")
+    def login_google():
+        return _begin_oauth_login(
+            oauth_login_support_mod.PROVIDER_GOOGLE,
+            _safe_next_url(request.args.get("next")),
+        )
+
+    @app.route("/login/google/callback")
+    def login_google_callback():
+        err = (request.args.get("error") or "").strip()
+        if err:
+            flash("Google sign-in was cancelled.", "error")
+            return redirect(url_for("login"))
+        try:
+            payload = _oauth_state_payload(
+                oauth_login_support_mod.PROVIDER_GOOGLE,
+                request.args.get("state") or "",
+            )
+            profile = oauth_login_support_mod.exchange_google_code(
+                code=request.args.get("code") or "",
+                redirect_uri=url_for("login_google_callback", _external=True),
+            )
+            return _finish_oauth_login(profile, _safe_next_url(payload.get("next")))
+        except oauth_login_support_mod.OAuthLoginError as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("login"))
+        except Exception:
+            db.session.rollback()
+            log_security_event("login_failure", details={"method": "oauth", "provider": "google"})
+            flash("Could not complete Google sign-in.", "error")
+            return redirect(url_for("login"))
+
+    @app.route("/login/apple")
+    def login_apple():
+        return _begin_oauth_login(
+            oauth_login_support_mod.PROVIDER_APPLE,
+            _safe_next_url(request.args.get("next")),
+        )
+
+    @app.route("/login/apple/callback", methods=["GET", "POST"])
+    def login_apple_callback():
+        src = request.form if request.method == "POST" else request.args
+        if (src.get("error") or "").strip():
+            flash("Apple sign-in was cancelled.", "error")
+            return redirect(url_for("login"))
+        try:
+            payload = _oauth_state_payload(
+                oauth_login_support_mod.PROVIDER_APPLE,
+                src.get("state") or "",
+            )
+            profile = oauth_login_support_mod.verify_apple_id_token(
+                src.get("id_token") or "",
+                nonce=payload.get("n") or None,
+            )
+            name = oauth_login_support_mod.parse_apple_user_name(src.get("user"))
+            if name:
+                profile["name"] = name
+            return _finish_oauth_login(profile, _safe_next_url(payload.get("next")))
+        except oauth_login_support_mod.OAuthLoginError as exc:
+            db.session.rollback()
+            flash(str(exc), "error")
+            return redirect(url_for("login"))
+        except Exception:
+            db.session.rollback()
+            log_security_event("login_failure", details={"method": "oauth", "provider": "apple"})
+            flash("Could not complete Apple sign-in.", "error")
+            return redirect(url_for("login"))
 
     PASSWORD_RESET_SALT = "password-reset"
     PASSWORD_RESET_MAX_AGE_SEC = 60 * 60
@@ -18838,7 +19173,7 @@ def create_app() -> Flask:
         actor = account_from_session()
         if actor is None:
             abort(403)
-        if not account_is_machine_room_role(actor):
+        if not _account_may_use_machine_room_tasks(actor):
             flash("That page is only available for Machine Room accounts.", "error")
             return redirect(url_for("index"))
         flat = request.args.to_dict(flat=True)
@@ -18870,7 +19205,7 @@ def create_app() -> Flask:
         actor = account_from_session()
         if actor is None:
             abort(403)
-        if not account_is_machine_room_role(actor):
+        if not _account_may_use_machine_room_tasks(actor):
             flash("That page is only available for Machine Room accounts.", "error")
             return redirect(url_for("index"))
         bundle = machine_room_tasks_page_bundle(actor)
@@ -35057,6 +35392,7 @@ def create_app() -> Flask:
     # Expose ORM classes for `tests/` (GET /notifications panel checks, etc.).
     app.extensions["tm_test_models"] = {
         "Account": Account,
+        "AccountOAuthIdentity": AccountOAuthIdentity,
         "User": User,
         "Project": Project,
         "ProjectMember": ProjectMember,
@@ -35316,6 +35652,30 @@ def create_app() -> Flask:
         "log_security_event": log_security_event,
     }
     machine_room_dashboard_routes_mod.register_machine_room_dashboard_routes(app, _machine_room_dashboard_ctx)
+
+    _mr_media_workflow_ctx = {
+        "db": db,
+        "now_local": now_local,
+        "Project": Project,
+        "ShootingDay": ShootingDay,
+        "User": User,
+        "StorageVolume": machine_room_dashboard_models.StorageVolume,
+        "Task": Task,
+        "account_from_session": account_from_session,
+        "account_is_machine_room_role": account_is_machine_room_role,
+        "account_is_elevated": account_is_elevated,
+        "account_is_producerish": account_can_create_projects,
+        "directory_user_id_for_account": directory_user_id_for_account,
+        "send_managed_notification": send_managed_notification,
+        "log_security_event": log_security_event,
+        "MR_STREAM_COPY_TITLE": MR_STREAM_COPY_TITLE,
+        "MR_STREAM_CONVERT_TITLE": MR_STREAM_CONVERT_TITLE,
+        "notify_mr_stream_task_status": None,
+        "emit_shooting_day_created_activity": emit_shooting_day_created_activity,
+    }
+    machine_room_media_workflow_routes_mod.register_machine_room_media_workflow_routes(
+        app, _mr_media_workflow_ctx
+    )
 
     import project_activity_routes as project_activity_routes_mod
 

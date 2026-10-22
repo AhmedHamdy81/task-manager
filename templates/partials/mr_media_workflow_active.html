@@ -1,0 +1,395 @@
+{% from "partials/mr_media_workflow_vol_cards.html" import vol_cards %}
+{% set w = mr_wf_active %}
+{% set focus = w.get('focus_stage') or w.current_stage %}
+<details class="mr-mc__assistant" data-mr-wf-assistant open>
+  <summary class="mr-mc__assistant-title">What do I do now?</summary>
+  <p class="mr-mc__assistant-body" data-mr-wf-assistant-body>{{ mr_wf_assistant.get(focus, mr_wf_assistant.get(w.current_stage, '')) }}</p>
+  <div class="mr-mc__term-help">
+    {% for key, text in mr_wf_term_help.items() %}
+    <details class="mr-mc__term">
+      <summary>What is {{ key }}?</summary>
+      <p>{{ text }}</p>
+    </details>
+    {% endfor %}
+  </div>
+</details>
+
+<article class="mr-mc__active{% if w.ended %} is-ended{% endif %}" data-mr-wf-active
+  data-workflow-id="{{ w.id }}"
+  data-stage="{{ w.current_stage }}"
+  data-focus="{{ focus }}"
+  data-receive-url="{{ url_for('machine_room_workflow_receive', workflow_id=w.id) }}"
+  data-backup-url="{{ url_for('machine_room_workflow_backup', workflow_id=w.id) }}"
+  data-transcode-url="{{ url_for('machine_room_workflow_transcode', workflow_id=w.id) }}"
+  data-complete-url="{{ url_for('machine_room_workflow_complete', workflow_id=w.id) }}"
+  data-issue-url="{{ url_for('machine_room_workflow_report_issue', workflow_id=w.id) }}"
+>
+  <header class="mr-mc__active-head">
+    <a class="mr-mc__back-list" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}">← All workflows</a>
+    <h2 class="mr-mc__active-project">{{ w.project_name }}</h2>
+    <p class="mr-mc__active-day">{{ w.shooting_day_label }}</p>
+    <p class="mr-mc__card-status" data-status="{{ w.status }}">{{ w.media_prep }}</p>
+    {% if w.blocked %}
+    <p class="mr-mc__blocked" role="alert">Progress blocked by a critical problem. Report details below or ask a supervisor to resolve it.</p>
+    {% endif %}
+    {% if w.ended %}
+    <div class="mr-mc__ended" role="status">
+      <p><strong>Ended at {{ w.current_stage_label }}</strong>{% if w.ended_at_display %} · {{ w.ended_at_display }}{% endif %}{% if w.ended_by %} · {{ w.ended_by }}{% endif %}</p>
+      {% if w.end_reason %}<p>{{ w.end_reason }}</p>{% endif %}
+      <button type="button" class="btn btn-primary btn-sm" data-mr-wf-resume
+        data-url="{{ url_for('machine_room_workflow_resume', workflow_id=w.id) }}">Resume workflow</button>
+    </div>
+    {% endif %}
+  </header>
+
+  <nav class="mr-mc__stepper" aria-label="Workflow stages">
+    {% for s in w.stages %}
+    <button type="button"
+      class="mr-mc__step mr-mc__step--{{ s.state }}{% if s.key == focus %} is-focus{% endif %}"
+      data-mr-wf-step="{{ s.key }}"
+      {% if s.state in ('locked', 'skipped') and not mr_wf_is_supervisor %}disabled{% endif %}
+    >
+      <span class="mr-mc__step-icon" aria-hidden="true">
+        {% if s.state == 'completed' %}✓{% elif s.state == 'problem' %}!{% elif s.state == 'locked' %}🔒{% elif s.state == 'ended' %}■{% elif s.state == 'skipped' %}–{% else %}●{% endif %}
+      </span>
+      <span class="mr-mc__step-label">{{ s.label }}</span>
+    </button>
+    {% if not loop.last %}<span class="mr-mc__step-arrow" aria-hidden="true">→</span>{% endif %}
+    {% endfor %}
+  </nav>
+
+  <p class="mr-mc__automation-note muted">{{ w.automation_note }}</p>
+
+  {# —— STAGE PANELS —— #}
+  <div class="mr-mc__stage-panel{% if focus != 'receive' %} is-hidden{% endif %}" data-mr-wf-panel="receive">
+    <p class="mr-mc__step-kicker">Step 1 of 4</p>
+    <h3 class="mr-mc__stage-title">Receive shooting material</h3>
+    <p class="mr-mc__stage-instr">Connect the Transfer / Shuttle drive containing the new shooting day.</p>
+    <div class="mr-mc__visual mr-mc__visual--drive mr-mc__visual--volumes">
+      {{ vol_cards(w.stage_volumes.receive, 'mr-wf-shuttle', 'data-mr-wf-shuttle-card', w.shuttle_volume_id, 'transfer', 'Transfer / Shuttle', w.project_name) }}
+      <button type="button" class="mr-mc__link-btn mr-mc__visual-edit" data-mr-wf-days-edit>Edit shooting days</button>
+    </div>
+    {% if w.shuttle_volume_id and w.shuttle_volume_id not in (w.stage_volumes.receive.volumes | map(attribute='id') | list) %}
+    <p class="mr-mc__warn">{{ w.shuttle_volume.name if w.shuttle_volume else 'The volume chosen earlier' }} is not linked to {{ w.project_name }}. Pick a volume linked to the project above.</p>
+    {% endif %}
+    <dialog class="mr-mc__modal mr-mc__modal--days" data-mr-wf-days-modal>
+      <div class="mr-mc__modal-inner">
+        <h3>Shooting days in this workflow</h3>
+        <p class="muted">Tick every day on this shuttle drive. Days already in another workflow show an Open link.</p>
+        {% if w.received_at %}
+        <p class="mr-mc__warn">Changing the days clears the Backup and Transcode confirmations so they get checked again.</p>
+        {% endif %}
+        <div class="mr-mc__day-pick" data-mr-wf-recv-days>
+          {% for d in mr_wf_days_by_project.get(w.project_id, []) %}
+          {% set owner = d.workflow_id %}
+          <label class="mr-mc__day-row{% if owner and owner != w.id %} mr-mc__day-row--taken{% endif %}">
+            {% if owner and owner != w.id %}
+            <span class="mr-mc__day-label">{{ d.label }}</span>
+            <a class="mr-mc__day-open" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress', workflow_id=owner) }}">Open</a>
+            {% else %}
+            <input type="checkbox" value="{{ d.id }}" data-mr-wf-recv-day{% if d.id in w.shooting_day_ids %} checked{% endif %}>
+            <span class="mr-mc__day-label">{{ d.label }}</span>
+            {% endif %}
+          </label>
+          {% endfor %}
+        </div>
+        <p class="mr-mc__new-day-error" data-mr-wf-days-error hidden></p>
+        <div class="mr-mc__actions-row">
+          <button type="button" class="btn btn-primary" data-mr-wf-days-save>Save days</button>
+          <button type="button" class="btn btn-secondary" data-mr-wf-days-cancel>Cancel</button>
+        </div>
+      </div>
+    </dialog>
+    <label class="mr-mc__field mr-mc__field--notes">
+      <span>Notes (optional)</span>
+      <textarea data-mr-wf-recv-notes rows="2">{{ w.receive_notes }}</textarea>
+    </label>
+    <fieldset class="mr-mc__checklist">
+      <legend>Receive checklist <span class="muted">(optional — saved to the report)</span></legend>
+      {% for key in mr_wf_receive_checks %}
+      <label class="mr-mc__check">
+        <input type="checkbox" value="{{ key }}" data-mr-wf-recv-check{% if key in w.receive_checks %} checked{% endif %}>
+        <span>{{ mr_wf_check_labels[key] }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    {% if w.received_at %}
+    <p class="mr-mc__report-line muted">Checklist at receive: {{ w.receive_checks_summary }}</p>
+    {% endif %}
+    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-recv-continue
+      {% if not w.gates.receive_continue.ok %}disabled title="{{ w.gates.receive_continue.error }}"{% endif %}>
+      Material received — continue
+    </button>
+  </div>
+
+  <div class="mr-mc__stage-panel{% if focus != 'backup' %} is-hidden{% endif %}" data-mr-wf-panel="backup">
+    <p class="mr-mc__step-kicker">Step 2 of 4</p>
+    <h3 class="mr-mc__stage-title">Backup original media</h3>
+    <p class="mr-mc__stage-instr">COPY all original shooting material from Transfer / Shuttle to Projects Backup.</p>
+    <div class="mr-mc__flow" aria-hidden="true">
+      <div class="mr-mc__flow-box mr-mc__flow-box--src">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7" y="8" width="10" height="10" rx="1"/><path d="M3 12h4M17 12h4"/></svg>
+        <strong>Transfer / Shuttle</strong>
+        <span>Source</span>
+        <em>{{ w.shuttle_volume.name if w.shuttle_volume else '—' }}</em>
+      </div>
+      <div class="mr-mc__flow-arrow">COPY →</div>
+      <div class="mr-mc__flow-box mr-mc__flow-box--dst">
+        <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 20h16a1 1 0 001-1V9l-7-4-7 4v10a1 1 0 001 1z"/><path d="M12 5v6"/></svg>
+        <strong>Projects Backup</strong>
+        <span>Destination</span>
+        <em>{{ w.backup_destination.name if w.backup_destination else '—' }}</em>
+      </div>
+    </div>
+    <p class="mr-mc__danger" role="note">Do not delete or move original files. Copy only.</p>
+    {{ vol_cards(w.stage_volumes.backup, 'mr-wf-backup-dest', 'data-mr-wf-backup-dest', w.backup_destination_id, 'project_backup', 'Projects Backup', w.project_name) }}
+    {% if not w.backup_started_at %}
+    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-backup-start
+      {% if not w.gates.backup_start.ok %}disabled title="{{ w.gates.backup_start.error }}"{% endif %}>
+      Start backup
+    </button>
+    <p class="muted">Starts the recorded backup workflow. You still copy files with your approved tools — this app does not copy automatically.</p>
+    {% else %}
+    <div class="mr-mc__running">
+      <p><strong>Backup in progress</strong> (recorded)</p>
+      <p class="muted">Started: {{ w.backup_started_at }}{% if w.backup_finished_at %} · Finished: {{ w.backup_finished_at }}{% endif %}</p>
+      {% if not w.backup_finished_at %}
+      <button type="button" class="btn btn-secondary" data-mr-wf-backup-finish>Copy finished</button>
+      {% endif %}
+    </div>
+    {% if w.backup_finished_at and not w.backup_verified_at %}
+    <fieldset class="mr-mc__checklist">
+      <legend>Backup completion checklist <span class="muted">(optional — saved to the report)</span></legend>
+      {% for key in mr_wf_backup_checks %}
+      <label class="mr-mc__check">
+        <input type="checkbox" value="{{ key }}" data-mr-wf-backup-check{% if key in w.backup_checks %} checked{% endif %}>
+        <span>{{ mr_wf_check_labels[key] }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <p class="muted">Operator verified file counts, folder structure and sizes — not a cryptographic checksum unless you attach evidence from an approved tool.</p>
+    <div class="mr-mc__actions-row">
+      <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-backup-verify
+        {% if not w.gates.backup_verify.ok %}disabled title="{{ w.gates.backup_verify.error }}"{% endif %}>
+        Backup verified — next step
+      </button>
+      <button type="button" class="btn btn-secondary" data-mr-wf-backup-fail>Report verification failed</button>
+    </div>
+    {% elif w.backup_verified_at %}
+    <p class="mr-mc__ok">Backup verified ({{ w.backup_verification_method }}). {{ w.backup_verification_evidence }}</p>
+    <p class="mr-mc__report-line muted">Checklist: {{ w.backup_checks_summary }}</p>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="mr-mc__stage-panel{% if focus != 'transcode' %} is-hidden{% endif %}" data-mr-wf-panel="transcode">
+    <p class="mr-mc__step-kicker">Step 3 of 4</p>
+    <h3 class="mr-mc__stage-title">Create editing proxies</h3>
+    <p class="mr-mc__stage-instr">Convert the verified original material into editing proxies and save them to In-house Storage.</p>
+    <div class="mr-mc__flow" aria-hidden="true">
+      <div class="mr-mc__flow-box mr-mc__flow-box--src">
+        <strong>Projects Backup</strong>
+        <span>Original media</span>
+        <em>{{ w.backup_destination.name if w.backup_destination else '—' }}</em>
+      </div>
+      <div class="mr-mc__flow-arrow">CONVERT →</div>
+      <div class="mr-mc__flow-box mr-mc__flow-box--dst">
+        <strong>In-house Storage</strong>
+        <span>Editing proxies</span>
+        <em>{{ w.proxy_destination.name if w.proxy_destination else '—' }}</em>
+      </div>
+    </div>
+    <p class="mr-mc__danger">Original material on Projects Backup must not be modified.</p>
+    {{ vol_cards(w.stage_volumes.transcode, 'mr-wf-proxy-dest', 'data-mr-wf-proxy-dest', w.proxy_destination_id, 'working_storage', 'In-house Storage', w.project_name) }}
+    <div class="mr-mc__fields">
+      <label class="mr-mc__field">
+        <span>Proxy preset</span>
+        <select data-mr-wf-preset>
+          <option value="">Select preset…</option>
+          {% for p in mr_wf_proxy_presets %}
+          <option value="{{ p }}"{% if w.proxy_preset == p %} selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    {% if not w.transcode_started_at %}
+    <fieldset class="mr-mc__checklist">
+      <legend>Pre-transcode checklist</legend>
+      {% for key in mr_wf_transcode_pre_checks %}
+      <label class="mr-mc__check">
+        <input type="checkbox" value="{{ key }}" data-mr-wf-pre-check{% if key in w.transcode_pre_checks %} checked{% endif %}>
+        <span>{{ mr_wf_check_labels[key] }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-transcode-start
+      {% if not w.gates.transcode_start.ok %}disabled title="{{ w.gates.transcode_start.error }}"{% endif %}>
+      Start transcoding
+    </button>
+    <p class="muted">Records the operation. Proxies are generated with your approved tools — this app does not transcode automatically.</p>
+    {% else %}
+    <div class="mr-mc__running">
+      <p><strong>Transcoding in progress</strong> (recorded)</p>
+      <p class="muted">Preset: {{ w.proxy_preset or '—' }} · Started: {{ w.transcode_started_at }}{% if w.transcode_finished_at %} · Finished: {{ w.transcode_finished_at }}{% endif %}</p>
+      {% if not w.transcode_finished_at %}
+      <button type="button" class="btn btn-secondary" data-mr-wf-transcode-finish>Transcoding finished</button>
+      {% endif %}
+    </div>
+    {% if w.transcode_finished_at and not w.transcode_verified_at %}
+    <fieldset class="mr-mc__checklist">
+      <legend>Proxy verification checklist <span class="muted">(Operator Confirmed)</span></legend>
+      {% for key in mr_wf_transcode_post_checks %}
+      <label class="mr-mc__check">
+        <input type="checkbox" value="{{ key }}" data-mr-wf-post-check{% if key in w.transcode_post_checks %} checked{% endif %}>
+        <span>{{ mr_wf_check_labels[key] }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-transcode-verify
+      {% if not w.gates.transcode_verify.ok %}disabled title="{{ w.gates.transcode_verify.error }}"{% endif %}>
+      Proxies verified — continue
+    </button>
+    {% elif w.transcode_verified_at %}
+    <p class="mr-mc__ok">Proxies verified.</p>
+    {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="mr-mc__stage-panel{% if focus != 'complete' %} is-hidden{% endif %}" data-mr-wf-panel="complete">
+    <p class="mr-mc__step-kicker">Step 4 of 4</p>
+    <h3 class="mr-mc__stage-title">Final check</h3>
+    <p class="mr-mc__stage-instr">Confirm that today's material is backed up and ready for editing.</p>
+    {% if w.status == 'ready' %}
+    <div class="mr-mc__success">
+      <p class="mr-mc__success-mark" aria-hidden="true">✓</p>
+      <h4>Shooting day ready</h4>
+      <p>{{ w.project_name }} — {{ w.shooting_day_label }}</p>
+      <p>Original media: backed up · Editing proxies: ready</p>
+      <div class="mr-mc__actions-row">
+        <a class="btn btn-primary" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}">Back to Machine Room</a>
+        <a class="btn btn-secondary" href="{{ url_for('project_detail', project_id=w.project_id) if w.project_id else '#' }}">View project</a>
+        <a class="btn btn-secondary" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}">Process next shooting day</a>
+      </div>
+    </div>
+    {% else %}
+    <div class="mr-mc__summary">
+      <p><strong>Original material</strong><br>Transfer / Shuttle → Projects Backup<br>
+        <span class="muted">Receive checklist: {{ w.receive_checks_summary }}</span><br>
+        Backup: {% if w.backup_verified_at %}Verified{% else %}Pending{% endif %}<br>
+        <span class="muted">Backup checklist: {{ w.backup_checks_summary }}</span>
+      </p>
+      <p><strong>Editing proxies</strong><br>Projects Backup → In-house Storage<br>
+        Proxies: {% if w.transcode_verified_at %}Verified{% else %}Pending{% endif %}
+      </p>
+    </div>
+    <fieldset class="mr-mc__checklist">
+      <legend>Final checklist</legend>
+      {% for key in mr_wf_complete_checks %}
+      <label class="mr-mc__check">
+        <input type="checkbox" value="{{ key }}" data-mr-wf-complete-check{% if key in w.complete_checks %} checked{% endif %}>
+        <span>{{ mr_wf_check_labels[key] }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-mark-ready
+      {% if not w.gates.mark_ready.ok %}disabled title="{{ w.gates.mark_ready.error }}"{% endif %}>
+      Mark ready for editing
+    </button>
+    {% endif %}
+  </div>
+
+  <div class="mr-mc__problem-bar">
+    {% if not w.ended %}
+    <button type="button" class="btn btn-secondary" data-mr-wf-open-problem>Report problem</button>
+    {% if w.status != 'ready' %}
+    <button type="button" class="btn btn-secondary mr-mc__btn-warn" data-mr-wf-open-end>End workflow here</button>
+    {% endif %}
+    {% endif %}
+    <button
+      type="button"
+      class="btn btn-secondary mr-mc__btn-danger"
+      data-safe-delete
+      data-entity-type="mr_media_workflow"
+      data-entity-id="{{ w.id }}"
+      data-entity-label="Workflow"
+      data-entity-name="{{ w.project_name }} · {{ w.shooting_day_label }}"
+      data-delete-url="{{ url_for('machine_room_workflow_remove', workflow_id=w.id) }}"
+      data-success-redirect="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}"
+      data-warning-text="This permanently deletes the workflow and its activity history. Its shooting days become free to process again. Files on disk are not touched. This cannot be undone."
+      data-confirm-label="Delete Permanently"
+    >Delete workflow</button>
+  </div>
+
+  <dialog class="mr-mc__modal" data-mr-wf-end-modal
+    data-url="{{ url_for('machine_room_workflow_end', workflow_id=w.id) }}">
+    <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-end-form>
+      <h3>End workflow at {{ w.current_stage_label }}</h3>
+      <p class="muted">The workflow stops here and keeps its history. Later steps are skipped. You can resume it later.</p>
+      <label class="mr-mc__field">
+        <span>Reason</span>
+        <textarea name="reason" rows="3" required placeholder="e.g. Backup only — proxies are made by the editor"></textarea>
+      </label>
+      <p class="mr-mc__new-day-error" data-mr-wf-end-error hidden></p>
+      <div class="mr-mc__actions-row">
+        <button type="submit" class="btn btn-primary" value="submit">End workflow</button>
+        <button type="submit" class="btn btn-secondary" value="cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <details class="mr-mc__history">
+    <summary>Activity history</summary>
+    <ol class="mr-mc__history-list">
+      {% for e in w.events|reverse %}
+      <li>
+        <time>{{ e.date_display }} {{ e.at_display }}</time>
+        — {{ e.message }}
+        {% if e.actor %} — {{ e.actor }}{% endif %}
+        {% if e.verification_kind %} <span class="muted">({{ e.verification_kind }})</span>{% endif %}
+      </li>
+      {% else %}
+      <li class="muted">No events yet.</li>
+      {% endfor %}
+    </ol>
+  </details>
+
+  {% if mr_wf_is_supervisor %}
+  <details class="mr-mc__supervisor">
+    <summary>Supervisor</summary>
+    <p class="muted">Overrides require a written reason and are recorded. They never mark failed work as verified.</p>
+    {% for issue in w.open_issues %}
+    <div class="mr-mc__issue">
+      <strong>{{ issue.category_label }}</strong> — {{ issue.description }}
+      <button type="button" class="btn btn-secondary btn-sm" data-mr-wf-resolve-issue="{{ issue.id }}"
+        data-url="{{ url_for('machine_room_workflow_resolve_issue', workflow_id=w.id, issue_id=issue.id) }}">
+        Resolve
+      </button>
+    </div>
+    {% endfor %}
+    <button type="button" class="btn btn-secondary btn-sm" data-mr-wf-reopen
+      data-url="{{ url_for('machine_room_workflow_reopen', workflow_id=w.id) }}">Reopen workflow…</button>
+  </details>
+  {% endif %}
+</article>
+
+<dialog class="mr-mc__modal" data-mr-wf-problem-modal>
+  <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-problem-form>
+    <h3>Report problem</h3>
+    <label class="mr-mc__field">
+      <span>Category</span>
+      <select name="category" required>
+        {% for c in mr_wf_problem_categories %}
+        <option value="{{ c.key }}">{{ c.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="mr-mc__field">
+      <span>Description</span>
+      <textarea name="description" rows="4" required></textarea>
+    </label>
+    <div class="mr-mc__actions-row">
+      <button type="submit" class="btn btn-primary" value="submit">Submit</button>
+      <button type="submit" class="btn btn-secondary" value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>

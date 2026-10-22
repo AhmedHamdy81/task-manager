@@ -1,11 +1,25 @@
 {% extends "base.html" %}
-{% block title %}Machine Room Tasks · {{ app_name }}{% endblock %}
+{% block title %}{% if filt.tab == 'progress' and mr_workflow_enabled %}Machine Room · Daily Media Processing{% else %}Machine Room Tasks{% endif %} · {{ app_name }}{% endblock %}
+{% block extra_head %}
+{% if filt.tab == 'progress' and mr_workflow_enabled %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine-room-media-workflow.css') }}">
+{% endif %}
+{% endblock %}
 {% block content %}
 <div
-  class="tasks-page-shell"
+  class="tasks-page-shell{% if filt.tab == 'progress' and mr_workflow_enabled %} tasks-page-shell--mr-mc{% endif %}"
   id="tasks-page-root"
   data-tm-tasks-fragment-url="{{ url_for('ui_fragment_machine_room_tasks_zone', tab_slug=filt.tab) }}"
 >
+  {% if filt.tab == 'progress' and mr_workflow_enabled %}
+  {% include "partials/mr_media_workflow_mission.html" %}
+  <details class="mr-mc__legacy-toggle">
+    <summary>Other Machine Room tasks (copy / convert stream)</summary>
+    <div id="mr-tasks-refresh-zone">
+      {% include 'partials/mr_tasks_zone_inner.html' %}
+    </div>
+  </details>
+  {% else %}
   <header class="page-head shell-page-head">
     <h1>Machine Room Tasks</h1>
     <p class="mr-tasks-breadcrumb" aria-label="Current section">
@@ -21,8 +35,12 @@
   <div id="mr-tasks-refresh-zone">
     {% include 'partials/mr_tasks_zone_inner.html' %}
   </div>
+  {% endif %}
 </div>
 {% endblock %}
 {% block extra_scripts %}
+{% if filt.tab == 'progress' and mr_workflow_enabled %}
+<script src="{{ url_for('static', filename='js/machine-room-media-workflow.js') }}" defer></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/dashboard-mr-postcopy.js') }}" defer></script>
 {% endblock %}

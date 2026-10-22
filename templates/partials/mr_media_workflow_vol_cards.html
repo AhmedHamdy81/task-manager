@@ -1,0 +1,45 @@
+{% macro vol_cards(group, input_name, data_attr, selected_id, role, role_label, project_name) %}
+<fieldset class="mr-mc__vol-pick">
+  <legend>{{ role_label }} volume</legend>
+  {% if group.volumes %}
+  <p class="mr-mc__vol-note muted">
+    {% if group.linked_only %}
+    Volumes linked to {{ project_name }}.
+    {% else %}
+    No {{ role_label }} volumes are linked to {{ project_name }} — showing all {{ role_label }} volumes.
+    {% endif %}
+    {% if group.detected %}Mount status checked just now.{% else %}Mount status from the last check.{% endif %}
+  </p>
+  <div class="mr-mc__vol-dock" role="radiogroup" aria-label="{{ role_label }} volume">
+    {% for v in group.volumes %}
+    <label class="mr-mc__vol-card mr-mc__vol-card--{{ role }}{% if not v.mounted %} mr-mc__vol-card--offline{% endif %}">
+      <input type="radio" name="{{ input_name }}" value="{{ v.id }}" {{ data_attr }}
+        {% if selected_id == v.id %}checked{% endif %}>
+      <span class="mr-mc__vol-card-check" aria-hidden="true">✓</span>
+      <span class="mr-mc__vol-card-icon" aria-hidden="true">
+        {% if role == 'transfer' %}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="8" width="10" height="10" rx="1"/><path d="M3 12h4M17 12h4M5 10l-2 2 2 2M19 10l2 2-2 2"/></svg>
+        {% elif role == 'project_backup' %}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20h16a1 1 0 001-1V9l-7-4-7 4v10a1 1 0 001 1z"/><path d="M12 5v6M9 8h6"/></svg>
+        {% else %}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20h16"/><path d="M6 20V9l6-4 6 4v11"/><rect x="10" y="13" width="4" height="7"/><path d="M9 9h6"/></svg>
+        {% endif %}
+      </span>
+      <span class="mr-mc__vol-card-name">{{ v.name }}</span>
+      <span class="mr-mc__vol-card-role">{% if v.linked %}Linked to project{% else %}{{ role_label }}{% endif %}</span>
+      <span class="mr-mc__vol-card-status">
+        <span class="mr-mc__vol-card-mount">{{ 'Mounted' if v.mounted else 'Not mounted' }}</span>
+        <span class="mr-mc__vol-card-free">
+          {% if v.capacity_tb and v.free_pct is not none %}{{ '%.0f'|format(v.free_pct) }}% free{% else %}Needs scan{% endif %}
+        </span>
+      </span>
+    </label>
+    {% endfor %}
+  </div>
+  {% elif group.strict %}
+  <p class="mr-mc__warn">No {{ role_label }} volumes are linked to {{ project_name }}. Link the shuttle drive to this project on <a href="{{ url_for('machine_room_dashboard', tab='volumes') }}">Storage</a>, then reload this page.</p>
+  {% else %}
+  <p class="mr-mc__warn">No {{ role_label }} volumes are set up. Ask an administrator to set a volume's role to {{ role_label }} on Storage.</p>
+  {% endif %}
+</fieldset>
+{% endmacro %}

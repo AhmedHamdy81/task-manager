@@ -232,6 +232,63 @@
       <p class="muted">{{ _('This preview never generates a real password-reset token.') }}</p>
     </div>
   </section>
+  {% elif active_section == 'signin' %}
+  <section class="panel admin-card system-setup__email" id="system-setup-signin">
+    <div class="system-setup__email-head">
+      <div>
+        <h2 class="panel-title">{{ _('Sign-in') }}</h2>
+        <p class="muted">{{ _('Let people sign in with Google or Apple. Create a Google OAuth web client, then paste the values here. Secrets are stored on this server and never shown again.') }}</p>
+      </div>
+      {% if oauth.google_configured %}
+      <span class="system-setup__badge system-setup__badge--ok">{{ _('Google configured') }}</span>
+      {% else %}
+      <span class="system-setup__badge system-setup__badge--warn">{{ _('Google not configured') }}</span>
+      {% endif %}
+    </div>
+
+    <ol class="muted" style="padding-inline-start:1.2rem;line-height:1.55">
+      <li>{{ _('Open Google Cloud Console → APIs & Services → Credentials → Create credentials → OAuth client ID → Web application.') }}</li>
+      <li>{{ _('Add authorized JavaScript origin:') }} <code>{{ oauth_google_origin }}</code></li>
+      <li>{{ _('Add authorized redirect URI:') }} <code>{{ oauth_google_redirect_uri }}</code></li>
+      <li>{{ _('Paste the client ID and client secret below, then save.') }}</li>
+    </ol>
+
+    <form method="post" action="{{ oauth_save_url }}" class="system-setup__email-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="system-setup__email-grid">
+        <label class="field">
+          <span class="field-label">{{ _('Google client ID') }}</span>
+          <input class="input" type="text" name="google_client_id" value="{{ oauth.google_client_id|e }}" autocomplete="off" spellcheck="false" placeholder="….apps.googleusercontent.com">
+        </label>
+        <div class="field">
+          <span class="field-label">{{ _('Google client secret') }}</span>
+          {% if oauth.google_secret_env_locked %}
+          <p class="muted field-hint">{{ _('Secret is supplied by GOOGLE_OAUTH_CLIENT_SECRET and cannot be changed here.') }}</p>
+          <input class="input" type="password" value="••••••••" disabled autocomplete="off">
+          {% else %}
+          <input
+            class="input"
+            type="password"
+            name="google_client_secret"
+            value=""
+            placeholder="{% if oauth.google_secret_configured %}{{ oauth_secret_placeholder|e }}{% endif %}"
+            autocomplete="new-password"
+            spellcheck="false"
+          >
+          <span class="field-hint muted">{% if oauth.google_secret_configured %}{{ _('Leave blank to keep the existing secret.') }}{% else %}{{ _('From Google Cloud → OAuth client → Client secret.') }}{% endif %}</span>
+          {% endif %}
+        </div>
+        <label class="field">
+          <span class="field-label">{{ _('Apple Services ID') }}</span>
+          <input class="input" type="text" name="apple_client_id" value="{{ oauth.apple_client_id|e }}" autocomplete="off" spellcheck="false" placeholder="com.example.signin">
+          <span class="field-hint muted">{{ _('Optional. Apple also needs this return URL:') }} <code>{{ oauth_apple_redirect_uri }}</code></span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary">{{ _('Save sign-in settings') }}</button>
+      </div>
+    </form>
+  </section>
   {% elif active_section == 'connection' %}
   <section class="panel admin-card system-setup__connection" id="system-setup-connection">
     <h2 class="panel-title">{{ _('Connection address') }}</h2>

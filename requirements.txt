@@ -4,3 +4,5 @@ flask-socketio==5.4.1
 python-socketio==5.11.4
 mutagen==1.47.0
 reportlab
+PyJWT==2.9.0
+cryptography==43.0.3
