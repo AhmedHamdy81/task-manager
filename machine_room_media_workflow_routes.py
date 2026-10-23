@@ -43,6 +43,8 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
     emit_shooting_day_created_activity = ctx.get("emit_shooting_day_created_activity")
     notification_recipient_user_ids = ctx.get("notification_recipient_user_ids")
     notification_push_realtime_for_project = ctx.get("notification_push_realtime_for_project")
+    ShootingDayCriticalNote = ctx.get("ShootingDayCriticalNote")
+    emit_shooting_day_critical_created = ctx.get("emit_shooting_day_critical_created")
 
     StorageVolumeProjectLink = mr_support.register_machine_room_dashboard_models(
         db, now_local
@@ -132,6 +134,11 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             if notification_recipient_user_ids
             else []
         )
+        entity_type, entity_id = "mr_media_workflow_step", int(event_row_id)
+        if event_type in wf.NOTIFY_BACKUP_LIVE_STEPS and w.backup_copy_task_id:
+            entity_type, entity_id = "task", int(w.backup_copy_task_id)
+        elif event_type in wf.NOTIFY_CONVERT_LIVE_STEPS and w.convert_task_id:
+            entity_type, entity_id = "task", int(w.convert_task_id)
         try:
             sent = send_managed_notification(
                 wf.NOTIFY_EVENT_KEY,
@@ -141,8 +148,9 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     "notification_title": title,
                     "notification_body": message,
                     "notification_severity": severity,
-                    "entity_type": "mr_media_workflow_step",
-                    "entity_id": int(event_row_id),
+                    "entity_type": entity_type,
+                    "entity_id": entity_id,
+                    "rule_entity_id": int(event_row_id),
                     "workflow_id": int(w.id),
                     "workflow_step": label,
                     "shooting_days": days,
@@ -386,7 +394,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             link_err = _shuttle_link_error(w)
             if link_err:
                 ok_recv, err_recv = False, link_err
-        ok_start_b, err_start_b = wf.can_start_backup(w)
+        ok_start_b, err_start_b = wf.can_start_backup(w, require_estimate=False)
         ok_ver_b, err_ver_b = wf.can_verify_backup(w)
         ok_start_t, err_start_t = wf.can_start_transcode(w)
         ok_ver_t, err_ver_t = wf.can_verify_transcode(w)
@@ -410,6 +418,23 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 if w.backup_started_at and w.backup_estimated_minutes
                 else ""
             ),
+            "backup_copy_task_id": w.backup_copy_task_id,
+            "backup_paused": bool(w.backup_paused_at and not w.backup_finished_at),
+            "transcode_paused": bool(w.transcode_paused_at and not w.transcode_finished_at),
+            "convert_task_id": w.convert_task_id,
+            "transcode_estimated_minutes": w.transcode_estimated_minutes or 0,
+            "transcode_notes": w.transcode_notes or "",
+            "proxy_destination_path": w.proxy_destination_path or "",
+            "backup_copy": {
+                "video_size_tb": w.backup_video_size_tb,
+                "audio_size_gb": w.backup_audio_size_gb,
+                "destination_path": w.backup_destination_path or "",
+                "checksum_method": (w.backup_checksum_method or "").replace("_", " ").title(),
+                "checksum_status": w.backup_checksum_status or "",
+                "notes": w.backup_copy_notes or "",
+                "critical": bool(w.backup_copy_critical),
+            },
+            "checksum_methods": list(wf.CHECKSUM_METHODS),
             "backup_started_at": w.backup_started_at.isoformat(timespec="minutes")
             if w.backup_started_at
             else "",
@@ -805,6 +830,148 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         db.session.commit()
         return jsonify({"ok": True, "workflow": _workflow_detail(w, acc)})
 
+    @app.route("/machine-room/workflows/<int:workflow_id>/backup/estimate", methods=["POST"])
+    def machine_room_workflow_backup_estimate(workflow_id: int):
+        """Edit time left on a running backup (same contract as the copy-task estimate modal)."""
+        acc = _require_mr_or_supervisor()
+        w = db.session.get(MachineRoomMediaWorkflow, workflow_id)
+        if w is None:
+            return _json_error("Workflow not found.", 404)
+        if w.status == wf.STATUS_ENDED:
+            return _json_error(wf.ENDED_ERROR, 409)
+        if not w.backup_started_at or w.backup_finished_at:
+            return _json_error("Time left can only be changed while the backup is running.")
+        data = request.get_json(silent=True) or {}
+        try:
+            remaining = int(data.get("remaining_minutes"))
+        except (TypeError, ValueError):
+            return _json_error("Enter time left between 1 minute and 48 hours.")
+        if remaining < 1 or remaining > 2880:
+            return _json_error("Enter time left between 1 minute and 48 hours.")
+        elapsed = wf.operation_active_minutes(w, "backup", now_local())
+        total = max(1, min(2880, int(-(-elapsed // 1)) + remaining))
+        w.backup_estimated_minutes = total
+        if Task is not None and w.backup_copy_task_id:
+            t = db.session.get(Task, w.backup_copy_task_id)
+            if t is not None:
+                t.copy_estimated_minutes = total
+        _add_event(
+            db,
+            models,
+            w,
+            event_type="backup_estimate_changed",
+            message=f"Backup time left set to {wf.format_hhmm(remaining)} — total estimate {wf.format_hhmm(total)}",
+            actor_user_id=_user_id(acc),
+            stage=wf.STAGE_BACKUP,
+            now_fn=now_local,
+        )
+        w.updated_at = now_local()
+        db.session.commit()
+        summary = wf.workflow_progress_summary(w)
+        return jsonify(
+            {
+                "ok": True,
+                "estimated_minutes": total,
+                "remaining_minutes": remaining,
+                "started_ms": summary["operations"][0]["started_ms"] or 0,
+            }
+        )
+
+    def _pause_or_resume(w, acc, key: str, action: str):
+        """Pause / continue a running backup or transcode; pauses are excluded from elapsed time."""
+        stage = wf.STAGE_BACKUP if key == "backup" else wf.STAGE_TRANSCODE
+        noun = "Backup" if key == "backup" else "Transcoding"
+        started = getattr(w, key + "_started_at")
+        if not started or getattr(w, key + "_finished_at"):
+            return _json_error(f"{noun} is not running.")
+        paused_at = getattr(w, key + "_paused_at")
+        now = now_local()
+        if action == "pause":
+            if paused_at:
+                return _json_error(f"{noun} is already paused.")
+            setattr(w, key + "_paused_at", now)
+            event_type, message = f"{key}_paused", f"{noun} paused by operator"
+        else:
+            if not paused_at:
+                return _json_error(f"{noun} is not paused.")
+            paused_for = max(0, int((now - paused_at).total_seconds()))
+            setattr(w, key + "_paused_seconds", int(getattr(w, key + "_paused_seconds") or 0) + paused_for)
+            setattr(w, key + "_paused_at", None)
+            event_type = f"{key}_resumed"
+            message = f"{noun} continued after {wf.format_hhmm(max(1, paused_for // 60))} paused"
+        task_id = w.backup_copy_task_id if key == "backup" else w.convert_task_id
+        if Task is not None and task_id:
+            t = db.session.get(Task, task_id)
+            if t is not None and t.status != "done":
+                t.copy_started_at = wf.operation_effective_start(w, key)
+        _add_event(
+            db,
+            models,
+            w,
+            event_type=event_type,
+            message=message,
+            actor_user_id=_user_id(acc),
+            stage=stage,
+            now_fn=now_local,
+        )
+        w.updated_at = now
+        db.session.commit()
+        return jsonify({"ok": True, "workflow": _workflow_detail(w, acc)})
+
+    def _fold_pause_on_finish(w, key: str, finished_at) -> None:
+        paused_at = getattr(w, key + "_paused_at")
+        if paused_at:
+            extra = max(0, int((finished_at - paused_at).total_seconds()))
+            setattr(w, key + "_paused_seconds", int(getattr(w, key + "_paused_seconds") or 0) + extra)
+            setattr(w, key + "_paused_at", None)
+
+    @app.route("/machine-room/workflows/<int:workflow_id>/transcode/estimate", methods=["POST"])
+    def machine_room_workflow_transcode_estimate(workflow_id: int):
+        """Edit time left on running transcoding (same contract as the copy-task estimate modal)."""
+        acc = _require_mr_or_supervisor()
+        w = db.session.get(MachineRoomMediaWorkflow, workflow_id)
+        if w is None:
+            return _json_error("Workflow not found.", 404)
+        if w.status == wf.STATUS_ENDED:
+            return _json_error(wf.ENDED_ERROR, 409)
+        if not w.transcode_started_at or w.transcode_finished_at:
+            return _json_error("Time left can only be changed while transcoding is running.")
+        data = request.get_json(silent=True) or {}
+        try:
+            remaining = int(data.get("remaining_minutes"))
+        except (TypeError, ValueError):
+            return _json_error("Enter time left between 1 minute and 48 hours.")
+        if remaining < 1 or remaining > 2880:
+            return _json_error("Enter time left between 1 minute and 48 hours.")
+        elapsed = wf.operation_active_minutes(w, "transcode", now_local())
+        total = max(1, min(2880, int(-(-elapsed // 1)) + remaining))
+        w.transcode_estimated_minutes = total
+        if Task is not None and w.convert_task_id:
+            t = db.session.get(Task, w.convert_task_id)
+            if t is not None:
+                t.copy_estimated_minutes = total
+        _add_event(
+            db,
+            models,
+            w,
+            event_type="transcode_estimate_changed",
+            message=f"Transcoding time left set to {wf.format_hhmm(remaining)} — total estimate {wf.format_hhmm(total)}",
+            actor_user_id=_user_id(acc),
+            stage=wf.STAGE_TRANSCODE,
+            now_fn=now_local,
+        )
+        w.updated_at = now_local()
+        db.session.commit()
+        summary = wf.workflow_progress_summary(w)
+        return jsonify(
+            {
+                "ok": True,
+                "estimated_minutes": total,
+                "remaining_minutes": remaining,
+                "started_ms": summary["operations"][1]["started_ms"] or 0,
+            }
+        )
+
     @app.route("/machine-room/workflows/<int:workflow_id>/backup", methods=["POST"])
     def machine_room_workflow_backup(workflow_id: int):
         acc = _require_mr_or_supervisor()
@@ -851,6 +1018,12 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 w.backup_destination_id = vid
                 w.backup_destination_name = wf.volume_label(vol)
                 w.backup_destination_path = (vol.mount_path or "")[:512]
+            elif w.backup_started_at:
+                return _json_error("Backup already started — the destination can't be cleared.")
+            else:
+                w.backup_destination_id = None
+                w.backup_destination_name = ""
+                w.backup_destination_path = ""
 
         if "checks" in data:
             allowed = set(wf.BACKUP_CHECKS)
@@ -872,6 +1045,31 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             ok, err = wf.can_start_backup(w)
             if not ok:
                 return _json_error(err)
+            dest_vol = db.session.get(StorageVolume, w.backup_destination_id)
+            details, err = wf.parse_copy_details(
+                data, mount_path=(getattr(dest_vol, "mount_path", "") or "")
+            )
+            if err:
+                return _json_error(err)
+            w.backup_video_size_tb = details["video_size_tb"]
+            w.backup_audio_size_gb = details["audio_size_gb"]
+            if details["destination_path"]:
+                w.backup_destination_path = details["destination_path"]
+            w.backup_checksum_method = details["checksum_method"]
+            w.backup_checksum_status = details["checksum_status"]
+            w.backup_copy_notes = details["notes"]
+            w.backup_copy_critical = details["critical"]
+            if details["critical"] and ShootingDayCriticalNote is not None:
+                for day in w.days:
+                    note = ShootingDayCriticalNote(
+                        shooting_day_id=day.id,
+                        body=details["notes"],
+                        created_by_user_id=_user_id(acc),
+                    )
+                    db.session.add(note)
+                    db.session.flush()
+                    if emit_shooting_day_critical_created is not None:
+                        emit_shooting_day_critical_created(note, day, actor=acc)
             w.current_stage = wf.STAGE_BACKUP
             w.status = wf.STATUS_IN_PROGRESS
             w.backup_started_at = now_local()
@@ -904,6 +1102,19 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     "Backup started — estimated "
                     f"{wf.format_hhmm(w.backup_estimated_minutes)} — "
                     "operator to COPY (not move) to Projects Backup"
+                    + "".join(
+                        f" · {label}: {value}"
+                        for label, value in (
+                            ("Path", w.backup_destination_path),
+                            ("Video", f"{w.backup_video_size_tb:g} TB" if w.backup_video_size_tb else ""),
+                            ("Audio", f"{w.backup_audio_size_gb:g} GB" if w.backup_audio_size_gb else ""),
+                            ("Checksum", " / ".join(
+                                x for x in (w.backup_checksum_method, w.backup_checksum_status) if x
+                            )),
+                            ("Critical note" if w.backup_copy_critical else "Notes", w.backup_copy_notes),
+                        )
+                        if value
+                    )
                 ),
                 actor_user_id=_user_id(acc),
                 stage=wf.STAGE_BACKUP,
@@ -922,15 +1133,20 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 }
             )
 
+        if action in ("pause", "resume"):
+            return _pause_or_resume(w, acc, "backup", action)
+
         if action == "finish_copy":
             if not w.backup_started_at:
                 return _json_error("Start backup first.")
             w.backup_finished_at = now_local()
+            _fold_pause_on_finish(w, "backup", w.backup_finished_at)
             if Task is not None and w.backup_copy_task_id:
                 t = db.session.get(Task, w.backup_copy_task_id)
                 if t and t.status != "done":
-                    # Leave open until verify — just note finish time already on workflow
-                    pass
+                    t.status = "done"
+                    t.copy_started_at = wf.operation_effective_start(w, "backup")
+                    t.completed_at = w.backup_finished_at
             _add_event(
                 db,
                 models,
@@ -1056,6 +1272,12 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 w.proxy_destination_id = vid
                 w.proxy_destination_name = wf.volume_label(vol)
                 w.proxy_destination_path = (vol.mount_path or "")[:512]
+            elif w.transcode_started_at:
+                return _json_error("Transcoding already started — the destination can't be cleared.")
+            else:
+                w.proxy_destination_id = None
+                w.proxy_destination_name = ""
+                w.proxy_destination_path = ""
 
         if "proxy_preset" in data:
             w.proxy_preset = (data.get("proxy_preset") or "").strip()[:120]
@@ -1094,6 +1316,24 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             ok, err = wf.can_start_transcode(w)
             if not ok:
                 return _json_error(err)
+            estimate = wf.parse_estimate_minutes(data.get("transcode_estimated_minutes"))
+            if not estimate:
+                return _json_error("Enter the estimated transcoding time (HH : MM).")
+            dest_vol = db.session.get(StorageVolume, w.proxy_destination_id)
+            path, err = wf.validate_destination_path(
+                data.get("destination_path"),
+                getattr(dest_vol, "mount_path", "") or "",
+                "In-house Storage",
+            )
+            if err:
+                return _json_error(err)
+            notes = str(data.get("notes") or "").strip()
+            if len(notes) > 20_000:
+                return _json_error("Notes are too long.")
+            w.transcode_estimated_minutes = estimate
+            w.transcode_notes = notes
+            if path:
+                w.proxy_destination_path = path
             w.current_stage = wf.STAGE_TRANSCODE
             w.status = wf.STATUS_IN_PROGRESS
             w.transcode_started_at = now_local()
@@ -1109,20 +1349,31 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     project_id=w.project_id,
                     user_id=assignee,
                     copy_started_at=now_local(),
+                    copy_estimated_minutes=estimate,
                     copy_day_name=_task_day_name(w),
                     copy_unit_number=getattr(day, "unit_number", None) or 1,
                 )
                 db.session.add(t)
                 db.session.flush()
                 w.convert_task_id = t.id
+            elif Task is not None and w.convert_task_id:
+                t = db.session.get(Task, w.convert_task_id)
+                if t is not None:
+                    t.status = "in_progress"
+                    t.completed_at = None
+                    t.copy_started_at = w.transcode_started_at
+                    t.copy_estimated_minutes = estimate
             _add_event(
                 db,
                 models,
                 w,
                 event_type="transcode_started",
                 message=(
-                    f"Transcoding started — preset: {w.proxy_preset or 'not recorded'} — "
+                    f"Transcoding started — estimated {wf.format_hhmm(estimate)} — "
+                    f"preset: {w.proxy_preset or 'not recorded'} — "
                     f"{wf.checks_summary(w.transcode_pre_checks, wf.TRANSCODE_PRE_CHECKS)}"
+                    + (f" · Path: {w.proxy_destination_path}" if w.proxy_destination_path else "")
+                    + (f" · Notes: {notes}" if notes else "")
                 ),
                 actor_user_id=_user_id(acc),
                 stage=wf.STAGE_TRANSCODE,
@@ -1141,10 +1392,20 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 }
             )
 
+        if action in ("pause", "resume"):
+            return _pause_or_resume(w, acc, "transcode", action)
+
         if action == "finish":
             if not w.transcode_started_at:
                 return _json_error("Start transcoding first.")
             w.transcode_finished_at = now_local()
+            _fold_pause_on_finish(w, "transcode", w.transcode_finished_at)
+            if Task is not None and w.convert_task_id:
+                t = db.session.get(Task, w.convert_task_id)
+                if t and t.status != "done":
+                    t.status = "done"
+                    t.copy_started_at = wf.operation_effective_start(w, "transcode")
+                    t.completed_at = w.transcode_finished_at
             _add_event(
                 db,
                 models,

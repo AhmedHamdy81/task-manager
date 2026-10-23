@@ -23,6 +23,33 @@
     return [];
   }
 
+  function copyTaskLiveHtml(copy) {
+    if (!copy || copy.id == null) return "";
+    return (
+      '<div class="task-copy-live notif-copy-task-live" data-task-id="' +
+      esc(String(copy.id)) +
+      '" data-status="' +
+      esc(copy.status || "open") +
+      '" data-est-min="' +
+      esc(copy.copy_estimated_minutes != null ? String(copy.copy_estimated_minutes) : "") +
+      '" data-started-ms="' +
+      esc(copy.started_ms != null ? String(copy.started_ms) : "0") +
+      '" data-finished-ms="' +
+      esc(copy.finished_ms != null ? String(copy.finished_ms) : "0") +
+      '" data-duration-label="' +
+      esc(copy.duration_label || "") +
+      '">' +
+      '<div class="task-progress">' +
+      '<div class="task-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+      '<div class="task-progress-fill" style="width: 0%;"></div>' +
+      '<span class="task-progress-pct" aria-hidden="true"></span>' +
+      "</div>" +
+      '<div class="task-progress-meta" aria-live="polite"></div>' +
+      "</div>" +
+      "</div>"
+    );
+  }
+
   function notificationCountsTowardBadge(n) {
     if (!n) return false;
     if (n.is_acknowledged || n.is_resolved) return false;
@@ -40,6 +67,8 @@
       entity_type: n.entity_type != null ? String(n.entity_type) : "",
       entity_id: n.entity_id != null ? Number(n.entity_id) : 0,
       project_id: n.project_id != null ? n.project_id : null,
+      project_name: n.project_name != null ? String(n.project_name) : "",
+      copy_task: n.copy_task && typeof n.copy_task === "object" ? n.copy_task : null,
       critical_shooting_day_id:
         n.critical_shooting_day_id != null && !Number.isNaN(Number(n.critical_shooting_day_id))
           ? Number(n.critical_shooting_day_id)
@@ -83,6 +112,8 @@
     var i18nAck = panel.getAttribute("data-i18n-ack") || "Ack";
     var i18nRemove = panel.getAttribute("data-i18n-remove") || "Remove";
     var i18nEmpty = panel.getAttribute("data-i18n-empty") || "No notifications.";
+    var i18nGeneral = panel.getAttribute("data-i18n-general") || "General";
+    var collapsedGroups = {};
     var filter = "all";
     var muteStorageKey = "notif_muted";
     var lastUnreadCount = null;
@@ -177,6 +208,14 @@
           return { ok: false };
         });
       });
+    }
+
+    function postEach(base, ids) {
+      Promise.all(
+        ids.map(function (id) {
+          return post(base + String(id)).catch(function () {});
+        })
+      ).then(loadNotifications);
     }
 
     function openEntity(n) {
@@ -284,106 +323,175 @@
         return;
       }
       listEl.innerHTML = "";
+      var groups = [];
+      var groupByKey = {};
       list.forEach(function (raw) {
         var n = normalizeNotification(raw);
         if (!n || raw.id == null || Number.isNaN(Number(raw.id))) return;
-        var item = document.createElement("div");
-        item.className = "notif-item " + esc(n.severity || "info");
-        if (!n.is_read) item.className += " is-unread";
-        if (n.is_acknowledged) item.className += " is-ack";
-        var timeLine = "";
-        if (
-          typeof window.tmDateTime !== "undefined" &&
-          window.tmDateTime.formatLocalTime &&
-          n.created_at
-        ) {
-          timeLine = window.tmDateTime.formatLocalTime(n.created_at);
+        var key = n.project_id != null ? "p" + String(n.project_id) : "general";
+        var group = groupByKey[key];
+        if (!group) {
+          group = {
+            key: key,
+            name: n.project_id != null ? n.project_name || "Project " + String(n.project_id) : i18nGeneral,
+            items: [],
+          };
+          groupByKey[key] = group;
+          groups.push(group);
         }
-        if (!timeLine && n.created_ago) timeLine = n.created_ago;
-        var actionHtml = "";
-        if (n.action_label && n.action_href) {
-          actionHtml =
-            ' <a class="notif-action-link" href="' +
-            esc(n.action_href) +
-            '">' +
-            esc(n.action_label) +
-            "</a>";
-        }
-        item.innerHTML =
-          '<div class="notif-main">' +
-          "<strong>" +
-          esc(n.title) +
-          "</strong>" +
-          "<p>" +
-          esc(n.message) +
-          actionHtml +
-          "</p>" +
-          "</div>" +
-          '<div class="notif-meta">' +
-          (timeLine
-            ? '<div class="notif-time">' + esc(timeLine) + "</div>"
-            : "") +
-          "</div>" +
-          '<div class="notif-actions">' +
-          '<button type="button" class="btn btn--small btn--ghost js-open">' +
-          esc(i18nOpen) +
-          "</button>" +
-          '<button type="button" class="btn btn--small btn--ghost js-ack">' +
-          esc(i18nAck) +
-          "</button>" +
-          '<button type="button" class="btn btn--small btn--ghost js-resolve">' +
-          esc(i18nRemove) +
-          "</button>" +
-          "</div>";
-        var btnOpen = item.querySelector(".js-open");
-        var btnAck = item.querySelector(".js-ack");
-        var btnResolve = item.querySelector(".js-resolve");
-        if (btnOpen) {
-          btnOpen.addEventListener("click", function () {
-            if (n.action_href) {
-              window.location.href = n.action_href;
-              return;
-            }
-            openEntity(n);
-          });
-        }
-        if (btnAck) {
-          btnAck.addEventListener("click", function (ev) {
-            ev.stopPropagation();
-            var counted = notificationCountsTowardBadge(n);
-            post(ackBase + String(n.id))
-              .then(function () {
-                item.remove();
-                if (!listEl.querySelectorAll(".notif-item").length) {
-                  listEl.innerHTML = '<p class="notif-empty">' + esc(i18nEmpty) + "</p>";
-                }
-                if (counted && notifBadge) {
-                  var c = Math.max(0, (Number(notifBadge.textContent) || 0) - 1);
-                  updateBadge(c);
-                  lastUnreadCount = c;
-                }
-                loadNotifications();
+        group.items.push(n);
+      });
+      groups.forEach(function (group) {
+        var unread = group.items.filter(notificationCountsTowardBadge).length;
+        var section = document.createElement("section");
+        section.className = "notif-group";
+        section.setAttribute("data-group-key", group.key);
+        var collapsed = !!collapsedGroups[group.key];
+        var head = document.createElement("button");
+        head.type = "button";
+        head.className = "notif-group__head";
+        head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        head.innerHTML =
+          '<span class="notif-group__name">' + esc(group.name) + "</span>" +
+          (unread ? '<span class="notif-group__unread">' + unread + " new</span>" : "") +
+          '<span class="notif-group__count">' + group.items.length + "</span>" +
+          '<span class="notif-group__chev" aria-hidden="true"></span>';
+        var body = document.createElement("div");
+        body.className = "notif-group__items";
+        body.hidden = collapsed;
+        head.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var nowCollapsed = !body.hidden;
+          body.hidden = nowCollapsed;
+          head.setAttribute("aria-expanded", nowCollapsed ? "false" : "true");
+          if (nowCollapsed) collapsedGroups[group.key] = true;
+          else delete collapsedGroups[group.key];
+        });
+        var entries = window.TmNotifThreads
+          ? window.TmNotifThreads.group(group.items)
+          : group.items.map(function (n) { return { kind: "single", n: n }; });
+        entries.forEach(function (entry) {
+          if (entry.kind === "thread") {
+            body.appendChild(
+              window.TmNotifThreads.renderThread(entry, {
+                ackLabel: i18nAck + " all",
+                removeLabel: i18nRemove + " all",
+                onAck: function (ids) { postEach(ackBase, ids); },
+                onResolve: function (ids) { postEach(resolveBase, ids); },
+                onRead: function (ids) { postEach(readBase, ids); },
               })
-              .catch(function () {
-                loadNotifications();
-              });
-          });
-        }
-        if (btnResolve) {
-          btnResolve.addEventListener("click", function () {
-            post(resolveBase + String(n.id)).then(loadNotifications).catch(function () {});
-          });
-        }
-        item.addEventListener("click", function (e) {
-          if (e.target && e.target.closest(".notif-actions")) return;
-          if (!n.is_read) {
-            post(readBase + String(n.id))
-              .then(loadNotifications)
-              .catch(function () {});
+            );
+          } else {
+            body.appendChild(buildItem(entry.n));
           }
         });
-        listEl.appendChild(item);
+        section.appendChild(head);
+        section.appendChild(body);
+        listEl.appendChild(section);
       });
+      if (typeof window.__tmTaskCopyLiveRefresh === "function") window.__tmTaskCopyLiveRefresh();
+    }
+
+    function buildItem(n) {
+      var item = document.createElement("div");
+      item.className = "notif-item " + esc(n.severity || "info");
+      if (!n.is_read) item.className += " is-unread";
+      if (n.is_acknowledged) item.className += " is-ack";
+      var timeLine = "";
+      if (
+        typeof window.tmDateTime !== "undefined" &&
+        window.tmDateTime.formatLocalTime &&
+        n.created_at
+      ) {
+        timeLine = window.tmDateTime.formatLocalTime(n.created_at);
+      }
+      if (!timeLine && n.created_ago) timeLine = n.created_ago;
+      var actionHtml = "";
+      if (n.action_label && n.action_href) {
+        actionHtml =
+          ' <a class="notif-action-link" href="' +
+          esc(n.action_href) +
+          '">' +
+          esc(n.action_label) +
+          "</a>";
+      }
+      item.innerHTML =
+        '<div class="notif-main">' +
+        "<strong>" +
+        esc(n.title) +
+        "</strong>" +
+        "<p>" +
+        esc(n.message) +
+        actionHtml +
+        "</p>" +
+        copyTaskLiveHtml(n.copy_task) +
+        "</div>" +
+        '<div class="notif-meta">' +
+        (timeLine
+          ? '<div class="notif-time">' + esc(timeLine) + "</div>"
+          : "") +
+        "</div>" +
+        '<div class="notif-actions">' +
+        '<button type="button" class="btn btn--small btn--ghost js-open">' +
+        esc(i18nOpen) +
+        "</button>" +
+        '<button type="button" class="btn btn--small btn--ghost js-ack">' +
+        esc(i18nAck) +
+        "</button>" +
+        '<button type="button" class="btn btn--small btn--ghost js-resolve">' +
+        esc(i18nRemove) +
+        "</button>" +
+        "</div>";
+      var btnOpen = item.querySelector(".js-open");
+      var btnAck = item.querySelector(".js-ack");
+      var btnResolve = item.querySelector(".js-resolve");
+      if (btnOpen) {
+        btnOpen.addEventListener("click", function () {
+          if (n.action_href) {
+            window.location.href = n.action_href;
+            return;
+          }
+          openEntity(n);
+        });
+      }
+      if (btnAck) {
+        btnAck.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          var counted = notificationCountsTowardBadge(n);
+          post(ackBase + String(n.id))
+            .then(function () {
+              var groupEl = item.closest(".notif-group");
+              item.remove();
+              if (groupEl && !groupEl.querySelector(".notif-item")) groupEl.remove();
+              if (!listEl.querySelectorAll(".notif-item").length) {
+                listEl.innerHTML = '<p class="notif-empty">' + esc(i18nEmpty) + "</p>";
+              }
+              if (counted && notifBadge) {
+                var c = Math.max(0, (Number(notifBadge.textContent) || 0) - 1);
+                updateBadge(c);
+                lastUnreadCount = c;
+              }
+              loadNotifications();
+            })
+            .catch(function () {
+              loadNotifications();
+            });
+        });
+      }
+      if (btnResolve) {
+        btnResolve.addEventListener("click", function () {
+          post(resolveBase + String(n.id)).then(loadNotifications).catch(function () {});
+        });
+      }
+      item.addEventListener("click", function (e) {
+        if (e.target && e.target.closest(".notif-actions")) return;
+        if (!n.is_read) {
+          post(readBase + String(n.id))
+            .then(loadNotifications)
+            .catch(function () {});
+        }
+      });
+      return item;
     }
 
     function loadNotifications() {

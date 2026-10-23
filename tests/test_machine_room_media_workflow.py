@@ -254,6 +254,7 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
                     "proxy_destination_id": self.inhouse.id,
                     "proxy_preset": "Premiere Editing Proxy",
                     "pre_checks": list(self.wf.TRANSCODE_PRE_CHECKS),
+                    "transcode_estimated_minutes": 45,
                 }
             ),
             headers=self._csrf_headers(),
@@ -281,9 +282,7 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
 
         r = self.client.post(
             f"/machine-room/workflows/{wid}/complete",
-            data=json.dumps(
-                {"action": "mark_ready", "checks": list(self.wf.COMPLETE_CHECKS)}
-            ),
+            data=json.dumps({"action": "mark_ready"}),
             headers=self._csrf_headers(),
         )
         data = r.get_json()
@@ -583,7 +582,9 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
             self.assertIn("In-house Storage", r.get_json()["error"])
         r = self.client.post(
             f"/machine-room/workflows/{wid}/transcode",
-            data=json.dumps({"action": "start", "proxy_destination_id": self.inhouse.id}),
+            data=json.dumps(
+                {"action": "start", "proxy_destination_id": self.inhouse.id, "transcode_estimated_minutes": 20}
+            ),
             headers=h,
         )
         started = r.get_json()
@@ -680,21 +681,29 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
             headers=h,
         )
 
+        backup_url = f"/machine-room/workflows/{wid}/backup"
+        self.client.post(f"{backup_url}/estimate", data=json.dumps({"remaining_minutes": 40}), headers=h)
+        self.client.post(backup_url, data=json.dumps({"action": "finish_copy"}), headers=h)
+
         Notification = self.M["Notification"]
-        titles = [
-            n.title
-            for n in Notification.query.filter_by(user_id=editor.id, entity_type="mr_media_workflow_step")
+        rows = (
+            Notification.query.filter_by(user_id=editor.id, project_id=self.project.id)
             .order_by(Notification.id)
             .all()
-        ]
+        )
+        titles = [n.title for n in rows]
         self.assertTrue(any(t.endswith(": Workflow started") for t in titles), titles)
         self.assertTrue(any(t.endswith(": Material received") for t in titles), titles)
-        self.assertTrue(any(t.endswith(": Backup started") for t in titles), titles)
         self.assertTrue(all(t.startswith("Ras Al Afaa · ") for t in titles), titles)
-        self.assertEqual(
-            Notification.query.filter_by(user_id=outsider.id, entity_type="mr_media_workflow_step").count(),
-            0,
-        )
+
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, wid)
+        db.session.refresh(w)
+        live = {n.title.rsplit(": ", 1)[-1] for n in rows if n.entity_type == "task" and n.entity_id == w.backup_copy_task_id}
+        self.assertEqual(live, {"Backup started", "Backup time left updated", "Backup copy finished"})
+        task = db.session.get(self.M["Task"], w.backup_copy_task_id)
+        self.assertEqual(task.status, "done")
+        self.assertEqual(task.completed_at, w.backup_finished_at)
+        self.assertEqual(Notification.query.filter_by(user_id=outsider.id).count(), 0)
 
     def test_backup_start_requires_estimate(self):
         wid = self._create_workflow()
@@ -714,7 +723,7 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
                 headers=h,
             )
             self.assertEqual(r.status_code, 400, bad)
-            self.assertIn("estimated backup time", r.get_json()["error"])
+            self.assertIn("estimated copy time", r.get_json()["error"])
 
         saved = self.client.post(
             url, data=json.dumps({"action": "save", "backup_estimated_minutes": 95}), headers=h
@@ -730,6 +739,263 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         self.assertEqual(task.copy_estimated_minutes, 95)
         messages = [e["message"] for e in started["workflow"]["events"]]
         self.assertTrue(any("estimated 01:35" in m for m in messages))
+
+    def test_backup_start_records_copy_details(self):
+        wid = self._create_workflow()
+        h = self._csrf_headers()
+        self.client.post(
+            f"/machine-room/workflows/{wid}/receive",
+            data=json.dumps({"action": "continue", "shuttle_volume_id": self.shuttle.id}),
+            headers=h,
+        )
+        url = f"/machine-room/workflows/{wid}/backup"
+        saved = self.client.post(
+            url, data=json.dumps({"action": "save", "backup_destination_id": self.backup.id}), headers=h
+        ).get_json()
+        self.assertTrue(saved["workflow"]["gates"]["backup_start"]["ok"])
+
+        base = {"action": "start", "backup_estimated_minutes": 30}
+        outside = self.client.post(
+            url, data=json.dumps({**base, "destination_path": "/Volumes/Other/Day24"}), headers=h
+        )
+        self.assertEqual(outside.status_code, 400)
+        self.assertIn("inside the Projects Backup volume", outside.get_json()["error"])
+
+        no_note = self.client.post(url, data=json.dumps({**base, "make_critical": True}), headers=h)
+        self.assertEqual(no_note.status_code, 400)
+
+        started = self.client.post(
+            url,
+            data=json.dumps(
+                {
+                    **base,
+                    "destination_path": "/Volumes/GRaid/RasAlAfaa/Day24",
+                    "video_size_tb": "1.5",
+                    "audio_size_gb": "20",
+                    "checksum_method": "xxhash",
+                    "checksum_status": "pending",
+                    "notes": "Card A012 corrupted",
+                    "make_critical": True,
+                }
+            ),
+            headers=h,
+        ).get_json()
+        self.assertTrue(started.get("ok"))
+        copy = started["workflow"]["backup_copy"]
+        self.assertEqual(copy["destination_path"], "/Volumes/GRaid/RasAlAfaa/Day24")
+        self.assertEqual(copy["video_size_tb"], 1.5)
+        self.assertEqual(copy["audio_size_gb"], 20)
+        self.assertEqual(copy["checksum_method"], "Xxhash")
+        self.assertTrue(copy["critical"])
+        from sqlalchemy import text
+
+        notes = db.session.execute(
+            text("SELECT body FROM shooting_day_critical_notes WHERE shooting_day_id = :d"),
+            {"d": self.day.id},
+        ).scalars().all()
+        self.assertIn("Card A012 corrupted", notes)
+        messages = [e["message"] for e in started["workflow"]["events"]]
+        self.assertTrue(any("Path: /Volumes/GRaid/RasAlAfaa/Day24" in m for m in messages))
+
+    def test_backup_destination_can_be_cleared_until_started(self):
+        wid = self._create_workflow()
+        h = self._csrf_headers()
+        self.client.post(
+            f"/machine-room/workflows/{wid}/receive",
+            data=json.dumps({"action": "continue", "shuttle_volume_id": self.shuttle.id}),
+            headers=h,
+        )
+        url = f"/machine-room/workflows/{wid}/backup"
+        self.client.post(url, data=json.dumps({"action": "save", "backup_destination_id": self.backup.id}), headers=h)
+        cleared = self.client.post(
+            url, data=json.dumps({"action": "save", "backup_destination_id": None}), headers=h
+        ).get_json()
+        self.assertIsNone(cleared["workflow"]["backup_destination_id"])
+        self.assertFalse(cleared["workflow"]["gates"]["backup_start"]["ok"])
+
+        self.client.post(
+            url,
+            data=json.dumps(
+                {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 30}
+            ),
+            headers=h,
+        )
+        locked = self.client.post(
+            url, data=json.dumps({"action": "save", "backup_destination_id": None}), headers=h
+        )
+        self.assertEqual(locked.status_code, 400)
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, wid)
+        db.session.refresh(w)
+        self.assertEqual(w.backup_destination_id, self.backup.id)
+
+    def test_backup_time_left_can_be_edited_while_running(self):
+        wid = self._create_workflow()
+        h = self._csrf_headers()
+        self.client.post(
+            f"/machine-room/workflows/{wid}/receive",
+            data=json.dumps({"action": "continue", "shuttle_volume_id": self.shuttle.id}),
+            headers=h,
+        )
+        url = f"/machine-room/workflows/{wid}/backup"
+        self.client.post(
+            url,
+            data=json.dumps(
+                {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 30}
+            ),
+            headers=h,
+        )
+        r = self.client.post(f"{url}/estimate", data=json.dumps({"remaining_minutes": 45}), headers=h)
+        body = r.get_json()
+        self.assertTrue(body["ok"])
+        self.assertGreaterEqual(body["estimated_minutes"], 45)
+        self.assertTrue(body["started_ms"])
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, wid)
+        db.session.refresh(w)
+        self.assertEqual(w.backup_estimated_minutes, body["estimated_minutes"])
+        task = db.session.get(self.M["Task"], w.backup_copy_task_id)
+        self.assertEqual(task.copy_estimated_minutes, body["estimated_minutes"])
+
+        bad = self.client.post(f"{url}/estimate", data=json.dumps({"remaining_minutes": 0}), headers=h)
+        self.assertEqual(bad.status_code, 400)
+        self.client.post(url, data=json.dumps({"action": "finish_copy"}), headers=h)
+        done = self.client.post(f"{url}/estimate", data=json.dumps({"remaining_minutes": 10}), headers=h)
+        self.assertEqual(done.status_code, 400)
+
+    def test_transcode_start_dialog_eta_and_live_task(self):
+        editor = self.M["User"](name="Editor T", email="editor-t@test.local")
+        db.session.add(editor)
+        db.session.flush()
+        db.session.add(self.M["ProjectMember"](project_id=self.project.id, user_id=editor.id))
+        db.session.commit()
+        wid = self._create_workflow()
+        h = self._csrf_headers()
+        self.client.post(
+            f"/machine-room/workflows/{wid}/receive",
+            data=json.dumps({"action": "continue", "shuttle_volume_id": self.shuttle.id}),
+            headers=h,
+        )
+        backup_url = f"/machine-room/workflows/{wid}/backup"
+        self.client.post(
+            backup_url,
+            data=json.dumps(
+                {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 30}
+            ),
+            headers=h,
+        )
+        self.client.post(backup_url, data=json.dumps({"action": "finish_copy"}), headers=h)
+        self.client.post(
+            backup_url,
+            data=json.dumps({"action": "verify", "verification_method": "operator_confirmed"}),
+            headers=h,
+        )
+        url = f"/machine-room/workflows/{wid}/transcode"
+        saved = self.client.post(
+            url, data=json.dumps({"action": "save", "proxy_destination_id": self.inhouse.id}), headers=h
+        ).get_json()
+        self.assertTrue(saved["workflow"]["gates"]["transcode_start"]["ok"])
+
+        no_eta = self.client.post(url, data=json.dumps({"action": "start"}), headers=h)
+        self.assertEqual(no_eta.status_code, 400)
+        self.assertIn("estimated transcoding time", no_eta.get_json()["error"])
+        outside = self.client.post(
+            url,
+            data=json.dumps(
+                {"action": "start", "transcode_estimated_minutes": 25, "destination_path": "/Volumes/Other/x"}
+            ),
+            headers=h,
+        )
+        self.assertEqual(outside.status_code, 400)
+        self.assertIn("In-house Storage", outside.get_json()["error"])
+
+        started = self.client.post(
+            url,
+            data=json.dumps(
+                {
+                    "action": "start",
+                    "transcode_estimated_minutes": 25,
+                    "destination_path": "/Volumes/Nucleus1/Proxies/Day24",
+                    "proxy_preset": "Premiere Editing Proxy",
+                    "notes": "Use LUT A",
+                }
+            ),
+            headers=h,
+        ).get_json()
+        self.assertTrue(started.get("ok"))
+        detail = started["workflow"]
+        self.assertEqual(detail["transcode_estimated_minutes"], 25)
+        self.assertEqual(detail["proxy_destination_path"], "/Volumes/Nucleus1/Proxies/Day24")
+        self.assertEqual(detail["transcode_notes"], "Use LUT A")
+        task = db.session.get(self.M["Task"], detail["convert_task_id"])
+        self.assertEqual(task.copy_estimated_minutes, 25)
+
+        edited = self.client.post(f"{url}/estimate", data=json.dumps({"remaining_minutes": 50}), headers=h).get_json()
+        self.assertTrue(edited["ok"])
+        db.session.refresh(task)
+        self.assertEqual(task.copy_estimated_minutes, edited["estimated_minutes"])
+
+        self.client.post(url, data=json.dumps({"action": "finish"}), headers=h)
+        db.session.refresh(task)
+        self.assertEqual(task.status, "done")
+        verified = self.client.post(url, data=json.dumps({"action": "verify"}), headers=h).get_json()
+        self.assertTrue(verified.get("ok"), verified)
+        self.assertTrue(verified["workflow"]["transcode_verified_at"])
+        Notification = self.M["Notification"]
+        linked = {
+            n.title.rsplit(": ", 1)[-1]
+            for n in Notification.query.filter_by(user_id=editor.id, entity_type="task", entity_id=task.id).all()
+        }
+        self.assertEqual(linked, {"Transcoding started", "Transcoding time left updated", "Transcoding finished"})
+
+    def test_backup_pause_and_continue_excludes_paused_time(self):
+        from datetime import timedelta
+
+        wid = self._create_workflow()
+        h = self._csrf_headers()
+        self.client.post(
+            f"/machine-room/workflows/{wid}/receive",
+            data=json.dumps({"action": "continue", "shuttle_volume_id": self.shuttle.id}),
+            headers=h,
+        )
+        url = f"/machine-room/workflows/{wid}/backup"
+        self.client.post(
+            url,
+            data=json.dumps(
+                {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 60}
+            ),
+            headers=h,
+        )
+        not_paused = self.client.post(url, data=json.dumps({"action": "resume"}), headers=h)
+        self.assertEqual(not_paused.status_code, 400)
+
+        paused = self.client.post(url, data=json.dumps({"action": "pause"}), headers=h).get_json()
+        self.assertTrue(paused["workflow"]["backup_paused"])
+        twice = self.client.post(url, data=json.dumps({"action": "pause"}), headers=h)
+        self.assertEqual(twice.status_code, 400)
+
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, wid)
+        db.session.refresh(w)
+        task = db.session.get(self.M["Task"], w.backup_copy_task_id)
+        original_start = w.backup_started_at
+        w.backup_paused_at = w.backup_paused_at - timedelta(minutes=10)
+        db.session.commit()
+
+        resumed = self.client.post(url, data=json.dumps({"action": "resume"}), headers=h).get_json()
+        self.assertFalse(resumed["workflow"]["backup_paused"])
+        db.session.refresh(w)
+        db.session.refresh(task)
+        self.assertGreaterEqual(w.backup_paused_seconds, 600)
+        self.assertEqual(w.backup_started_at, original_start)
+        self.assertEqual(task.copy_started_at, original_start + timedelta(seconds=w.backup_paused_seconds))
+        messages = [e["message"] for e in resumed["workflow"]["events"]]
+        self.assertTrue(any("Backup paused" in m for m in messages))
+        self.assertTrue(any("Backup continued" in m for m in messages))
+
+        self.client.post(url, data=json.dumps({"action": "pause"}), headers=h)
+        self.client.post(url, data=json.dumps({"action": "finish_copy"}), headers=h)
+        db.session.refresh(w)
+        db.session.refresh(task)
+        self.assertIsNone(w.backup_paused_at)
+        self.assertEqual(task.status, "done")
 
     def test_receive_requires_shuttle_volume(self):
         wid = self._create_workflow()

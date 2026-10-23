@@ -1,21 +1,28 @@
 {% from "partials/mr_media_workflow_vol_cards.html" import vol_cards %}
 {% set w = mr_wf_active %}
 {% set focus = w.get('focus_stage') or w.current_stage %}
-<details class="mr-mc__assistant" data-mr-wf-assistant open>
-  <summary class="mr-mc__assistant-title">What do I do now?</summary>
-  <p class="mr-mc__assistant-body" data-mr-wf-assistant-body>{{ mr_wf_assistant.get(focus, mr_wf_assistant.get(w.current_stage, '')) }}</p>
-  <div class="mr-mc__term-help">
-    {% for key, text in mr_wf_term_help.items() %}
-    <details class="mr-mc__term">
-      <summary>What is {{ key }}?</summary>
-      <p>{{ text }}</p>
-    </details>
-    {% endfor %}
-  </div>
-</details>
+<dialog class="mr-mc__modal mr-mc__modal--assistant" data-mr-wf-assistant aria-labelledby="mr-wf-assistant-title">
+  <form method="dialog" class="mr-mc__modal-inner">
+    <h3 id="mr-wf-assistant-title" class="mr-mc__assistant-title">What do I do now?</h3>
+    <p class="mr-mc__assistant-body" data-mr-wf-assistant-body>{{ mr_wf_assistant.get(focus, mr_wf_assistant.get(w.current_stage, '')) }}</p>
+    <dl class="mr-mc__term-help">
+      {% for key, text in mr_wf_term_help.items() %}
+      <div class="mr-mc__term">
+        <dt>What is {{ key }}?</dt>
+        <dd>{{ text }}</dd>
+      </div>
+      {% endfor %}
+    </dl>
+    <div class="mr-mc__actions-row">
+      <button type="submit" class="btn btn-primary" value="close" autofocus>Got it</button>
+    </div>
+  </form>
+</dialog>
 
 <article class="mr-mc__active{% if w.ended %} is-ended{% endif %}" data-mr-wf-active
   data-workflow-id="{{ w.id }}"
+  data-project-id="{{ w.project_id or '' }}"
+  data-open-path-url="{{ url_for('machine_room_open_volume_path') }}"
   data-stage="{{ w.current_stage }}"
   data-focus="{{ focus }}"
   data-receive-url="{{ url_for('machine_room_workflow_receive', workflow_id=w.id) }}"
@@ -25,7 +32,13 @@
   data-issue-url="{{ url_for('machine_room_workflow_report_issue', workflow_id=w.id) }}"
 >
   <header class="mr-mc__active-head">
-    <a class="mr-mc__back-list" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}">← All workflows</a>
+    <div class="mr-mc__head-row">
+      <a class="mr-mc__back-list" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}">← All workflows</a>
+      <button type="button" class="mr-mc__assistant-open" data-mr-wf-assistant-open aria-haspopup="dialog">
+        <span class="mr-mc__assistant-icon" aria-hidden="true">?</span>
+        What do I do now?
+      </button>
+    </div>
     <h2 class="mr-mc__active-project">{{ w.project_name }}</h2>
     <p class="mr-mc__active-day">{{ w.shooting_day_label }}</p>
     <p class="mr-mc__card-status" data-status="{{ w.status }}">{{ w.media_prep }}</p>
@@ -141,42 +154,172 @@
         <em>{{ w.backup_destination.name if w.backup_destination else '—' }}</em>
       </div>
     </div>
-    <p class="mr-mc__danger" role="note">Do not delete or move original files. Copy only.</p>
-    {{ vol_cards(w.stage_volumes.backup, 'mr-wf-backup-dest', 'data-mr-wf-backup-dest', w.backup_destination_id, 'project_backup', 'Projects Backup', w.project_name) }}
+    {{ vol_cards(w.stage_volumes.backup, 'mr-wf-backup-dest', 'data-mr-wf-backup-dest', w.backup_destination_id, 'project_backup', 'Projects Backup', w.project_name, locked=(w.backup_started_at != '')) }}
     {% if not w.backup_started_at %}
     {% set est = w.backup_estimated_minutes or 0 %}
+    {% set copy = w.backup_copy %}
     <div class="mr-mc__start-row">
-    <div class="mr-mc__field mr-mc__estimate">
-      <span>Estimated backup time <span class="muted">(HH : MM)</span></span>
-      <div class="mr-mc__estimate-inputs" data-mr-wf-backup-estimate>
-        <select aria-label="Hours" data-mr-wf-est-h>
-          {% for h in range(0, 49) %}
-          <option value="{{ h }}"{% if h == est // 60 %} selected{% endif %}>{{ '%02d'|format(h) }}</option>
-          {% endfor %}
-        </select>
-        <span class="mr-mc__estimate-sep" aria-hidden="true">:</span>
-        <select aria-label="Minutes" data-mr-wf-est-m>
-          {% for m in range(0, 60) %}
-          <option value="{{ m }}"{% if m == est % 60 %} selected{% endif %}>{{ '%02d'|format(m) }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
-    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-backup-start
-      {% if not w.gates.backup_start.ok %}disabled title="{{ w.gates.backup_start.error }}"{% endif %}>
-      Start backup
-    </button>
+      <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-backup-start
+        aria-haspopup="dialog"
+        {% if not w.gates.backup_start.ok %}disabled title="{{ w.gates.backup_start.error }}"{% endif %}>
+        Start Copy / Backup
+      </button>
     </div>
     <p class="muted">Starts the recorded backup workflow. You still copy files with your approved tools — this app does not copy automatically.</p>
+
+    <dialog class="mr-mc__modal mr-mc__modal--copy" data-mr-wf-copy-modal aria-labelledby="mr-wf-copy-title">
+      <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-copy-form>
+        <h3 id="mr-wf-copy-title">Start Copy / Backup</h3>
+        <p class="muted">Records the copy from Transfer / Shuttle to Projects Backup. Copy the files with your approved tools.</p>
+        <dl class="mr-mc__copy-summary">
+          <div><dt>Shooting day{% if w.day_count and w.day_count > 1 %}s{% endif %}</dt><dd>{{ w.shooting_day_label }}</dd></div>
+          <div><dt>Source</dt><dd>{{ w.shuttle_volume.name if w.shuttle_volume else '—' }}</dd></div>
+          <div><dt>Destination</dt><dd data-mr-wf-copy-dest-name>{{ w.backup_destination.name if w.backup_destination else '—' }}</dd></div>
+        </dl>
+        <div class="mr-mc__copy-grid">
+          <label class="mr-mc__field">
+            <span>Video size (TB)</span>
+            <input type="number" name="video_size_tb" min="0" step="any" value="{{ copy.video_size_tb or 0 }}">
+          </label>
+          <label class="mr-mc__field">
+            <span>Audio size (GB)</span>
+            <input type="number" name="audio_size_gb" min="0" step="any" value="{{ copy.audio_size_gb or 0 }}">
+          </label>
+          <div class="mr-mc__field mr-mc__field--full">
+            <label for="mr-wf-copy-path">Destination path</label>
+            <div class="mr-mc__path-row">
+              <input type="text" id="mr-wf-copy-path" name="destination_path" maxlength="512" autocomplete="off"
+                placeholder="/Volumes/ProjectMedia/01_CAMERA/…" value="{{ copy.destination_path }}" data-mr-wf-copy-path>
+              <button type="button" class="btn btn-secondary" data-mr-wf-copy-browse
+                title="Browse folders on the Projects Backup volume">Browse</button>
+            </div>
+            <span class="muted" data-mr-wf-copy-path-hint hidden></span>
+          </div>
+          <label class="mr-mc__field">
+            <span>Checksum method</span>
+            <select name="checksum_method" disabled title="Not available">
+              <option value="">—</option>
+              {% for m in w.checksum_methods %}
+              <option value="{{ m }}">{{ m|replace('_', ' ')|title }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="mr-mc__field">
+            <span>Checksum status</span>
+            <input type="text" name="checksum_status" maxlength="32" autocomplete="off" placeholder="e.g. pending, verified, failed" disabled title="Not available">
+          </label>
+          <div class="mr-mc__field mr-mc__field--full">
+            <span id="mr-wf-est-label">Estimated copy time</span>
+            <div class="dts mr-mc__estimate-dts" data-dts data-dts-preview="clock" data-dts-hours-max="48"
+              data-mr-wf-backup-estimate data-initial-minutes="{{ est }}"
+              role="group" aria-labelledby="mr-wf-est-label">
+              <p class="dts__preview" aria-live="polite">{{ '%02d:%02d'|format(est // 60, est % 60) }}</p>
+              <div class="dts__columns">
+                <div class="dts__col">
+                  <span class="dts__col-label">Hours</span>
+                  <div class="dts__viewport" data-dts-wheel="hours" tabindex="0" role="listbox" aria-label="Hours">
+                    <ul class="dts__list" data-dts-list="hours"></ul>
+                    <div class="dts__shade" aria-hidden="true"></div>
+                    <div class="dts__selection" aria-hidden="true"></div>
+                  </div>
+                </div>
+                <div class="dts__col">
+                  <span class="dts__col-label">Minutes</span>
+                  <div class="dts__viewport" data-dts-wheel="minutes" tabindex="0" role="listbox" aria-label="Minutes">
+                    <ul class="dts__list" data-dts-list="minutes"></ul>
+                    <div class="dts__shade" aria-hidden="true"></div>
+                    <div class="dts__selection" aria-hidden="true"></div>
+                  </div>
+                </div>
+              </div>
+              <input type="hidden" data-dts-hours-input value="{{ est // 60 }}">
+              <input type="hidden" data-dts-minutes-input value="{{ est % 60 }}">
+            </div>
+            <span class="muted">Duration (required to start)</span>
+          </div>
+          <label class="mr-mc__field mr-mc__field--full">
+            <span>Notes</span>
+            <textarea name="notes" rows="2" maxlength="4000" placeholder="Optional"></textarea>
+          </label>
+          <label class="mr-mc__check mr-mc__check--critical mr-mc__field--full">
+            <input type="checkbox" name="make_critical" value="1">
+            <span>Make critical (adds a critical note to the shooting day — needs a note)</span>
+          </label>
+        </div>
+        <p class="mr-mc__new-day-error" data-mr-wf-copy-error hidden role="alert"></p>
+        <div class="mr-mc__actions-row">
+          <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
+          <button type="submit" class="btn btn-primary" value="start">Start Copy / Backup</button>
+        </div>
+      </form>
+      <dialog class="mr-mc__modal mr-mc__modal--browse" data-mr-wf-browse-modal aria-labelledby="mr-wf-browse-title">
+        <div class="mr-mc__modal-inner">
+          <h3 id="mr-wf-browse-title">Select destination folder</h3>
+          <p class="muted">Browse the Projects Backup volume and pick the folder where media should be copied.</p>
+          <div class="mr-mc__browse-bar">
+            <button type="button" class="btn btn-secondary btn-sm" data-mr-wf-browse-up disabled>Up</button>
+            <code data-mr-wf-browse-current>—</code>
+          </div>
+          <p class="muted" data-mr-wf-browse-loading hidden>Loading folders…</p>
+          <ul class="mr-mc__browse-list" data-mr-wf-browse-list aria-label="Folders"></ul>
+          <p class="muted" data-mr-wf-browse-empty hidden>No subfolders here. You can still select this folder.</p>
+          <p class="mr-mc__new-day-error" data-mr-wf-browse-error hidden role="alert"></p>
+          <div class="mr-mc__actions-row">
+            <button type="button" class="btn btn-secondary" data-mr-wf-browse-cancel>Cancel</button>
+            <button type="button" class="btn btn-primary" data-mr-wf-browse-select disabled>Select this folder</button>
+          </div>
+        </div>
+      </dialog>
+    </dialog>
     {% else %}
     <div class="mr-mc__running">
-      <p><strong>Backup in progress</strong> (recorded)</p>
-      <p class="muted">Started: {{ w.backup_started_at }}{% if w.backup_finished_at %} · Finished: {{ w.backup_finished_at }}{% endif %}</p>
-      {% if w.backup_estimate_hhmm %}
-      <p class="muted">Estimated: {{ w.backup_estimate_hhmm }}{% if w.backup_expected_finish and not w.backup_finished_at %} · Expected to finish around {{ w.backup_expected_finish }}{% endif %}</p>
-      {% endif %}
-      {% if not w.backup_finished_at %}
-      <button type="button" class="btn btn-secondary" data-mr-wf-backup-finish>Copy finished</button>
+      <p><strong>{{ "Copy finished — verify backup" if w.backup_finished_at else ("Backup paused" if w.backup_paused else "Backup in progress") }}</strong> (recorded)</p>
+      {% set op = w.progress_summary.operations[0] %}
+      {% set live_id = w.backup_copy_task_id or ('wf-backup-%s'|format(w.id)) %}
+      <div class="task-copy-live mr-mc__copy-live"
+        data-task-id="{{ live_id }}"
+        data-status="{{ 'done' if w.backup_finished_at else ('paused' if w.backup_paused else 'in_progress') }}"
+        data-est-min="{{ w.backup_estimated_minutes or '' }}"
+        data-started-ms="{{ op.started_ms or 0 }}"
+        data-paused-ms="{{ op.paused_ms or 0 }}"
+        data-finished-ms="{{ op.finished_ms or 0 }}">
+        {% set copy = w.backup_copy %}
+        <div class="mr-mc__copy-live-head">
+          <div class="task-title">Copying {{ w.shooting_day_label }}</div>
+          {% if copy.destination_path or copy.video_size_tb or copy.audio_size_gb or copy.checksum_method or copy.checksum_status %}
+          <span class="muted mr-mc__copy-live-meta">
+            {%- if copy.destination_path %}Path: <button type="button" class="mr-mc__path-link" data-mr-wf-open-path="{{ copy.destination_path }}" title="Open in Finder">{{ copy.destination_path }}</button>{% endif %}
+            {%- if copy.video_size_tb %} · Video {{ '%g'|format(copy.video_size_tb) }} TB{% endif %}
+            {%- if copy.audio_size_gb %} · Audio {{ '%g'|format(copy.audio_size_gb) }} GB{% endif %}
+            {%- if copy.checksum_method or copy.checksum_status %} · Checksum: {{ [copy.checksum_method, copy.checksum_status]|select|join(' / ') }}{% endif %}
+          </span>
+          {% endif %}
+        </div>
+        <div class="task-progress">
+          <div class="task-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="task-progress-fill" style="width: 0%;"></div>
+            <span class="task-progress-pct" aria-hidden="true"></span>
+          </div>
+          <div class="task-progress-meta" aria-live="polite"></div>
+        </div>
+        {% if not w.backup_finished_at and not w.ended %}
+        <div class="task-copy-live-actions">
+          <button type="button" class="btn btn-secondary btn-sm task-copy-live-est-open"
+            data-update-est-url="{{ url_for('machine_room_workflow_backup_estimate', workflow_id=w.id) }}"
+            data-task-id="{{ live_id }}"
+            data-est-min="{{ w.backup_estimated_minutes or '' }}"
+            data-task-label="{{ w.project_name }} · Copying {{ w.shooting_day_label }}">{% include 'partials/icon_time_edit.html' %}Edit time left</button>
+          {% if w.backup_paused %}
+          <button type="button" class="btn btn-secondary btn-sm mr-mc__resume-btn" data-mr-wf-backup-resume>{% include 'partials/icon_play.html' %}Continue</button>
+          {% else %}
+          <button type="button" class="btn btn-secondary btn-sm mr-mc__pause-btn" data-mr-wf-backup-pause>{% include 'partials/icon_pause.html' %}Pause</button>
+          {% endif %}
+          <button type="button" class="btn btn-primary btn-sm mr-mc__finish-btn" data-mr-wf-backup-finish>{% include 'partials/icon_check.html' %}Copy finished</button>
+        </div>
+        {% endif %}
+      </div>
+      {% if copy.notes %}
+      <p class="{{ 'mr-mc__warn' if copy.critical else 'muted' }}">{% if copy.critical %}<strong>Critical:</strong> {% endif %}{{ copy.notes }}</p>
       {% endif %}
     </div>
     {% if w.backup_finished_at and not w.backup_verified_at %}
@@ -221,19 +364,7 @@
         <em>{{ w.proxy_destination.name if w.proxy_destination else '—' }}</em>
       </div>
     </div>
-    <p class="mr-mc__danger">Original material on Projects Backup must not be modified.</p>
-    {{ vol_cards(w.stage_volumes.transcode, 'mr-wf-proxy-dest', 'data-mr-wf-proxy-dest', w.proxy_destination_id, 'working_storage', 'In-house Storage', w.project_name) }}
-    <div class="mr-mc__fields">
-      <label class="mr-mc__field">
-        <span>Proxy preset <span class="muted">(optional — saved to the report)</span></span>
-        <select data-mr-wf-preset>
-          <option value="">Select preset…</option>
-          {% for p in mr_wf_proxy_presets %}
-          <option value="{{ p }}"{% if w.proxy_preset == p %} selected{% endif %}>{{ p }}</option>
-          {% endfor %}
-        </select>
-      </label>
-    </div>
+    {{ vol_cards(w.stage_volumes.transcode, 'mr-wf-proxy-dest', 'data-mr-wf-proxy-dest', w.proxy_destination_id, 'working_storage', 'In-house Storage', w.project_name, locked=(w.transcode_started_at != '')) }}
     {% if not w.transcode_started_at %}
     <fieldset class="mr-mc__checklist">
       <legend>Pre-transcode checklist <span class="muted">(optional — saved to the report)</span></legend>
@@ -245,32 +376,170 @@
       {% endfor %}
     </fieldset>
     <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-transcode-start
+      aria-haspopup="dialog"
       {% if not w.gates.transcode_start.ok %}disabled title="{{ w.gates.transcode_start.error }}"{% endif %}>
       Start transcoding
     </button>
     <p class="muted">Records the operation. Proxies are generated with your approved tools — this app does not transcode automatically.</p>
+
+    {% set t_est = w.transcode_estimated_minutes or 0 %}
+    <dialog class="mr-mc__modal mr-mc__modal--copy" data-mr-wf-transcode-modal aria-labelledby="mr-wf-transcode-title">
+      <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-transcode-form>
+        <h3 id="mr-wf-transcode-title">Start transcoding</h3>
+        <p class="muted">Records proxy creation from Projects Backup to In-house Storage. Generate the proxies with your approved tools.</p>
+        <dl class="mr-mc__copy-summary">
+          <div><dt>Shooting day{% if w.day_count and w.day_count > 1 %}s{% endif %}</dt><dd>{{ w.shooting_day_label }}</dd></div>
+          <div><dt>Source</dt><dd>{{ w.backup_destination.name if w.backup_destination else '—' }}</dd></div>
+          <div><dt>Destination</dt><dd data-mr-wf-transcode-dest-name>{{ w.proxy_destination.name if w.proxy_destination else '—' }}</dd></div>
+        </dl>
+        <div class="mr-mc__copy-grid">
+          <div class="mr-mc__field mr-mc__field--full">
+            <label for="mr-wf-proxy-preset">Proxy preset</label>
+            <div class="mr-mc__path-row">
+              <select id="mr-wf-proxy-preset" name="proxy_preset" data-mr-wf-preset{% if w.proxy_preset %} data-chosen="1"{% endif %}>
+                <option value="">Select preset…</option>
+                {% for p in mr_wf_proxy_presets %}
+                <option value="{{ p }}"{% if w.proxy_preset == p %} selected{% endif %}>{{ p }}</option>
+                {% endfor %}
+              </select>
+              <button type="button" class="btn btn-secondary" data-mr-wf-preset-default disabled>Set as default</button>
+            </div>
+          </div>
+          <div class="mr-mc__field mr-mc__field--full">
+            <label for="mr-wf-transcode-path">Destination path</label>
+            <div class="mr-mc__path-row">
+              <input type="text" id="mr-wf-transcode-path" name="destination_path" maxlength="512" autocomplete="off"
+                placeholder="/Volumes/InHouse/Proxies/…" value="{{ w.proxy_destination_path }}" data-mr-wf-copy-path>
+              <button type="button" class="btn btn-secondary" data-mr-wf-copy-browse
+                title="Browse folders on the In-house Storage volume">Browse</button>
+            </div>
+            <span class="muted" data-mr-wf-copy-path-hint hidden></span>
+          </div>
+          <div class="mr-mc__field mr-mc__field--full">
+            <span id="mr-wf-transcode-est-label">Estimated transcoding time (ETA)</span>
+            <div class="dts mr-mc__estimate-dts" data-dts data-dts-preview="clock" data-dts-hours-max="48"
+              data-mr-wf-transcode-estimate data-initial-minutes="{{ t_est }}"
+              role="group" aria-labelledby="mr-wf-transcode-est-label">
+              <p class="dts__preview" aria-live="polite">{{ '%02d:%02d'|format(t_est // 60, t_est % 60) }}</p>
+              <div class="dts__columns">
+                <div class="dts__col">
+                  <span class="dts__col-label">Hours</span>
+                  <div class="dts__viewport" data-dts-wheel="hours" tabindex="0" role="listbox" aria-label="Hours">
+                    <ul class="dts__list" data-dts-list="hours"></ul>
+                    <div class="dts__shade" aria-hidden="true"></div>
+                    <div class="dts__selection" aria-hidden="true"></div>
+                  </div>
+                </div>
+                <div class="dts__col">
+                  <span class="dts__col-label">Minutes</span>
+                  <div class="dts__viewport" data-dts-wheel="minutes" tabindex="0" role="listbox" aria-label="Minutes">
+                    <ul class="dts__list" data-dts-list="minutes"></ul>
+                    <div class="dts__shade" aria-hidden="true"></div>
+                    <div class="dts__selection" aria-hidden="true"></div>
+                  </div>
+                </div>
+              </div>
+              <input type="hidden" data-dts-hours-input value="{{ t_est // 60 }}">
+              <input type="hidden" data-dts-minutes-input value="{{ t_est % 60 }}">
+            </div>
+            <span class="muted">Duration (required to start)</span>
+          </div>
+          <label class="mr-mc__field mr-mc__field--full">
+            <span>Notes</span>
+            <textarea name="notes" rows="2" maxlength="4000" placeholder="Optional"></textarea>
+          </label>
+        </div>
+        <p class="mr-mc__new-day-error" data-mr-wf-transcode-error hidden role="alert"></p>
+        <div class="mr-mc__actions-row">
+          <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
+          <button type="submit" class="btn btn-primary" value="start">Start transcoding</button>
+        </div>
+      </form>
+      <dialog class="mr-mc__modal mr-mc__modal--browse" data-mr-wf-browse-modal aria-labelledby="mr-wf-browse-title-t">
+        <div class="mr-mc__modal-inner">
+          <h3 id="mr-wf-browse-title-t">Select destination folder</h3>
+          <p class="muted">Browse the In-house Storage volume and pick the folder for the proxies.</p>
+          <div class="mr-mc__browse-bar">
+            <button type="button" class="btn btn-secondary btn-sm" data-mr-wf-browse-up disabled>Up</button>
+            <code data-mr-wf-browse-current>—</code>
+          </div>
+          <p class="muted" data-mr-wf-browse-loading hidden>Loading folders…</p>
+          <ul class="mr-mc__browse-list" data-mr-wf-browse-list aria-label="Folders"></ul>
+          <p class="muted" data-mr-wf-browse-empty hidden>No subfolders here. You can still select this folder.</p>
+          <p class="mr-mc__new-day-error" data-mr-wf-browse-error hidden role="alert"></p>
+          <div class="mr-mc__actions-row">
+            <button type="button" class="btn btn-secondary" data-mr-wf-browse-cancel>Cancel</button>
+            <button type="button" class="btn btn-primary" data-mr-wf-browse-select disabled>Select this folder</button>
+          </div>
+        </div>
+      </dialog>
+    </dialog>
     {% else %}
     <div class="mr-mc__running">
-      <p><strong>Transcoding in progress</strong> (recorded)</p>
-      <p class="muted">Preset: {{ w.proxy_preset or '—' }} · Started: {{ w.transcode_started_at }}{% if w.transcode_finished_at %} · Finished: {{ w.transcode_finished_at }}{% endif %}</p>
-      {% if not w.transcode_finished_at %}
-      <button type="button" class="btn btn-secondary" data-mr-wf-transcode-finish>Transcoding finished</button>
-      {% endif %}
+      <p><strong>{{ "Transcoding finished — verify proxies" if w.transcode_finished_at else ("Transcoding paused" if w.transcode_paused else "Transcoding in progress") }}</strong> (recorded)</p>
+      {% set top = w.progress_summary.operations[1] %}
+      {% set t_live_id = w.convert_task_id or ('wf-transcode-%s'|format(w.id)) %}
+      <div class="task-copy-live mr-mc__copy-live"
+        data-task-id="{{ t_live_id }}"
+        data-status="{{ 'done' if w.transcode_finished_at else ('paused' if w.transcode_paused else 'in_progress') }}"
+        data-est-min="{{ w.transcode_estimated_minutes or '' }}"
+        data-started-ms="{{ top.started_ms or 0 }}"
+        data-paused-ms="{{ top.paused_ms or 0 }}"
+        data-finished-ms="{{ top.finished_ms or 0 }}">
+        <div class="mr-mc__copy-live-head">
+          <div class="task-title">Converting {{ w.shooting_day_label }}</div>
+          <span class="muted mr-mc__copy-live-meta">Preset: {{ w.proxy_preset or '—' }}{% if w.proxy_destination_path %} · Path: <button type="button" class="mr-mc__path-link" data-mr-wf-open-path="{{ w.proxy_destination_path }}" title="Open in Finder">{{ w.proxy_destination_path }}</button>{% endif %}</span>
+        </div>
+        <div class="task-progress">
+          <div class="task-progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="task-progress-fill" style="width: 0%;"></div>
+            <span class="task-progress-pct" aria-hidden="true"></span>
+          </div>
+          <div class="task-progress-meta" aria-live="polite"></div>
+        </div>
+        {% if not w.transcode_finished_at and not w.ended %}
+        <div class="task-copy-live-actions">
+          <button type="button" class="btn btn-secondary btn-sm task-copy-live-est-open"
+            data-update-est-url="{{ url_for('machine_room_workflow_transcode_estimate', workflow_id=w.id) }}"
+            data-task-id="{{ t_live_id }}"
+            data-est-min="{{ w.transcode_estimated_minutes or '' }}"
+            data-task-label="{{ w.project_name }} · Converting {{ w.shooting_day_label }}">{% include 'partials/icon_time_edit.html' %}Edit time left</button>
+          {% if w.transcode_paused %}
+          <button type="button" class="btn btn-secondary btn-sm mr-mc__resume-btn" data-mr-wf-transcode-resume>{% include 'partials/icon_play.html' %}Continue</button>
+          {% else %}
+          <button type="button" class="btn btn-secondary btn-sm mr-mc__pause-btn" data-mr-wf-transcode-pause>{% include 'partials/icon_pause.html' %}Pause</button>
+          {% endif %}
+          <button type="button" class="btn btn-primary btn-sm mr-mc__finish-btn" data-mr-wf-transcode-finish>{% include 'partials/icon_check.html' %}Transcoding finished</button>
+        </div>
+        {% endif %}
+      </div>
+      {% if w.transcode_notes %}<p class="muted">{{ w.transcode_notes }}</p>{% endif %}
     </div>
     {% if w.transcode_finished_at and not w.transcode_verified_at %}
-    <fieldset class="mr-mc__checklist">
-      <legend>Proxy verification checklist <span class="muted">(Operator Confirmed)</span></legend>
-      {% for key in mr_wf_transcode_post_checks %}
-      <label class="mr-mc__check">
-        <input type="checkbox" value="{{ key }}" data-mr-wf-post-check{% if key in w.transcode_post_checks %} checked{% endif %}>
-        <span>{{ mr_wf_check_labels[key] }}</span>
-      </label>
-      {% endfor %}
-    </fieldset>
-    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-transcode-verify
+    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-verify-open aria-haspopup="dialog"
       {% if not w.gates.transcode_verify.ok %}disabled title="{{ w.gates.transcode_verify.error }}"{% endif %}>
       Proxies verified — continue
     </button>
+    <dialog class="mr-mc__modal mr-mc__modal--confirm" data-mr-wf-verify-modal aria-labelledby="mr-wf-verify-title">
+      <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-checks-form>
+        <h3 id="mr-wf-verify-title">Verify proxies</h3>
+        <p class="muted">Check the generated proxies, then continue to the final check.</p>
+        <fieldset class="mr-mc__checklist mr-mc__checklist--dialog">
+          <legend>Proxy verification checklist <span class="muted">(optional — saved to the report)</span></legend>
+          {% for key in mr_wf_transcode_post_checks %}
+          <label class="mr-mc__check">
+            <input type="checkbox" value="{{ key }}" data-mr-wf-post-check{% if key in w.transcode_post_checks %} checked{% endif %}>
+            <span>{{ mr_wf_check_labels[key] }}</span>
+          </label>
+          {% endfor %}
+        </fieldset>
+        <p class="mr-mc__new-day-error" data-mr-wf-checks-error hidden role="alert"></p>
+        <div class="mr-mc__actions-row">
+          <button type="submit" class="btn btn-primary" value="confirm">Proxies verified — continue</button>
+          <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
+        </div>
+      </form>
+    </dialog>
     {% elif w.transcode_verified_at %}
     <p class="mr-mc__ok">Proxies verified.</p>
     {% endif %}
@@ -306,19 +575,30 @@
         Proxies: {% if w.transcode_verified_at %}Verified{% else %}Pending{% endif %}
       </p>
     </div>
-    <fieldset class="mr-mc__checklist">
-      <legend>Final checklist</legend>
-      {% for key in mr_wf_complete_checks %}
-      <label class="mr-mc__check">
-        <input type="checkbox" value="{{ key }}" data-mr-wf-complete-check{% if key in w.complete_checks %} checked{% endif %}>
-        <span>{{ mr_wf_check_labels[key] }}</span>
-      </label>
-      {% endfor %}
-    </fieldset>
-    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-mark-ready
+    <button type="button" class="btn btn-primary mr-mc__primary-btn" data-mr-wf-ready-open aria-haspopup="dialog"
       {% if not w.gates.mark_ready.ok %}disabled title="{{ w.gates.mark_ready.error }}"{% endif %}>
       Mark ready for editing
     </button>
+    <dialog class="mr-mc__modal mr-mc__modal--confirm" data-mr-wf-ready-modal aria-labelledby="mr-wf-ready-title">
+      <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-checks-form>
+        <h3 id="mr-wf-ready-title">Mark ready for editing</h3>
+        <p class="muted">Review the day once more, then hand the material over to editing.</p>
+        <fieldset class="mr-mc__checklist mr-mc__checklist--dialog">
+          <legend>Final checklist <span class="muted">(optional — saved to the report)</span></legend>
+          {% for key in mr_wf_complete_checks %}
+          <label class="mr-mc__check">
+            <input type="checkbox" value="{{ key }}" data-mr-wf-complete-check{% if key in w.complete_checks %} checked{% endif %}>
+            <span>{{ mr_wf_check_labels[key] }}</span>
+          </label>
+          {% endfor %}
+        </fieldset>
+        <p class="mr-mc__new-day-error" data-mr-wf-checks-error hidden role="alert"></p>
+        <div class="mr-mc__actions-row">
+          <button type="submit" class="btn btn-primary" value="confirm">Mark ready for editing</button>
+          <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
+        </div>
+      </form>
+    </dialog>
     {% endif %}
   </div>
 
@@ -413,6 +693,28 @@
     </label>
     <div class="mr-mc__actions-row">
       <button type="submit" class="btn btn-primary" value="submit">Submit</button>
+      <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="mr-mc__modal mr-mc__modal--confirm" data-mr-wf-confirm-modal aria-labelledby="mr-wf-confirm-title">
+  <form method="dialog" class="mr-mc__modal-inner" data-mr-wf-confirm-form>
+    <h3 id="mr-wf-confirm-title" data-mr-wf-confirm-title>Record operation finished</h3>
+    <p data-mr-wf-confirm-description></p>
+    <fieldset class="mr-mc__checklist mr-mc__checklist--dialog" data-mr-wf-confirm-checks hidden>
+      <legend>Proxy verification checklist <span class="muted">(Operator Confirmed)</span></legend>
+      {% for key in mr_wf_transcode_post_checks %}
+      <label class="mr-mc__check">
+        <input type="checkbox" value="{{ key }}" data-mr-wf-confirm-check{% if key in w.transcode_post_checks %} checked{% endif %}>
+        <span>{{ mr_wf_check_labels[key] }}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <p class="muted" data-mr-wf-confirm-note>The finish time is recorded now. Verification is a separate step.</p>
+    <p class="mr-mc__new-day-error" data-mr-wf-confirm-error hidden role="alert"></p>
+    <div class="mr-mc__actions-row">
+      <button type="submit" class="btn btn-primary" value="confirm">Record finished</button>
       <button type="submit" class="btn btn-secondary" value="cancel" formnovalidate>Cancel</button>
     </div>
   </form>

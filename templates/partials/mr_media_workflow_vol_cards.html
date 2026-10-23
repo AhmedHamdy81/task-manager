@@ -1,4 +1,4 @@
-{% macro vol_cards(group, input_name, data_attr, selected_id, role, role_label, project_name) %}
+{% macro vol_cards(group, input_name, data_attr, selected_id, role, role_label, project_name, locked=false) %}
 <fieldset class="mr-mc__vol-pick">
   <legend>{{ role_label }} volume</legend>
   {% if group.volumes %}
@@ -14,6 +14,7 @@
     {% for v in group.volumes %}
     <label class="mr-mc__vol-card mr-mc__vol-card--{{ role }}{% if not v.mounted %} mr-mc__vol-card--offline{% endif %}">
       <input type="radio" name="{{ input_name }}" value="{{ v.id }}" {{ data_attr }}
+        {% if locked %}data-mr-wf-vol-locked{% endif %}
         {% if selected_id == v.id %}checked{% endif %}>
       <span class="mr-mc__vol-card-check" aria-hidden="true">✓</span>
       <span class="mr-mc__vol-card-icon" aria-hidden="true">

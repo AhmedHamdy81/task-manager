@@ -39,9 +39,17 @@
   {% if mr_wf_active %}
     {% include "partials/mr_media_workflow_active.html" %}
   {% else %}
+  <div class="mr-mc__launch">
+    <div><h2 class="mr-mc__section-title">Material operations</h2><p class="muted">Receive, copy, verify and prepare proxies in one workflow.</p></div>
+    <button type="button" class="btn btn-primary" data-mr-wf-create-open>+ New material workflow</button>
+  </div>
+  <dialog class="mr-mc__modal mr-mc__modal--create" data-mr-wf-create-modal aria-labelledby="mr-wf-create-title">
   <div class="mr-mc__start panel">
-    <h2 class="mr-mc__section-title">Start or continue a shooting day</h2>
-    <p class="muted">Select a project and tick every shooting day on the shuttle drive. A day can only be in one workflow — days already in a workflow show an Open link.</p>
+    <div class="mr-mc__modal-head">
+      <h2 class="mr-mc__section-title" id="mr-wf-create-title">Start a material workflow</h2>
+      <button type="button" class="btn btn-secondary btn-sm" data-mr-wf-create-close>Close</button>
+    </div>
+    <p class="muted">Select a project and one shooting day. A day can only be in one workflow — days already in a workflow show an Open link.</p>
     <form class="mr-mc__start-form" data-mr-wf-start-form>
       <label class="mr-mc__field">
         <span>Project</span>
@@ -53,7 +61,7 @@
         </select>
       </label>
       <div class="mr-mc__field">
-        <span>Shooting days</span>
+        <span>Shooting day</span>
         <button type="button" class="mr-mc__days-open" data-mr-wf-days-open disabled>
           <span data-mr-wf-days-summary>Select project first…</span>
         </button>
@@ -65,8 +73,8 @@
 
     <dialog class="mr-mc__modal mr-mc__modal--days" data-mr-wf-start-days-modal>
       <div class="mr-mc__modal-inner">
-        <h3>Shooting days</h3>
-        <p class="muted">Tick every day on the shuttle drive. Days already in a workflow show an Open link.</p>
+        <h3>Shooting day</h3>
+        <p class="muted">Select one day. Days already in a workflow show an Open link.</p>
         <div class="mr-mc__day-pick" data-mr-wf-day-pick>
           <p class="mr-mc__day-empty muted" data-mr-wf-day-empty>Select project first…</p>
           <button type="button" class="mr-mc__day-add" data-mr-wf-day-add hidden>+ Add new shooting day…</button>
@@ -105,6 +113,8 @@
     <script type="application/json" id="mr-wf-days-json">{{ mr_wf_days_by_project|tojson }}</script>
   </div>
 
+  </dialog>
+
   <div class="mr-mc__cards">
     <h2 class="mr-mc__section-title">Shooting day workflows</h2>
     {% if mr_wf_cards %}
@@ -126,7 +136,11 @@
           </li>
           {% endfor %}
         </ol>
-        <p class="mr-mc__card-hint">{{ c.action_hint }}</p>
+        <div class="mr-mc__milestones">
+          <div class="mr-mc__meter-heading"><span>Verified workflow milestones</span><strong>{{ c.progress_summary.steps_done }} / 4</strong></div>
+          <progress class="mr-mc__milestone-bar" max="4" value="{{ c.progress_summary.steps_done }}" aria-label="Completed workflow milestones"></progress>
+          <p class="mr-mc__card-hint"><strong>Next:</strong> {{ c.progress_summary.next_action }}</p>
+        </div>
         <div class="mr-mc__card-actions">
           <a class="btn btn-primary mr-mc__card-go" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress', workflow_id=c.id) }}">
             {% if c.status in ('ready', 'ended') %}View{% else %}Continue workflow{% endif %}

@@ -4272,7 +4272,7 @@ def create_app() -> Flask:
                 entity_type=(ctx.get("entity_type") or event_key or "notification"),
                 entity_id=int(ctx.get("entity_id") or ctx.get("task_id") or ctx.get("editing_item_id") or ctx.get("shot_id") or 0),
                 project_id=project_id,
-                rule_key=f"managed:{event_key}:{rule_id}:{int(project_id or 0)}:{int(ctx.get('approval_request_id') or ctx.get('entity_id') or ctx.get('task_id') or ctx.get('editing_item_id') or 0)}:{int(u.id)}:{'test' if is_test else 'live'}:{int(now_local().timestamp()) if (is_test or rule is None or not rule.dedupe_enabled) else ''}",
+                rule_key=f"managed:{event_key}:{rule_id}:{int(project_id or 0)}:{int(ctx.get('rule_entity_id') or ctx.get('approval_request_id') or ctx.get('entity_id') or ctx.get('task_id') or ctx.get('editing_item_id') or 0)}:{int(u.id)}:{'test' if is_test else 'live'}:{int(now_local().timestamp()) if (is_test or rule is None or not rule.dedupe_enabled) else ''}",
                 actor=actor,
             )
             if n is not None:
@@ -35674,6 +35674,8 @@ def create_app() -> Flask:
         "emit_shooting_day_created_activity": emit_shooting_day_created_activity,
         "notification_recipient_user_ids": _notification_recipient_user_ids,
         "notification_push_realtime_for_project": _notification_push_realtime_for_project,
+        "ShootingDayCriticalNote": ShootingDayCriticalNote,
+        "emit_shooting_day_critical_created": emit_shooting_day_critical_created,
     }
     machine_room_media_workflow_routes_mod.register_machine_room_media_workflow_routes(
         app, _mr_media_workflow_ctx

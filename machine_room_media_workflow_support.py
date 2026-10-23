@@ -8,7 +8,7 @@ operator confirmations and optional linked Task / MediaTranscodeJob rows.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -199,10 +199,16 @@ NOTIFY_STEPS: dict[str, tuple[str, str]] = {
     "workflow_created": ("Workflow started", "info"),
     "material_received": ("Material received", "info"),
     "backup_started": ("Backup started", "info"),
+    "backup_estimate_changed": ("Backup time left updated", "info"),
     "backup_copy_finished": ("Backup copy finished", "info"),
     "backup_verified": ("Backup verified", "info"),
     "backup_verify_failed": ("Backup verification failed", "error"),
     "transcode_started": ("Transcoding started", "info"),
+    "transcode_estimate_changed": ("Transcoding time left updated", "info"),
+    "transcode_paused": ("Transcoding paused", "warning"),
+    "transcode_resumed": ("Transcoding continued", "info"),
+    "backup_paused": ("Backup paused", "warning"),
+    "backup_resumed": ("Backup continued", "info"),
     "transcode_finished": ("Transcoding finished", "info"),
     "proxies_verified": ("Proxies verified", "info"),
     "ready_for_editing": ("Ready for editing", "info"),
@@ -212,6 +218,31 @@ NOTIFY_STEPS: dict[str, tuple[str, str]] = {
     "workflow_resumed": ("Workflow resumed", "info"),
     "workflow_reopened": ("Workflow reopened", "warning"),
 }
+
+# Steps whose notification carries the backup Copy Material task's live progress bar.
+NOTIFY_BACKUP_LIVE_STEPS = frozenset(
+    {"backup_started", "backup_estimate_changed", "backup_paused", "backup_resumed", "backup_copy_finished"}
+)
+NOTIFY_CONVERT_LIVE_STEPS = frozenset(
+    {"transcode_started", "transcode_estimate_changed", "transcode_paused", "transcode_resumed", "transcode_finished"}
+)
+
+
+def operation_effective_start(workflow, key: str):
+    """Start time shifted by completed pauses, so elapsed time excludes paused periods."""
+    start = getattr(workflow, key + "_started_at", None)
+    if start is None:
+        return None
+    return start + timedelta(seconds=int(getattr(workflow, key + "_paused_seconds", 0) or 0))
+
+
+def operation_active_minutes(workflow, key: str, now) -> float:
+    """Minutes the operation has actually been running (pauses excluded)."""
+    start = operation_effective_start(workflow, key)
+    if start is None:
+        return 0.0
+    until = getattr(workflow, key + "_paused_at", None) or now
+    return max(0.0, (until - start).total_seconds() / 60.0)
 
 notif_events.register_notification_event(
     NOTIFY_EVENT_KEY,
@@ -302,7 +333,15 @@ def register_machine_room_media_workflow_models(db, now_local) -> Any:
         backup_destination_name = db.Column(db.String(160), nullable=False, default="")
         backup_destination_path = db.Column(db.String(512), nullable=False, default="")
         backup_estimated_minutes = db.Column(db.Integer, nullable=True)
+        backup_video_size_tb = db.Column(db.Float, nullable=True)
+        backup_audio_size_gb = db.Column(db.Float, nullable=True)
+        backup_checksum_method = db.Column(db.String(32), nullable=False, default="")
+        backup_checksum_status = db.Column(db.String(32), nullable=False, default="")
+        backup_copy_notes = db.Column(db.Text, nullable=False, default="")
+        backup_copy_critical = db.Column(db.Boolean, nullable=False, default=False)
         backup_started_at = db.Column(db.DateTime, nullable=True)
+        backup_paused_at = db.Column(db.DateTime, nullable=True)
+        backup_paused_seconds = db.Column(db.Integer, nullable=False, default=0)
         backup_finished_at = db.Column(db.DateTime, nullable=True)
         backup_verified_at = db.Column(db.DateTime, nullable=True)
         backup_verified_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
@@ -320,9 +359,13 @@ def register_machine_room_media_workflow_models(db, now_local) -> Any:
         proxy_destination_name = db.Column(db.String(160), nullable=False, default="")
         proxy_destination_path = db.Column(db.String(512), nullable=False, default="")
         proxy_preset = db.Column(db.String(120), nullable=False, default="")
+        transcode_estimated_minutes = db.Column(db.Integer, nullable=True)
+        transcode_notes = db.Column(db.Text, nullable=False, default="")
         transcode_pre_checks_json = db.Column(db.Text, nullable=False, default="[]")
         transcode_post_checks_json = db.Column(db.Text, nullable=False, default="[]")
         transcode_started_at = db.Column(db.DateTime, nullable=True)
+        transcode_paused_at = db.Column(db.DateTime, nullable=True)
+        transcode_paused_seconds = db.Column(db.Integer, nullable=False, default=0)
         transcode_finished_at = db.Column(db.DateTime, nullable=True)
         transcode_verified_at = db.Column(db.DateTime, nullable=True)
         transcode_verified_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
@@ -587,6 +630,18 @@ def _ensure_workflow_columns(db) -> None:
         ("ended_by_id", "INTEGER"),
         ("end_reason", "TEXT NOT NULL DEFAULT ''"),
         ("backup_estimated_minutes", "INTEGER"),
+        ("backup_video_size_tb", "FLOAT"),
+        ("backup_audio_size_gb", "FLOAT"),
+        ("backup_checksum_method", "VARCHAR(32) NOT NULL DEFAULT ''"),
+        ("backup_checksum_status", "VARCHAR(32) NOT NULL DEFAULT ''"),
+        ("backup_copy_notes", "TEXT NOT NULL DEFAULT ''"),
+        ("backup_copy_critical", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("transcode_estimated_minutes", "INTEGER"),
+        ("transcode_notes", "TEXT NOT NULL DEFAULT ''"),
+        ("backup_paused_at", "DATETIME"),
+        ("backup_paused_seconds", "INTEGER NOT NULL DEFAULT 0"),
+        ("transcode_paused_at", "DATETIME"),
+        ("transcode_paused_seconds", "INTEGER NOT NULL DEFAULT 0"),
     )
     for col_name, col_def in additions:
         if col_name in cols:
@@ -817,7 +872,64 @@ def can_advance_from_receive(workflow) -> tuple[bool, str]:
     return True, ""
 
 
-def can_start_backup(workflow) -> tuple[bool, str]:
+CHECKSUM_METHODS = ("md5", "sha256", "xxhash", "shotput_pro", "silverstack", "hedge", "yoyotta", "manual")
+
+
+def validate_destination_path(raw, mount_path: str, volume_label: str) -> tuple[str, str]:
+    """Typed/browsed destination folder: absolute, no '..', inside the volume when its mount is known."""
+    path = str(raw or "").strip()
+    if not path:
+        return "", ""
+    if len(path) > 512 or "\x00" in path:
+        return "", "Destination path is too long or invalid."
+    if not path.startswith("/") or ".." in path.split("/"):
+        return "", "Destination path must be an absolute folder path."
+    root = (mount_path or "").rstrip("/")
+    if root and path != root and not path.startswith(root + "/"):
+        return "", f"Destination path must be inside the {volume_label} volume ({root})."
+    return path, ""
+
+
+def parse_copy_details(data: dict, *, mount_path: str = "") -> tuple[dict, str]:
+    """Validate the Start Copy / Backup modal fields; returns (values, error)."""
+    try:
+        video_tb = float(data.get("video_size_tb") or 0)
+        audio_gb = float(data.get("audio_size_gb") or 0)
+    except (TypeError, ValueError):
+        return {}, "Video and audio sizes must be numbers."
+    if video_tb < 0 or audio_gb < 0:
+        return {}, "Video and audio sizes cannot be negative."
+
+    path, err = validate_destination_path(data.get("destination_path"), mount_path, "Projects Backup")
+    if err:
+        return {}, err
+
+    method = str(data.get("checksum_method") or "").strip()
+    if method and method not in CHECKSUM_METHODS:
+        return {}, "Unknown checksum method."
+    status = str(data.get("checksum_status") or "").strip()
+    if len(status) > 32:
+        return {}, "Checksum status is too long (32 characters max)."
+
+    notes = str(data.get("notes") or "").strip()
+    critical = bool(data.get("make_critical"))
+    if critical and not notes:
+        return {}, "Write a note to mark this copy as critical."
+    if len(notes) > 20_000:
+        return {}, "Notes are too long."
+
+    return {
+        "video_size_tb": video_tb or None,
+        "audio_size_gb": audio_gb or None,
+        "destination_path": path,
+        "checksum_method": method,
+        "checksum_status": status,
+        "notes": notes,
+        "critical": critical,
+    }, ""
+
+
+def can_start_backup(workflow, *, require_estimate: bool = True) -> tuple[bool, str]:
     if workflow.status == STATUS_ENDED:
         return False, ENDED_ERROR
     if workflow.blocked_by_issue:
@@ -833,8 +945,8 @@ def can_start_backup(workflow) -> tuple[bool, str]:
         return False, "Select a Projects Backup destination."
     if workflow.shuttle_volume_id == workflow.backup_destination_id:
         return False, "Source and destination must be different volumes."
-    if not workflow.backup_estimated_minutes:
-        return False, "Enter the estimated backup time (HH : MM)."
+    if require_estimate and not workflow.backup_estimated_minutes:
+        return False, "Enter the estimated copy time (HH : MM)."
     return True, ""
 
 
@@ -895,8 +1007,6 @@ def can_verify_transcode(workflow) -> tuple[bool, str]:
         return False, "Start transcoding first."
     if not workflow.transcode_finished_at:
         return False, "Mark transcoding as finished first."
-    if not checks_complete(workflow.transcode_post_checks, TRANSCODE_POST_CHECKS):
-        return False, "Complete the proxy verification checklist."
     return True, ""
 
 
@@ -909,8 +1019,6 @@ def can_mark_ready(workflow) -> tuple[bool, str]:
         return False, "Backup verification is required."
     if not workflow.transcode_verified_at:
         return False, "Proxy verification is required."
-    if not checks_complete(workflow.complete_checks, COMPLETE_CHECKS):
-        return False, "Complete the final checklist."
     return True, ""
 
 
@@ -987,6 +1095,65 @@ def format_days_label(days: list) -> str:
     return f"{head} · {span}"
 
 
+def workflow_progress_summary(workflow) -> dict[str, Any]:
+    """Recorded milestones and real operation times; never infer file progress from time."""
+    from zoneinfo import ZoneInfo
+
+    def stamp(value):
+        if not value:
+            return None
+        aware = value.replace(tzinfo=ZoneInfo("Africa/Cairo")) if value.tzinfo is None else value
+        return int(aware.timestamp() * 1000)
+
+    def operation(key, label):
+        start = getattr(workflow, key + "_started_at", None)
+        finish = getattr(workflow, key + "_finished_at", None)
+        verified = getattr(workflow, key + "_verified_at", None)
+        paused = getattr(workflow, key + "_paused_at", None) if start and not finish else None
+        state = (
+            "verified" if verified else "awaiting_verification" if finish
+            else "paused" if paused else "running" if start else "pending"
+        )
+        estimate = getattr(workflow, key + "_estimated_minutes", None)
+        return {
+            "key": key, "label": label, "state": state,
+            "state_label": {"verified": "Verified", "awaiting_verification": "Awaiting verification", "paused": "Paused", "running": "Running · operator tracked", "pending": "Not started"}[state],
+            "started_ms": stamp(operation_effective_start(workflow, key)), "finished_ms": stamp(finish),
+            "paused_ms": stamp(paused),
+            "started_display": start.strftime("%d %b · %H:%M") if start else "—",
+            "finished_display": finish.strftime("%d %b · %H:%M") if finish else "—",
+            "estimate_minutes": estimate or 0,
+        }
+
+    operations = [operation("backup", "Original media copy"), operation("transcode", "Editing proxies")]
+    done = sum(workflow.stage_state(stage) == "completed" for stage in WORKFLOW_STAGES)
+    if workflow.status == STATUS_ENDED:
+        next_action = "Resume this workflow to continue."
+    elif workflow.blocked_by_issue:
+        next_action = "Resolve the critical problem before continuing."
+    elif workflow.completed_at:
+        next_action = "Ready for editing — open the project to continue the handoff."
+    elif not workflow.received_at:
+        next_action = "Select the shuttle drive and confirm material received."
+    elif not workflow.backup_started_at:
+        next_action = "Select Projects Backup and record the start of copying."
+    elif not workflow.backup_finished_at:
+        next_action = "When copying finishes in your copy tool, record Copy finished."
+    elif not workflow.backup_verified_at:
+        next_action = "Verify the backup before starting editing proxies."
+    elif not workflow.transcode_started_at:
+        next_action = "Select In-house Storage and record the start of proxy creation."
+    elif not workflow.transcode_finished_at:
+        next_action = "When your conversion tool finishes, record Transcoding finished."
+    elif not workflow.transcode_verified_at:
+        next_action = "Check the generated proxies and confirm verification."
+    else:
+        next_action = "Complete the final checklist and mark ready for editing."
+    return {"steps_done": done, "percent": done * 25, "operations": operations,
+            "next_action": next_action, "stopped": workflow.status == STATUS_ENDED,
+            "blocked": bool(workflow.blocked_by_issue)}
+
+
 def serialize_workflow_card(workflow, *, operator_name: str = "") -> dict[str, Any]:
     day = workflow.shooting_day
     days = workflow.days
@@ -1037,6 +1204,7 @@ def serialize_workflow_card(workflow, *, operator_name: str = "") -> dict[str, A
         "proxy_preset": workflow.proxy_preset or "",
         "stages": stages,
         "steps_done": sum(1 for s in stages if s["state"] == "completed"),
+        "progress_summary": workflow_progress_summary(workflow),
         "blocked": bool(workflow.blocked_by_issue),
         "action_hint": (
             f"Ended at {STAGE_LABELS.get(workflow.current_stage, workflow.current_stage)}"

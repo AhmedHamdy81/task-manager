@@ -106,7 +106,7 @@
       var labels = projectDays()
         .filter(function (d) { return committed.indexOf(d.id) >= 0; })
         .map(function (d) { return d.label; });
-      daysSummary.textContent = labels.length ? labels.join(" + ") : "Select shooting days…";
+      daysSummary.textContent = labels.length ? labels[0] : "Select shooting day…";
     }
 
     function workflowUrl(id) {
@@ -150,7 +150,8 @@
           row.appendChild(open);
         } else {
           var cb = document.createElement("input");
-          cb.type = "checkbox";
+          cb.type = "radio";
+          cb.name = "mr-wf-start-day";
           cb.value = d.id;
           cb.setAttribute("data-mr-wf-day", "");
           cb.checked = previously.indexOf(d.id) >= 0;
@@ -241,7 +242,7 @@
       if (typeof daysModal.showModal === "function") daysModal.showModal();
     });
     daysModal.querySelector("[data-mr-wf-days-done]").addEventListener("click", function () {
-      committed = checkedDayIds();
+      committed = checkedDayIds().slice(0, 1);
       updateCount();
       daysModal.close();
     });
@@ -289,9 +290,7 @@
             });
           }
           daysByProject[String(pid)] = days;
-          var keep = checkedDayIds();
-          if (!d.workflow_id) keep.push(d.id);
-          renderDays(keep);
+          renderDays(d.workflow_id ? checkedDayIds() : [d.id]);
           hideNewDay();
           newDayField("data-mr-wf-new-day-name").value = "";
         });
@@ -306,7 +305,7 @@
         return;
       }
       if (!ids.length) {
-        setStartError("Tick at least one shooting day.");
+        setStartError("Select a shooting day.");
         return;
       }
       postJson(root.getAttribute("data-create-url"), {
@@ -394,8 +393,8 @@
       backup_start: "[data-mr-wf-backup-start]",
       backup_verify: "[data-mr-wf-backup-verify]",
       transcode_start: "[data-mr-wf-transcode-start]",
-      transcode_verify: "[data-mr-wf-transcode-verify]",
-      mark_ready: "[data-mr-wf-mark-ready]",
+      transcode_verify: "[data-mr-wf-verify-open]",
+      mark_ready: "[data-mr-wf-ready-open]",
     };
 
     function applyGates(res) {
@@ -437,6 +436,20 @@
         });
       });
     }
+
+    active.querySelectorAll(".mr-mc__vol-card input[type='radio']").forEach(function (input) {
+      var card = input.closest(".mr-mc__vol-card");
+      if (!card) return;
+      card.addEventListener("pointerdown", function () {
+        input.dataset.wasChecked = input.checked ? "1" : "";
+      });
+      input.addEventListener("click", function () {
+        if (input.dataset.wasChecked !== "1" || input.hasAttribute("data-mr-wf-vol-locked")) return;
+        input.dataset.wasChecked = "";
+        input.checked = false;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    });
 
     var shuttleCards = active.querySelectorAll("[data-mr-wf-shuttle-card]");
     function selectedShuttleId() {
@@ -520,41 +533,364 @@
         postJson(backupUrl, {
           action: "save",
           backup_destination_id: checkedCardId("data-mr-wf-backup-dest"),
-        }).then(applyGates);
+        }).then(function (res) {
+          applyGates(res);
+          var detail = res.ok && res.data && res.data.workflow;
+          if (!detail) return;
+          var pathInput = active.querySelector("[data-mr-wf-copy-modal] [data-mr-wf-copy-path]");
+          if (pathInput && !pathInput.dataset.touched) {
+            pathInput.value = (detail.backup_copy && detail.backup_copy.destination_path) || "";
+          }
+          var name = (detail.backup_destination && detail.backup_destination.name) || "—";
+          active.querySelectorAll(
+            "[data-mr-wf-copy-dest-name], [data-mr-wf-panel='backup'] .mr-mc__flow-box--dst em"
+          ).forEach(function (el) { el.textContent = name; });
+        });
       });
     });
+
+    var confirmModal = root.querySelector("[data-mr-wf-confirm-modal]");
+    var pendingFinish = null;
+    var confirmChecks = confirmModal ? confirmModal.querySelector("[data-mr-wf-confirm-checks]") : null;
+
+    function confirmCheckState() {
+      if (!confirmChecks) return { keys: [], all: false };
+      var boxes = confirmChecks.querySelectorAll("[data-mr-wf-confirm-check]");
+      var keys = Array.prototype.filter.call(boxes, function (b) { return b.checked; })
+        .map(function (b) { return b.value; });
+      return { keys: keys, all: boxes.length > 0 && keys.length === boxes.length };
+    }
+
+    function syncConfirmButton() {
+      if (!confirmModal || !pendingFinish) return;
+      var button = confirmModal.querySelector('[value="confirm"]');
+      var note = confirmModal.querySelector("[data-mr-wf-confirm-note]");
+      if (pendingFinish.kind !== "transcode") {
+        button.textContent = "Record finished";
+        if (note) note.textContent = "The finish time is recorded now. Verification is a separate step.";
+        return;
+      }
+      var state = confirmCheckState();
+      button.textContent = state.all ? "Record finished & verify proxies" : "Record finished";
+      if (note) {
+        note.textContent = state.all
+          ? "All checks ticked — proxies are marked verified and the workflow moves to Complete."
+          : "Tick every check to verify the proxies now, or record the finish and verify later.";
+      }
+    }
+
+    function confirmFinish(url, payload, kind) {
+      if (!confirmModal) return;
+      pendingFinish = {url: url, payload: payload, kind: kind};
+      confirmModal.querySelector("[data-mr-wf-confirm-title]").textContent = kind === "copy" ? "Record copy finished" : "Record transcoding finished";
+      confirmModal.querySelector("[data-mr-wf-confirm-description]").textContent = kind === "copy"
+        ? "Confirm the copy tool has finished. Next: verify the copied original media before creating proxies."
+        : "Confirm the conversion tool has finished, then check the generated proxies.";
+      if (confirmChecks) confirmChecks.hidden = kind !== "transcode";
+      confirmModal.querySelector("[data-mr-wf-confirm-error]").hidden = true;
+      syncConfirmButton();
+      confirmModal.showModal();
+    }
+    if (confirmChecks) confirmChecks.addEventListener("change", syncConfirmButton);
+    if (confirmModal) {
+      confirmModal.querySelector("form").addEventListener("submit", function (event) {
+        event.preventDefault();
+        if (event.submitter && event.submitter.value === "cancel") {
+          confirmModal.close(); pendingFinish = null; return;
+        }
+        if (!pendingFinish) return;
+        var button = confirmModal.querySelector('[value="confirm"]');
+        if (button.disabled) return;
+        button.disabled = true;
+        var finish = pendingFinish;
+        var checks = finish.kind === "transcode" ? confirmCheckState() : null;
+        var payload = Object.assign({}, finish.payload);
+        if (checks) payload.post_checks = checks.keys;
+        postJson(finish.url, payload).then(function (res) {
+          if (res.ok && checks && checks.all) {
+            return postJson(finish.url, { action: "verify", post_checks: checks.keys });
+          }
+          return res;
+        }).then(function (res) {
+          if (res.ok) { confirmModal.close(); afterOk(res); }
+          else {
+            var error = confirmModal.querySelector("[data-mr-wf-confirm-error]");
+            error.textContent = (res.data && res.data.error) || "Could not record completion.";
+            error.hidden = false;
+          }
+        }).catch(function () {
+          var error = confirmModal.querySelector("[data-mr-wf-confirm-error]");
+          error.textContent = "Connection lost. Close and reopen the workflow to check whether completion was saved.";
+          error.hidden = false;
+        }).finally(function () { button.disabled = false; });
+      });
+      confirmModal.addEventListener("close", function () { pendingFinish = null; });
+    }
 
     function clickAction(sel, url, payloadFn) {
       var el = active.querySelector(sel);
       if (!el) return;
       el.addEventListener("click", function () {
-        postJson(url, payloadFn()).then(afterOk);
+        var payload = payloadFn();
+        if (payload.action === "finish_copy" || payload.action === "finish") {
+          confirmFinish(url, payload, payload.action === "finish_copy" ? "copy" : "transcode");
+          return;
+        }
+        el.disabled = true;
+        postJson(url, payload).then(afterOk).catch(function () {
+          showError("Could not save. Please try again.");
+        }).finally(function () { el.disabled = false; });
       });
     }
 
-    var estH = active.querySelector("[data-mr-wf-est-h]");
-    var estM = active.querySelector("[data-mr-wf-est-m]");
+    var estRoot = active.querySelector("[data-mr-wf-backup-estimate]");
+    var savedEstimate = estRoot ? parseInt(estRoot.getAttribute("data-initial-minutes"), 10) || 0 : 0;
+    var estimateTimer = null;
     function backupEstimateMinutes() {
-      if (!estH || !estM) return null;
-      return (parseInt(estH.value, 10) || 0) * 60 + (parseInt(estM.value, 10) || 0);
+      if (!estRoot || !window.Dts) return null;
+      var total = window.Dts.getTotalMinutes(estRoot);
+      return isFinite(total) ? total : null;
     }
-    [estH, estM].forEach(function (sel) {
-      if (!sel) return;
-      sel.addEventListener("change", function () {
-        postJson(backupUrl, {
-          action: "save",
-          backup_estimated_minutes: backupEstimateMinutes(),
-        }).then(applyGates);
+    function showEstimate() {
+      if (estRoot && window.Dts) window.Dts.setTotalMinutes(estRoot, savedEstimate);
+    }
+    if (estRoot && window.Dts) {
+      window.Dts.init(estRoot);
+      estRoot.addEventListener("dts:change", function () {
+        window.clearTimeout(estimateTimer);
+        estimateTimer = window.setTimeout(function () {
+          var total = backupEstimateMinutes();
+          if (total !== null) savedEstimate = total;
+        }, 150);
       });
+    }
+
+    var openPathUrl = active.getAttribute("data-open-path-url") || "";
+    active.addEventListener("click", function (ev) {
+      var btn = ev.target.closest ? ev.target.closest("[data-mr-wf-open-path]") : null;
+      if (!btn || !openPathUrl) return;
+      var path = (btn.getAttribute("data-mr-wf-open-path") || "").trim();
+      if (!path) return;
+      btn.disabled = true;
+
+      function parentOf(p) {
+        var parts = p.replace(/\/+$/, "").split("/");
+        if (parts.length <= 3) return "";
+        return parts.slice(0, -1).join("/");
+      }
+
+      function tryOpen(target) {
+        return fetch(openPathUrl + "?path=" + encodeURIComponent(target), {
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data.ok && /does not exist/i.test(data.error || "") && parentOf(target)) {
+              return tryOpen(parentOf(target));
+            }
+            if (!data.ok) {
+              showError(data.error || "Could not open in Finder.");
+              return;
+            }
+            if (data.path && !data.opened) {
+              if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(data.path);
+              showError(data.message || "Path copied — open in Finder isn't available on this server.");
+              return;
+            }
+            if (target !== path) {
+              showError(path + " doesn't exist yet — opened " + target + " instead.");
+            }
+          });
+      }
+
+      tryOpen(path)
+        .catch(function () { showError("Could not open in Finder."); })
+        .finally(function () { btn.disabled = false; });
     });
 
-    clickAction("[data-mr-wf-backup-start]", backupUrl, function () {
-      return {
-        action: "start",
-        backup_estimated_minutes: backupEstimateMinutes(),
-        backup_destination_id: checkedCardId("data-mr-wf-backup-dest"),
+    var DEST_PATH_KEY = "mr-hdd-dest-path:v";
+
+    function rememberedDestPath(volId) {
+      if (!volId) return "";
+      try {
+        return (window.localStorage.getItem(DEST_PATH_KEY + volId) || "").trim();
+      } catch (e) {
+        return "";
+      }
+    }
+
+    function saveDestPath(volId, path) {
+      if (!volId || !path) return;
+      try {
+        window.localStorage.setItem(DEST_PATH_KEY + volId, path);
+      } catch (e) {
+        // Storage unavailable — the path is still filled in for this copy.
+      }
+    }
+
+    function initCopyBrowse(modal, pathInput, setPathHint, cardAttr) {
+      var btn = modal.querySelector("[data-mr-wf-copy-browse]");
+      var dlg = modal.querySelector("[data-mr-wf-browse-modal]");
+      if (!btn || !dlg || !pathInput) return;
+      var list = dlg.querySelector("[data-mr-wf-browse-list]");
+      var current = dlg.querySelector("[data-mr-wf-browse-current]");
+      var upBtn = dlg.querySelector("[data-mr-wf-browse-up]");
+      var selectBtn = dlg.querySelector("[data-mr-wf-browse-select]");
+      var loading = dlg.querySelector("[data-mr-wf-browse-loading]");
+      var empty = dlg.querySelector("[data-mr-wf-browse-empty]");
+      var error = dlg.querySelector("[data-mr-wf-browse-error]");
+      var state = { volId: null, rel: "", abs: "", parent: "" };
+
+      function showError(msg) {
+        error.textContent = msg || "";
+        error.hidden = !msg;
+      }
+
+      function load(rel, absHint) {
+        list.innerHTML = "";
+        empty.hidden = true;
+        current.textContent = "Loading…";
+        selectBtn.disabled = true;
+        upBtn.disabled = true;
+        showError("");
+        loading.hidden = false;
+        var url = "/machine-room/volumes/" + encodeURIComponent(state.volId) +
+          "/browse?path=" + encodeURIComponent(rel || "");
+        if (absHint) url += "&absolute=" + encodeURIComponent(absHint);
+        fetch(url, {
+          credentials: "same-origin",
+          headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+        })
+          .then(function (r) {
+            return r.json().catch(function () {
+              return { ok: false, error: "Server error (HTTP " + r.status + ")." };
+            });
+          })
+          .catch(function () {
+            return { ok: false, error: "Could not load folders. Check that the volume is mounted." };
+          })
+          .then(function (data) {
+            loading.hidden = true;
+            if (!data || !data.ok) {
+              current.textContent = "—";
+              showError((data && data.error) || "Browse failed.");
+              return;
+            }
+            state.rel = data.relative_path || "";
+            state.abs = data.absolute_path || "";
+            state.parent = data.parent_path || "";
+            current.textContent = state.abs || "—";
+            selectBtn.disabled = !state.abs;
+            upBtn.disabled = !state.rel;
+            var folders = data.folders || [];
+            empty.hidden = folders.length > 0;
+            folders.forEach(function (folder) {
+              var li = document.createElement("li");
+              var b = document.createElement("button");
+              b.type = "button";
+              b.textContent = folder.name;
+              b.addEventListener("click", function () { load(folder.path); });
+              li.appendChild(b);
+              list.appendChild(li);
+            });
+          });
+      }
+
+      btn.addEventListener("click", function () {
+        state.volId = checkedCardId(cardAttr);
+        if (!state.volId) {
+          setPathHint("Select a destination volume first.");
+          return;
+        }
+        if (typeof dlg.showModal === "function") dlg.showModal();
+        load("", (pathInput.value || "").trim() || undefined);
+      });
+      upBtn.addEventListener("click", function () { load(state.parent || ""); });
+      dlg.querySelector("[data-mr-wf-browse-cancel]").addEventListener("click", function () {
+        dlg.close();
+      });
+      selectBtn.addEventListener("click", function () {
+        if (!state.abs) return;
+        pathInput.value = state.abs;
+        pathInput.dataset.touched = "1";
+        saveDestPath(state.volId, state.abs);
+        setPathHint("Selected folder (remembered for next time)");
+        dlg.close();
+        pathInput.focus();
+      });
+    }
+
+    var copyModal = active.querySelector("[data-mr-wf-copy-modal]");
+    var copyOpen = active.querySelector("[data-mr-wf-backup-start]");
+    if (copyModal && copyOpen) {
+      var copyForm = copyModal.querySelector("[data-mr-wf-copy-form]");
+      var copyError = copyModal.querySelector("[data-mr-wf-copy-error]");
+      var setCopyError = function (msg) {
+        copyError.textContent = msg || "";
+        copyError.hidden = !msg;
       };
-    });
+      var copyPath = copyModal.querySelector("[data-mr-wf-copy-path]");
+      var copyPathHint = copyModal.querySelector("[data-mr-wf-copy-path-hint]");
+      var setPathHint = function (msg) {
+        if (!copyPathHint) return;
+        copyPathHint.textContent = msg || "";
+        copyPathHint.hidden = !msg;
+      };
+      if (copyPath) {
+        copyPath.addEventListener("input", function () {
+          copyPath.dataset.touched = "1";
+          setPathHint("");
+        });
+      }
+      initCopyBrowse(copyModal, copyPath, setPathHint, "data-mr-wf-backup-dest");
+      copyOpen.addEventListener("click", function () {
+        setCopyError("");
+        var volId = checkedCardId("data-mr-wf-backup-dest");
+        var remembered = rememberedDestPath(volId);
+        if (copyPath && !copyPath.dataset.touched && remembered) {
+          copyPath.value = remembered;
+          setPathHint("Restored last selected folder on this volume");
+        }
+        if (typeof copyModal.showModal === "function") copyModal.showModal();
+        showEstimate();
+      });
+      copyForm.addEventListener("submit", function (ev) {
+        if (ev.submitter && ev.submitter.value === "cancel") return;
+        ev.preventDefault();
+        var total = backupEstimateMinutes();
+        if (!total) {
+          setCopyError("Set the estimated copy time.");
+          return;
+        }
+        var fd = new FormData(copyForm);
+        var submitBtn = ev.submitter;
+        if (submitBtn) submitBtn.disabled = true;
+        postJson(backupUrl, {
+          action: "start",
+          backup_estimated_minutes: total,
+          backup_destination_id: checkedCardId("data-mr-wf-backup-dest"),
+          video_size_tb: fd.get("video_size_tb"),
+          audio_size_gb: fd.get("audio_size_gb"),
+          destination_path: fd.get("destination_path"),
+          checksum_method: fd.get("checksum_method"),
+          checksum_status: fd.get("checksum_status"),
+          notes: fd.get("notes"),
+          make_critical: fd.get("make_critical") === "1",
+        }).then(function (res) {
+          if (submitBtn) submitBtn.disabled = false;
+          if (!res.ok) {
+            setCopyError((res.data && res.data.error) || "Could not start the copy.");
+            return;
+          }
+          copyModal.close();
+          afterOk(res);
+        }).catch(function () {
+          if (submitBtn) submitBtn.disabled = false;
+          setCopyError("Could not save. Please try again.");
+        });
+      });
+    }
     clickAction("[data-mr-wf-backup-finish]", backupUrl, function () {
       return { action: "finish_copy" };
     });
@@ -569,42 +905,183 @@
       return { action: "fail_verify" };
     });
 
-    var preset = active.querySelector("[data-mr-wf-preset]");
+    var tModal = active.querySelector("[data-mr-wf-transcode-modal]");
+    var tPath = tModal ? tModal.querySelector("[data-mr-wf-copy-path]") : null;
+
     function saveTranscodeTarget() {
       postJson(transcodeUrl, {
         action: "save",
         proxy_destination_id: checkedCardId("data-mr-wf-proxy-dest"),
-        proxy_preset: (preset && preset.value) || "",
-      }).then(applyGates);
+      }).then(function (res) {
+        applyGates(res);
+        var detail = res.ok && res.data && res.data.workflow;
+        if (!detail || !tModal) return;
+        if (tPath && !tPath.dataset.touched) tPath.value = detail.proxy_destination_path || "";
+        var name = (detail.proxy_destination && detail.proxy_destination.name) || "—";
+        active.querySelectorAll(
+          "[data-mr-wf-transcode-dest-name], [data-mr-wf-panel='transcode'] .mr-mc__flow-box--dst em"
+        ).forEach(function (el) { el.textContent = name; });
+      });
     }
     active.querySelectorAll("[data-mr-wf-proxy-dest]").forEach(function (card) {
       card.addEventListener("change", saveTranscodeTarget);
     });
-    if (preset) preset.addEventListener("change", saveTranscodeTarget);
 
-    clickAction("[data-mr-wf-transcode-start]", transcodeUrl, function () {
-      return {
-        action: "start",
-        proxy_destination_id: checkedCardId("data-mr-wf-proxy-dest"),
-        proxy_preset: (active.querySelector("[data-mr-wf-preset]") || {}).value || "",
-        pre_checks: collectedChecks("[data-mr-wf-pre-check]"),
+    var tOpen = active.querySelector("[data-mr-wf-transcode-start]");
+    if (tModal && tOpen) {
+      var tForm = tModal.querySelector("[data-mr-wf-transcode-form]");
+      var tError = tModal.querySelector("[data-mr-wf-transcode-error]");
+      var tHint = tModal.querySelector("[data-mr-wf-copy-path-hint]");
+      var tEst = tModal.querySelector("[data-mr-wf-transcode-estimate]");
+      var tSavedEst = tEst ? parseInt(tEst.getAttribute("data-initial-minutes"), 10) || 0 : 0;
+      var setTError = function (msg) {
+        tError.textContent = msg || "";
+        tError.hidden = !msg;
       };
-    });
+      var setTHint = function (msg) {
+        if (!tHint) return;
+        tHint.textContent = msg || "";
+        tHint.hidden = !msg;
+      };
+      var tEstimate = function () {
+        if (!tEst || !window.Dts) return null;
+        var total = window.Dts.getTotalMinutes(tEst);
+        return isFinite(total) ? total : null;
+      };
+      if (tEst && window.Dts) {
+        window.Dts.init(tEst);
+        tEst.addEventListener("dts:change", function () {
+          var total = tEstimate();
+          if (total !== null) tSavedEst = total;
+        });
+      }
+      if (tPath) {
+        tPath.addEventListener("input", function () {
+          tPath.dataset.touched = "1";
+          setTHint("");
+        });
+      }
+      initCopyBrowse(tModal, tPath, setTHint, "data-mr-wf-proxy-dest");
+      var tPreset = tModal.querySelector("[data-mr-wf-preset]");
+      var tPresetDefault = tModal.querySelector("[data-mr-wf-preset-default]");
+      var presetKey = "mr-proxy-preset-default:p" + (active.getAttribute("data-project-id") || "0");
+      var defaultPreset = function () {
+        try {
+          return window.localStorage.getItem(presetKey) || "";
+        } catch (e) {
+          return "";
+        }
+      };
+      var syncPresetDefault = function () {
+        if (!tPreset || !tPresetDefault) return;
+        var isDefault = !!tPreset.value && tPreset.value === defaultPreset();
+        tPresetDefault.disabled = !tPreset.value || isDefault;
+        tPresetDefault.textContent = isDefault ? "Default" : "Set as default";
+      };
+      if (tPreset && tPresetDefault) {
+        tPreset.addEventListener("change", syncPresetDefault);
+        tPresetDefault.addEventListener("click", function () {
+          try {
+            window.localStorage.setItem(presetKey, tPreset.value);
+          } catch (e) {
+            showError("Could not save the default preset in this browser.");
+          }
+          syncPresetDefault();
+        });
+      }
+      tOpen.addEventListener("click", function () {
+        setTError("");
+        if (tPreset && !tPreset.value && !tPreset.dataset.chosen) {
+          var preferred = defaultPreset();
+          if (preferred && tPreset.querySelector('option[value="' + CSS.escape(preferred) + '"]')) {
+            tPreset.value = preferred;
+          }
+        }
+        syncPresetDefault();
+        var remembered = rememberedDestPath(checkedCardId("data-mr-wf-proxy-dest"));
+        if (tPath && !tPath.dataset.touched && remembered) {
+          tPath.value = remembered;
+          setTHint("Restored last selected folder on this volume");
+        }
+        if (typeof tModal.showModal === "function") tModal.showModal();
+        if (tEst && window.Dts) window.Dts.setTotalMinutes(tEst, tSavedEst);
+      });
+      tForm.addEventListener("submit", function (ev) {
+        if (ev.submitter && ev.submitter.value === "cancel") return;
+        ev.preventDefault();
+        var total = tEstimate();
+        if (!total) {
+          setTError("Set the estimated transcoding time.");
+          return;
+        }
+        var fd = new FormData(tForm);
+        var submitBtn = ev.submitter;
+        if (submitBtn) submitBtn.disabled = true;
+        postJson(transcodeUrl, {
+          action: "start",
+          proxy_destination_id: checkedCardId("data-mr-wf-proxy-dest"),
+          proxy_preset: fd.get("proxy_preset") || "",
+          pre_checks: collectedChecks("[data-mr-wf-pre-check]"),
+          transcode_estimated_minutes: total,
+          destination_path: fd.get("destination_path"),
+          notes: fd.get("notes"),
+        }).then(function (res) {
+          if (submitBtn) submitBtn.disabled = false;
+          if (!res.ok) {
+            setTError((res.data && res.data.error) || "Could not start transcoding.");
+            return;
+          }
+          tModal.close();
+          afterOk(res);
+        }).catch(function () {
+          if (submitBtn) submitBtn.disabled = false;
+          setTError("Could not save. Please try again.");
+        });
+      });
+    }
     clickAction("[data-mr-wf-transcode-finish]", transcodeUrl, function () {
       return { action: "finish" };
     });
-    clickAction("[data-mr-wf-transcode-verify]", transcodeUrl, function () {
-      return {
-        action: "verify",
-        post_checks: collectedChecks("[data-mr-wf-post-check]"),
-      };
-    });
-    clickAction("[data-mr-wf-mark-ready]", completeUrl, function () {
-      return {
-        action: "mark_ready",
-        checks: collectedChecks("[data-mr-wf-complete-check]"),
-      };
-    });
+    clickAction("[data-mr-wf-backup-pause]", backupUrl, function () { return { action: "pause" }; });
+    clickAction("[data-mr-wf-backup-resume]", backupUrl, function () { return { action: "resume" }; });
+    clickAction("[data-mr-wf-transcode-pause]", transcodeUrl, function () { return { action: "pause" }; });
+    clickAction("[data-mr-wf-transcode-resume]", transcodeUrl, function () { return { action: "resume" }; });
+    function checklistModal(openSel, modalSel, url, payloadFn, failMsg) {
+      var dlg = active.querySelector(modalSel);
+      var opener = active.querySelector(openSel);
+      if (!dlg || !opener) return;
+      var errEl = dlg.querySelector("[data-mr-wf-checks-error]");
+      opener.addEventListener("click", function () {
+        errEl.hidden = true;
+        if (typeof dlg.showModal === "function") dlg.showModal();
+      });
+      dlg.querySelector("[data-mr-wf-checks-form]").addEventListener("submit", function (ev) {
+        if (ev.submitter && ev.submitter.value === "cancel") return;
+        ev.preventDefault();
+        var btn = ev.submitter;
+        if (btn) btn.disabled = true;
+        postJson(url, payloadFn()).then(function (res) {
+          if (!res.ok) {
+            errEl.textContent = (res.data && res.data.error) || failMsg;
+            errEl.hidden = false;
+            return;
+          }
+          dlg.close();
+          afterOk(res);
+        }).catch(function () {
+          errEl.textContent = "Could not save. Please try again.";
+          errEl.hidden = false;
+        }).finally(function () {
+          if (btn) btn.disabled = false;
+        });
+      });
+    }
+    checklistModal("[data-mr-wf-verify-open]", "[data-mr-wf-verify-modal]", transcodeUrl, function () {
+      return { action: "verify", post_checks: collectedChecks("[data-mr-wf-post-check]") };
+    }, "Could not verify proxies.");
+    checklistModal("[data-mr-wf-ready-open]", "[data-mr-wf-ready-modal]", completeUrl, function () {
+      return { action: "mark_ready", checks: collectedChecks("[data-mr-wf-complete-check]") };
+    }, "Could not mark ready for editing.");
 
     var modal = root.querySelector("[data-mr-wf-problem-modal]");
     var openProb = active.querySelector("[data-mr-wf-open-problem]");
@@ -687,22 +1164,15 @@
     }
   }
 
-  var ASSISTANT_KEY = "mrWfAssistantCollapsed";
-
   function initAssistant(root) {
-    var box = root.querySelector("[data-mr-wf-assistant]");
-    if (!box) return;
-    try {
-      if (window.localStorage.getItem(ASSISTANT_KEY) === "1") box.open = false;
-    } catch (e) {
-      // Storage unavailable — keep the default open state.
-    }
-    box.addEventListener("toggle", function () {
-      try {
-        window.localStorage.setItem(ASSISTANT_KEY, box.open ? "0" : "1");
-      } catch (e) {
-        // Storage unavailable — collapse still works for this page view.
-      }
+    var modal = root.querySelector("[data-mr-wf-assistant]");
+    var trigger = root.querySelector("[data-mr-wf-assistant-open]");
+    if (!modal || !trigger) return;
+    trigger.addEventListener("click", function () {
+      if (typeof modal.showModal === "function") modal.showModal();
+    });
+    modal.addEventListener("click", function (ev) {
+      if (ev.target === modal) modal.close();
     });
   }
 
@@ -754,9 +1224,45 @@
     });
   }
 
+  function initOperationClocks(root) {
+    function duration(ms) {
+      var minutes = Math.floor(Math.max(0, ms) / 60000);
+      return Math.floor(minutes / 60) + "h " + (minutes % 60) + "m";
+    }
+    function update() {
+      root.querySelectorAll("[data-mr-wf-clock]").forEach(function (node) {
+        var start = Number(node.dataset.startedMs);
+        var finish = Number(node.dataset.finishedMs);
+        var stopped = node.dataset.stopped === "1";
+        if (!start) return;
+        node.querySelector("[data-mr-wf-elapsed]").textContent = stopped && !finish ? "Stopped — see activity history" : duration((finish || Date.now()) - start);
+        var remaining = node.querySelector("[data-mr-wf-remaining]");
+        var estimate = Number(node.dataset.estimateMin);
+        if (finish) remaining.textContent = "Finished";
+        else if (stopped) remaining.textContent = "Stopped";
+        else if (estimate) {
+          var left = start + estimate * 60000 - Date.now();
+          remaining.textContent = left > 0 ? "About " + Math.ceil(left / 60000) + " min" : "Estimate exceeded · still running";
+        }
+      });
+    }
+    update();
+    if (root.querySelector("[data-mr-wf-clock]")) window.setInterval(update, 10000);
+  }
+
+  function initCreateModal(root) {
+    var modal = root.querySelector("[data-mr-wf-create-modal]");
+    var open = root.querySelector("[data-mr-wf-create-open]");
+    if (!modal || !open) return;
+    open.addEventListener("click", function () { modal.showModal(); });
+    modal.querySelector("[data-mr-wf-create-close]").addEventListener("click", function () { modal.close(); });
+  }
+
   function boot() {
     var root = document.querySelector("[data-mr-wf-root]");
     if (!root) return;
+    initCreateModal(root);
+    initOperationClocks(root);
     initStartForm(root);
     initAssistant(root);
     initActive(root);
