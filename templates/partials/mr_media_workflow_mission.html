@@ -49,7 +49,7 @@
       <h2 class="mr-mc__section-title" id="mr-wf-create-title">Start a material workflow</h2>
       <button type="button" class="btn btn-secondary btn-sm" data-mr-wf-create-close>Close</button>
     </div>
-    <p class="muted">Select a project and one shooting day. A day can only be in one workflow — days already in a workflow show an Open link.</p>
+    <p class="muted">Select a project and one shooting day. A day can only be in one workflow — days already in a workflow show Open or Completed.</p>
     <form class="mr-mc__start-form" data-mr-wf-start-form>
       <label class="mr-mc__field">
         <span>Project</span>
@@ -67,14 +67,27 @@
         </button>
         <p class="mr-mc__day-count muted" data-mr-wf-day-count></p>
       </div>
-      <button type="submit" class="btn btn-primary mr-mc__primary-btn mr-mc__start-submit">Continue workflow</button>
+      <div class="mr-mc__field mr-mc__field--full"
+        data-mr-wf-drives-url="{{ url_for('machine_room_workflow_connected_drives') }}"
+        data-mr-wf-drives-add-url="{{ url_for('machine_room_workflow_connected_drive_add') }}">
+        <span>Transfer / Shuttle volume</span>
+        <div class="mr-mc__vol-dock mr-mc__start-vols" role="radiogroup" aria-label="Transfer / Shuttle volume" aria-live="polite" data-mr-wf-start-shuttle>
+          <p class="muted mr-mc__start-vols-empty">Select project first…</p>
+        </div>
+      </div>
+      <label class="mr-mc__field mr-mc__field--full">
+        <span>Receive notes (optional)</span>
+        <textarea name="receive_notes" rows="2" maxlength="4000" data-mr-wf-start-notes></textarea>
+      </label>
+      <p class="mr-mc__start-hint muted mr-mc__field--full" data-mr-wf-start-shuttle-hint>Picking the shuttle drive records the material as received, so the workflow opens at Backup.</p>
+      <button type="submit" class="btn btn-primary mr-mc__primary-btn mr-mc__start-submit">Start workflow</button>
     </form>
     <p class="mr-mc__new-day-error" data-mr-wf-start-error hidden></p>
 
     <dialog class="mr-mc__modal mr-mc__modal--days" data-mr-wf-start-days-modal>
       <div class="mr-mc__modal-inner">
         <h3>Shooting day</h3>
-        <p class="muted">Select one day. Days already in a workflow show an Open link.</p>
+        <p class="muted">Select one day. Days already in a workflow show Open or Completed.</p>
         <div class="mr-mc__day-pick" data-mr-wf-day-pick>
           <p class="mr-mc__day-empty muted" data-mr-wf-day-empty>Select project first…</p>
           <button type="button" class="mr-mc__day-add" data-mr-wf-day-add hidden>+ Add new shooting day…</button>
@@ -90,8 +103,11 @@
               <input type="number" min="1" value="1" data-mr-wf-new-day-unit>
             </label>
             <label class="mr-mc__field">
-              <span>Day number or name</span>
-              <input type="text" maxlength="50" placeholder="e.g. 24" data-mr-wf-new-day-name>
+              <span>Day number</span>
+              <span class="mr-mc__prefixed">
+                <span class="mr-mc__prefix" aria-hidden="true">Day</span>
+                <input type="text" maxlength="45" placeholder="e.g. 24" data-mr-wf-new-day-name aria-label="Day number">
+              </span>
             </label>
             <label class="mr-mc__field">
               <span>Shooting date</span>
@@ -111,6 +127,7 @@
       </div>
     </dialog>
     <script type="application/json" id="mr-wf-days-json">{{ mr_wf_days_by_project|tojson }}</script>
+    <script type="application/json" id="mr-wf-shuttle-json">{{ mr_wf_shuttle_by_project|default({})|tojson }}</script>
   </div>
 
   </dialog>
@@ -142,7 +159,7 @@
           <p class="mr-mc__card-hint"><strong>Next:</strong> {{ c.progress_summary.next_action }}</p>
         </div>
         <div class="mr-mc__card-actions">
-          <a class="btn btn-primary mr-mc__card-go" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress', workflow_id=c.id) }}">
+          <a class="btn btn-primary mr-mc__card-go" href="{{ url_for('machine_room_workflow_page', workflow_id=c.id) }}">
             {% if c.status in ('ready', 'ended') %}View{% else %}Continue workflow{% endif %}
           </a>
           {% if c.status == 'ended' %}
@@ -170,7 +187,7 @@
             data-entity-label="Workflow"
             data-entity-name="{{ c.project_name }} · {{ c.shooting_day_label }}"
             data-delete-url="{{ url_for('machine_room_workflow_remove', workflow_id=c.id) }}"
-            data-success-redirect="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}"
+            data-success-redirect="{{ url_for('machine_room_workflow_page') }}"
             data-warning-text="This permanently deletes the workflow and its activity history. Its shooting days become free to process again. Files on disk are not touched. This cannot be undone."
             data-confirm-label="Delete Permanently"
           >
@@ -189,8 +206,41 @@
   </div>
 
   {% if mr_wf_ready_rows %}
-  <div class="mr-mc__ready">
-    <h2 class="mr-mc__section-title">Ready for editing <span class="mr-mc__ready-count">{{ mr_wf_ready_rows|length }}</span></h2>
+  <div class="mr-mc__ready" data-mr-wf-ready>
+    <h2 class="mr-mc__section-title">Ready for editing <span class="mr-mc__ready-count" data-mr-wf-ready-count>{{ mr_wf_ready_rows|length }}</span></h2>
+    <div class="mr-mc__ready-filters" role="search" aria-label="Filter ready shooting days">
+      <label class="mr-mc__field mr-mc__ready-filter--search">
+        <span>Search</span>
+        <input type="search" placeholder="Project, day, drive or preset…" data-mr-wf-ready-filter="q" autocomplete="off">
+      </label>
+      <label class="mr-mc__field">
+        <span>Project</span>
+        <select data-mr-wf-ready-filter="project">
+          <option value="">All projects</option>
+          {% for name in mr_wf_ready_rows|map(attribute='project_name')|unique|sort %}
+          <option value="{{ name }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="mr-mc__field">
+        <span>Completed by</span>
+        <select data-mr-wf-ready-filter="by">
+          <option value="">Anyone</option>
+          {% for name in mr_wf_ready_rows|map(attribute='completed_by')|unique|sort %}
+          <option value="{{ name }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="mr-mc__field">
+        <span>From</span>
+        <input type="date" data-mr-wf-ready-filter="from">
+      </label>
+      <label class="mr-mc__field">
+        <span>To</span>
+        <input type="date" data-mr-wf-ready-filter="to">
+      </label>
+      <button type="button" class="mr-mc__link-btn mr-mc__ready-clear" data-mr-wf-ready-clear disabled>Clear</button>
+    </div>
     <div class="mr-mc__ready-wrap">
       <table class="mr-mc__ready-table">
         <thead>
@@ -206,7 +256,11 @@
         </thead>
         <tbody>
           {% for r in mr_wf_ready_rows %}
-          <tr>
+          <tr data-mr-wf-ready-row
+            data-project="{{ r.project_name }}"
+            data-by="{{ r.completed_by }}"
+            data-date="{{ (r.completed_at or '')[:10] }}"
+            data-search="{{ [r.project_name, r.shooting_day_label, r.completed_by, r.backup_destination_name, r.proxy_destination_name, r.proxy_preset]|join(' ')|lower }}">
             <td class="mr-mc__ready-project">{{ r.project_name }}</td>
             <td>{{ r.shooting_day_label }}{% if r.day_count > 1 %} <span class="mr-mc__card-days">{{ r.day_count }} days</span>{% endif %}</td>
             <td class="mr-mc__ready-nowrap">{{ r.completed_at_display }}</td>
@@ -214,7 +268,7 @@
             <td>{{ r.backup_destination_name }}</td>
             <td>{{ r.proxy_destination_name }}{% if r.proxy_preset %}<span class="mr-mc__ready-sub">{{ r.proxy_preset }}</span>{% endif %}</td>
             <td class="mr-mc__ready-actions">
-              <a class="btn btn-secondary btn-sm" href="{{ url_for('machine_room_tasks_tab', tab_slug='progress', workflow_id=r.id) }}">View</a>
+              <a class="btn btn-secondary btn-sm" href="{{ url_for('machine_room_workflow_page', workflow_id=r.id) }}">View</a>
               <button
                 type="button"
                 class="mr-mc__icon-btn mr-mc__icon-btn--danger"
@@ -226,7 +280,7 @@
                 data-entity-label="Workflow"
                 data-entity-name="{{ r.project_name }} · {{ r.shooting_day_label }}"
                 data-delete-url="{{ url_for('machine_room_workflow_remove', workflow_id=r.id) }}"
-                data-success-redirect="{{ url_for('machine_room_tasks_tab', tab_slug='progress') }}"
+                data-success-redirect="{{ url_for('machine_room_workflow_page') }}"
                 data-warning-text="This permanently deletes the workflow and its activity history. Its shooting days become free to process again. Files on disk are not touched. This cannot be undone."
                 data-confirm-label="Delete Permanently"
               >
@@ -235,9 +289,20 @@
             </td>
           </tr>
           {% endfor %}
+          <tr class="mr-mc__ready-empty" data-mr-wf-ready-empty hidden>
+            <td colspan="7">No shooting days match these filters.</td>
+          </tr>
         </tbody>
       </table>
     </div>
+    <nav class="mr-mc__pager" aria-label="Ready for editing pages" data-mr-wf-ready-pager hidden>
+      <span class="mr-mc__pager-info" data-mr-wf-ready-pager-info></span>
+      <div class="mr-mc__pager-pages">
+        <button type="button" class="mr-mc__pager-btn" data-mr-wf-ready-page="prev" aria-label="Previous page">‹</button>
+        <span class="mr-mc__pager-nums" data-mr-wf-ready-pager-nums></span>
+        <button type="button" class="mr-mc__pager-btn" data-mr-wf-ready-page="next" aria-label="Next page">›</button>
+      </div>
+    </nav>
   </div>
   {% endif %}
 

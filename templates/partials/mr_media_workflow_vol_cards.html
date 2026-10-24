@@ -1,6 +1,6 @@
-{% macro vol_cards(group, input_name, data_attr, selected_id, role, role_label, project_name, locked=false) %}
+{% macro vol_cards(group, input_name, data_attr, selected_id, role, role_label, project_name, locked=false, docked=false) %}
 <fieldset class="mr-mc__vol-pick">
-  <legend>{{ role_label }} volume</legend>
+  <legend{% if docked %} class="visually-hidden"{% endif %}>{{ role_label }} volume</legend>
   {% if group.volumes %}
   <p class="mr-mc__vol-note muted">
     {% if group.linked_only %}
@@ -27,7 +27,7 @@
         {% endif %}
       </span>
       <span class="mr-mc__vol-card-name">{{ v.name }}</span>
-      <span class="mr-mc__vol-card-role">{% if v.linked %}Linked to project{% else %}{{ role_label }}{% endif %}</span>
+      <span class="mr-mc__vol-card-role">{% if docked %}{{ role_label }} volume{% elif v.linked %}Linked to project{% else %}{{ role_label }}{% endif %}</span>
       <span class="mr-mc__vol-card-status">
         <span class="mr-mc__vol-card-mount">{{ 'Mounted' if v.mounted else 'Not mounted' }}</span>
         <span class="mr-mc__vol-card-free">

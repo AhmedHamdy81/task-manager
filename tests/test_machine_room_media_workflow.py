@@ -158,11 +158,19 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
 
     def test_progress_page_renders_mission_control(self):
         self._login_mr()
-        r = self.client.get("/machine-room/tasks/progress")
+        r = self.client.get("/machine-room/workflow")
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True)[:500])
         body = r.get_data(as_text=True)
         self.assertIn("Daily Media Processing", body)
         self.assertIn("Pending", body)
+
+        tasks = self.client.get("/machine-room/tasks/progress").get_data(as_text=True)
+        self.assertIn("Machine Room Tasks", tasks)
+        self.assertNotIn("data-mr-wf-root", tasks)
+
+        old_link = self.client.get("/machine-room/tasks/progress?workflow_id=5")
+        self.assertEqual(old_link.status_code, 302)
+        self.assertTrue(old_link.headers["Location"].endswith("/machine-room/workflow?workflow_id=5"))
 
     def test_create_and_duplicate_reopens(self):
         wid = self._create_workflow()
@@ -177,6 +185,156 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         self.assertTrue(data.get("ok"))
         self.assertFalse(data.get("created"))
         self.assertEqual(data["workflow_id"], wid)
+
+    def test_status_change_pushes_to_production_page(self):
+        from unittest import mock
+
+        from app import socketio
+
+        with mock.patch.object(socketio, "emit") as emit:
+            wid = self._create_workflow()
+        pushed = [c for c in emit.call_args_list if c.args and c.args[0] == "mr_workflow_changed"]
+        self.assertTrue(pushed)
+        self.assertEqual(pushed[-1].args[1], {"project_ids": [self.project.id]})
+        self.assertEqual(pushed[-1].kwargs.get("room"), "tasks_feed")
+
+        self._login_admin()
+        r = self.client.get(f"/projects/{self.project.id}/production/workflow-statuses")
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True)[:500])
+        day = r.get_json()["days"][str(self.day.id)]
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, wid)
+        self.assertEqual(day, {"label": w.media_prep_label(), "status": w.status})
+
+        outsider = self.M["Account"](email="outsider-wf@test.local", password_hash="x", role="user")
+        db.session.add(outsider)
+        db.session.commit()
+        with self.client.session_transaction() as sess:
+            sess["account_id"] = outsider.id
+        denied = self.client.get(f"/projects/{self.project.id}/production/workflow-statuses")
+        self.assertIn(denied.status_code, (302, 403))
+
+    def test_start_with_shuttle_records_material_received(self):
+        self._login_mr()
+        h = self._csrf_headers()
+        other = self.StorageVolume(
+            name="Loose", display_name="Loose SSD", mount_path="/Volumes/Loose",
+            storage_role="transfer", mounted_status="mounted", is_mounted=True,
+        )
+        db.session.add(other)
+        db.session.commit()
+        bad = self.client.post(
+            "/machine-room/workflows",
+            data=json.dumps({
+                "project_id": self.project.id,
+                "shooting_day_id": self.day.id,
+                "shuttle_volume_id": other.id,
+            }),
+            headers=h,
+        )
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("not linked", bad.get_json()["error"])
+        self.assertEqual(self.models.MachineRoomMediaWorkflow.query.count(), 0)
+
+        r = self.client.post(
+            "/machine-room/workflows",
+            data=json.dumps({
+                "project_id": self.project.id,
+                "shooting_day_id": self.day.id,
+                "shuttle_volume_id": self.shuttle.id,
+                "receive_notes": "Card A001 to A004",
+            }),
+            headers=h,
+        ).get_json()
+        self.assertTrue(r.get("ok"), r)
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, r["workflow_id"])
+        self.assertEqual(w.current_stage, self.wf.STAGE_BACKUP)
+        self.assertIsNotNone(w.received_at)
+        self.assertEqual(w.shuttle_volume_id, self.shuttle.id)
+        self.assertEqual(w.receive_notes, "Card A001 to A004")
+        events = [
+            e.event_type
+            for e in self.models.MachineRoomMediaWorkflowEvent.query.filter_by(workflow_id=w.id).all()
+        ]
+        self.assertIn("material_received", events)
+
+    def test_find_and_add_connected_shuttle_drive(self):
+        from unittest.mock import patch
+
+        self._login_mr()
+        h = self._csrf_headers()
+        loose = self.StorageVolume(
+            name="Card Reader", display_name="Card Reader", mount_path="/Volumes/CardReader",
+            storage_role="transfer", mounted_status="mounted", is_mounted=True,
+        )
+        db.session.add(loose)
+        db.session.commit()
+        new_row = {
+            "name": "SANDISK_A", "display_name": "SANDISK_A",
+            "mount_path": "/Volumes/SANDISK_A", "expected_mount_path": "/Volumes/SANDISK_A",
+            "filesystem_source": "/dev/disk9s1", "filesystem_type": "exfat",
+            "drive_type": "external_ssd", "connection_type": "usb",
+            "capacity_tb": 2.0, "used_tb": 0.5, "free_tb": 1.5, "free_percentage": 75.0,
+            "capacity_bytes": 2.0, "used_bytes": 0.5, "free_bytes": 1.5,
+            "volume_uuid": "UUID-SANDISK-A",
+            "already_added": False, "existing_volume_id": None, "existing_volume_name": "", "debug": {},
+        }
+        known_row = {**new_row, "name": "Card Reader", "display_name": "Card Reader",
+                     "mount_path": "/Volumes/CardReader", "volume_uuid": "UUID-CR",
+                     "already_added": True, "existing_volume_id": loose.id}
+        with patch("machine_room_storage_scan.discover_mounted_volumes", return_value=[new_row, known_row]):
+            found = self.client.get(
+                f"/machine-room/workflows/connected-drives?project_id={self.project.id}"
+            ).get_json()
+            self.assertEqual([d["mount_path"] for d in found["new"]], ["/Volumes/SANDISK_A"])
+            self.assertEqual([d["volume_id"] for d in found["linkable"]], [loose.id])
+
+            added = self.client.post(
+                "/machine-room/workflows/connected-drives/add",
+                data=json.dumps({"project_id": self.project.id, "mount_path": "/Volumes/SANDISK_A"}),
+                headers=h,
+            ).get_json()
+        self.assertTrue(added.get("ok"), added)
+        vol = db.session.get(self.StorageVolume, added["volume"]["id"])
+        self.assertEqual(vol.storage_role, "transfer")
+        self.assertEqual(vol.mount_path, "/Volumes/SANDISK_A")
+        linked = self.client.post(
+            "/machine-room/workflows/connected-drives/add",
+            data=json.dumps({"project_id": self.project.id, "volume_id": loose.id}),
+            headers=h,
+        ).get_json()
+        self.assertTrue(linked.get("ok"), linked)
+        links = {
+            l.volume_id for l in self.Link.query.filter_by(project_id=self.project.id).all()
+        }
+        self.assertTrue({vol.id, loose.id} <= links)
+
+    def test_transcoding_finish_can_go_straight_to_ready(self):
+        self._login_mr()
+        h = self._csrf_headers()
+        wid = self.client.post(
+            "/machine-room/workflows",
+            data=json.dumps({
+                "project_id": self.project.id,
+                "shooting_day_id": self.day.id,
+                "shuttle_volume_id": self.shuttle.id,
+            }),
+            headers=h,
+        ).get_json()["workflow_id"]
+        backup = f"/machine-room/workflows/{wid}/backup"
+        transcode = f"/machine-room/workflows/{wid}/transcode"
+        steps = [
+            (backup, {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 30}),
+            (backup, {"action": "finish_copy", "checks": []}),
+            (backup, {"action": "verify", "checks": [], "verification_method": "operator_confirmed"}),
+            (transcode, {"action": "start", "proxy_destination_id": self.inhouse.id, "transcode_estimated_minutes": 20}),
+            (transcode, {"action": "finish", "post_checks": []}),
+            (transcode, {"action": "verify", "post_checks": []}),
+            (f"/machine-room/workflows/{wid}/complete", {"action": "mark_ready", "checks": []}),
+        ]
+        for url, body in steps:
+            res = self.client.post(url, data=json.dumps(body), headers=h).get_json()
+            self.assertTrue(res.get("ok"), (body, res))
+        self.assertEqual(res["workflow"]["status"], "ready")
 
     def test_cannot_skip_backup_to_transcode(self):
         wid = self._create_workflow()
@@ -290,18 +448,18 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         self.assertEqual(data["workflow"]["status"], "ready")
 
         # Resume: reopen page with workflow_id
-        page = self.client.get(f"/machine-room/tasks/progress?workflow_id={wid}")
+        page = self.client.get(f"/machine-room/workflow?workflow_id={wid}")
         self.assertEqual(page.status_code, 200)
         self.assertIn("Shooting day ready", page.get_data(as_text=True))
 
         # Ready workflows move from the card grid to the Ready for editing list
         bundle = app.extensions["mr_media_workflow_bundle"]
-        with app.test_request_context("/machine-room/tasks/progress"):
+        with app.test_request_context("/machine-room/workflow"):
             ctx = bundle(self.mr_acc)
         self.assertEqual([r["id"] for r in ctx["mr_wf_ready_rows"]], [wid])
         self.assertNotIn(wid, [c["id"] for c in ctx["mr_wf_cards"]])
         self.assertEqual(ctx["mr_wf_ready_rows"][0]["completed_by"], "MR Operator")
-        list_page = self.client.get("/machine-room/tasks/progress").get_data(as_text=True)
+        list_page = self.client.get("/machine-room/workflow").get_data(as_text=True)
         self.assertIn("mr-mc__ready-table", list_page)
 
     def test_critical_issue_blocks(self):
@@ -666,6 +824,7 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         db.session.add_all([editor, outsider])
         db.session.flush()
         db.session.add(self.M["ProjectMember"](project_id=self.project.id, user_id=editor.id))
+        db.session.add(self.M["ProjectMember"](project_id=self.project.id, user_id=self.mr_user.id))
         db.session.commit()
 
         wid = self._create_workflow()
@@ -704,6 +863,15 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         self.assertEqual(task.status, "done")
         self.assertEqual(task.completed_at, w.backup_finished_at)
         self.assertEqual(Notification.query.filter_by(user_id=outsider.id).count(), 0)
+
+        operator_titles = {
+            n.title.rsplit(": ", 1)[-1]
+            for n in Notification.query.filter_by(user_id=self.mr_user.id, project_id=self.project.id).all()
+        }
+        self.assertTrue(
+            {"Workflow started", "Material received", "Backup started", "Backup copy finished"} <= operator_titles,
+            operator_titles,
+        )
 
     def test_backup_start_requires_estimate(self):
         wid = self._create_workflow()
@@ -1026,15 +1194,23 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
         new_id = data["day"]["id"]
         day = db.session.get(self.M["ShootingDay"], new_id)
         self.assertEqual(day.project_id, self.project.id)
-        self.assertEqual(day.day_name, "25")
+        self.assertEqual(day.day_name, "Day 25")
 
         again = self.client.post(
             "/machine-room/workflows/shooting-days",
-            data=json.dumps(payload),
+            data=json.dumps({**payload, "day_name": "Day 25"}),
             headers=self._csrf_headers(),
         ).get_json()
         self.assertFalse(again.get("created"))
         self.assertEqual(again["day"]["id"], new_id)
+
+        legacy = self.client.post(
+            "/machine-room/workflows/shooting-days",
+            data=json.dumps({**payload, "day_name": "24"}),
+            headers=self._csrf_headers(),
+        ).get_json()
+        self.assertFalse(legacy.get("created"))
+        self.assertEqual(legacy["day"]["id"], self.day.id)
 
         bad = self.client.post(
             "/machine-room/workflows/shooting-days",

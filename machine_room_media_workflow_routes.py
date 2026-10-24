@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -15,9 +16,15 @@ from flask import (
     request,
     url_for,
 )
+from sqlalchemy import event as sa_event
+from sqlalchemy import text
 
 import machine_room_dashboard_support as mr_support
 import machine_room_media_workflow_support as wf
+import machine_room_storage_scan as scan_mod
+
+# db.session is process-wide; app factories re-register, so keep one set of listeners.
+_SESSION_LISTENERS: list[tuple[str, Callable]] = []
 
 
 def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
@@ -41,10 +48,11 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
     MR_STREAM_CONVERT_TITLE = ctx.get("MR_STREAM_CONVERT_TITLE", "Convert")
     notify_mr_stream_task_status = ctx.get("notify_mr_stream_task_status")
     emit_shooting_day_created_activity = ctx.get("emit_shooting_day_created_activity")
-    notification_recipient_user_ids = ctx.get("notification_recipient_user_ids")
     notification_push_realtime_for_project = ctx.get("notification_push_realtime_for_project")
     ShootingDayCriticalNote = ctx.get("ShootingDayCriticalNote")
     emit_shooting_day_critical_created = ctx.get("emit_shooting_day_critical_created")
+    socketio = ctx.get("socketio")
+    account_can_access_project = ctx.get("account_can_access_project")
 
     StorageVolumeProjectLink = mr_support.register_machine_room_dashboard_models(
         db, now_local
@@ -53,6 +61,55 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
     MachineRoomMediaWorkflow = models.MachineRoomMediaWorkflow
     MachineRoomMediaWorkflowIssue = models.MachineRoomMediaWorkflowIssue
     MachineRoomMediaWorkflowOverride = models.MachineRoomMediaWorkflowOverride
+    MachineRoomMediaWorkflowDay = models.MachineRoomMediaWorkflowDay
+
+    _CHANGED_KEY = "mr_wf_changed_project_ids"
+
+    def _collect_workflow_changes(session, _flush_context) -> None:
+        changed: set[int] = session.info.setdefault(_CHANGED_KEY, set())
+        lookup: set[int] = set()
+        for obj in list(session.new) + list(session.dirty) + list(session.deleted):
+            if isinstance(obj, MachineRoomMediaWorkflow):
+                if obj.project_id:
+                    changed.add(int(obj.project_id))
+            elif isinstance(obj, MachineRoomMediaWorkflowDay):
+                loaded = obj.__dict__.get("workflow")
+                if loaded is not None and loaded.project_id:
+                    changed.add(int(loaded.project_id))
+                elif obj.workflow_id:
+                    lookup.add(int(obj.workflow_id))
+        if lookup:
+            rows = session.connection().execute(
+                text(
+                    "SELECT project_id FROM mr_media_workflow WHERE id IN ("
+                    + ",".join(str(i) for i in sorted(lookup))
+                    + ")"
+                )
+            )
+            changed.update(int(r[0]) for r in rows if r[0])
+
+    def _emit_workflow_changes(session) -> None:
+        ids = session.info.pop(_CHANGED_KEY, None)
+        if not ids or socketio is None:
+            return
+        try:
+            socketio.emit("mr_workflow_changed", {"project_ids": sorted(ids)}, room="tasks_feed")
+        except Exception:
+            app.logger.exception("mr_workflow_changed emit failed")
+
+    def _drop_workflow_changes(session) -> None:
+        session.info.pop(_CHANGED_KEY, None)
+
+    for name, fn in _SESSION_LISTENERS:
+        if sa_event.contains(db.session, name, fn):
+            sa_event.remove(db.session, name, fn)
+    _SESSION_LISTENERS[:] = [
+        ("after_flush", _collect_workflow_changes),
+        ("after_commit", _emit_workflow_changes),
+        ("after_soft_rollback", lambda s, _t: _drop_workflow_changes(s)),
+    ]
+    for name, fn in _SESSION_LISTENERS:
+        sa_event.listen(db.session, name, fn)
 
     def _actor():
         return account_from_session()
@@ -129,11 +186,14 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         acc = account_from_session()
         days = wf.format_days_label(w.days)
         title = f"{project.name or 'Project'} · {days}: {label}"
-        recipients = (
-            notification_recipient_user_ids(int(w.project_id), actor=acc)
-            if notification_recipient_user_ids
-            else []
-        )
+        recipients = [
+            int(uid)
+            for (uid,) in db.session.execute(
+                text("SELECT user_id FROM project_members WHERE project_id = :pid"),
+                {"pid": int(w.project_id)},
+            )
+            if uid is not None
+        ]
         entity_type, entity_id = "mr_media_workflow_step", int(event_row_id)
         if event_type in wf.NOTIFY_BACKUP_LIVE_STEPS and w.backup_copy_task_id:
             entity_type, entity_id = "task", int(w.backup_copy_task_id)
@@ -214,6 +274,12 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             link.shooting_day_id: link.workflow_id
             for link in models.MachineRoomMediaWorkflowDay.query.all()
         }
+        completed_ids = {
+            row.id
+            for row in MachineRoomMediaWorkflow.query.filter_by(status=wf.STATUS_READY)
+            .with_entities(MachineRoomMediaWorkflow.id)
+            .all()
+        }
         days_by_project: dict[int, list[dict]] = {}
         for p in projects:
             days = (
@@ -233,12 +299,46 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     "unit_number": int(d.unit_number or 1),
                     "date": d.shooting_date.isoformat() if d.shooting_date else "",
                     "workflow_id": day_owner.get(d.id),
+                    "workflow_completed": day_owner.get(d.id) in completed_ids,
                 }
                 for d in days
             ]
 
+        links_by_project: dict[int, set[int]] = {}
+        for link in StorageVolumeProjectLink.query.all():
+            links_by_project.setdefault(int(link.project_id), set()).add(int(link.volume_id))
+        linked_any = set().union(*links_by_project.values()) if links_by_project else set()
+        if active is None:
+            checked_mounts = False
+            for v in shuttle:
+                if v.id not in linked_any:
+                    continue
+                try:
+                    mr_support.apply_volume_status_check(v, now_local())
+                    checked_mounts = True
+                except Exception:
+                    app.logger.exception("Mount check failed for volume %s", v.id)
+            if checked_mounts:
+                db.session.commit()
+        shuttle_by_project = {}
+        for p in projects:
+            ids = links_by_project.get(int(p.id), set())
+            rows = []
+            for v in shuttle:
+                if v.id not in ids:
+                    continue
+                d = _vol_dict(v)
+                rows.append({
+                    "id": v.id,
+                    "name": d["name"],
+                    "mounted": d["mounted"],
+                    "free_pct": round(d["free_pct"]) if d["free_pct"] is not None and d["capacity_tb"] else None,
+                })
+            shuttle_by_project[p.id] = rows
+
         return {
             "mr_workflow_enabled": True,
+            "mr_wf_shuttle_by_project": shuttle_by_project,
             "mr_wf_counts": counts,
             "mr_wf_cards": cards,
             "mr_wf_ready_rows": ready_rows,
@@ -498,6 +598,61 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
     app.extensions["mr_media_workflow_bundle"] = build_mission_control_bundle
     app.extensions["mr_media_workflow_models"] = models
 
+    def mr_wf_day_statuses(project_id) -> dict[int, dict]:
+        """Shooting day id → workflow status chip data for one project's production cards."""
+        try:
+            pid = int(project_id)
+        except (TypeError, ValueError):
+            return {}
+        rows = (
+            db.session.query(models.MachineRoomMediaWorkflowDay.shooting_day_id, MachineRoomMediaWorkflow)
+            .join(
+                MachineRoomMediaWorkflow,
+                MachineRoomMediaWorkflow.id == models.MachineRoomMediaWorkflowDay.workflow_id,
+            )
+            .filter(MachineRoomMediaWorkflow.project_id == pid)
+            .all()
+        )
+        return {
+            int(day_id): {"label": w.media_prep_label(), "status": w.status, "workflow_id": int(w.id)}
+            for day_id, w in rows
+        }
+
+    app.jinja_env.globals["mr_wf_day_statuses"] = mr_wf_day_statuses
+
+    @app.route("/projects/<int:project_id>/production/workflow-statuses")
+    def project_production_workflow_statuses(project_id: int):
+        acc = _actor()
+        if acc is None:
+            return jsonify({"error": "Sign in required."}), 401
+        if account_can_access_project is not None and not account_can_access_project(acc, project_id):
+            return jsonify({"error": "No access to this project."}), 403
+        days = mr_wf_day_statuses(project_id)
+        return jsonify(
+            {"days": {str(k): {"label": v["label"], "status": v["status"]} for k, v in days.items()}}
+        )
+
+    @app.route("/machine-room/workflow")
+    def machine_room_workflow_page():
+        acc = _actor()
+        if acc is None:
+            return redirect(url_for("login"))
+        perms = app.extensions.get("permissions")
+        granted = bool(perms and perms.can(acc, "mr_workflow", "view"))
+        if not (granted or account_is_machine_room_role(acc) or _is_supervisor(acc)):
+            flash("That page is only available for Machine Room accounts.", "error")
+            return redirect(url_for("index"))
+        return render_template("machine_room_workflow.html", **build_mission_control_bundle(acc))
+
+    @app.before_request
+    def _workflow_links_open_workflow_page():
+        """Older links opened a workflow on the Tasks page (/machine-room/tasks/progress?workflow_id=N)."""
+        if request.endpoint == "machine_room_tasks_tab" and request.args.get("workflow_id", type=int):
+            return redirect(
+                url_for("machine_room_workflow_page", workflow_id=request.args.get("workflow_id", type=int))
+            )
+        return None
+
     @app.route("/machine-room/workflows/shooting-days", methods=["POST"])
     def machine_room_workflow_shooting_day_create():
         acc = _require_mr_or_supervisor()
@@ -517,9 +672,10 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         if unit_number < 1:
             return _json_error("Unit number must be at least 1.")
 
-        day_name = (data.get("day_name") or "").strip()
-        if not day_name:
-            return _json_error("Enter the shooting day number or name.")
+        day_number = re.sub(r"(?i)^day\s*", "", (data.get("day_name") or "").strip())
+        if not day_number:
+            return _json_error("Enter the shooting day number.")
+        day_name = f"Day {day_number}"
         if len(day_name) > 50:
             return _json_error("Day name must be 50 characters or fewer.")
 
@@ -529,8 +685,10 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         except ValueError:
             return _json_error("Enter a valid shooting date.")
 
-        existing = ShootingDay.query.filter_by(
-            project_id=project_id, unit_number=unit_number, day_name=day_name
+        existing = ShootingDay.query.filter(
+            ShootingDay.project_id == project_id,
+            ShootingDay.unit_number == unit_number,
+            ShootingDay.day_name.in_([day_name, day_number]),
         ).first()
         if existing is not None:
             return jsonify(
@@ -626,7 +784,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     ),
                     "conflict_workflow_id": other_id,
                     "redirect": url_for(
-                        "machine_room_tasks_tab", tab_slug="progress", workflow_id=other_id
+                        "machine_room_workflow_page", workflow_id=other_id
                     ),
                 }
             ),
@@ -649,6 +807,9 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         days = _load_project_days(project_id, day_ids)
         if project is None or days is None:
             return _json_error("Invalid project or shooting day.", 404)
+        _, shuttle_err = _shuttle_volume_error(project_id, data.get("shuttle_volume_id"))
+        if shuttle_err:
+            return _json_error(shuttle_err)
 
         uid = _user_id(acc)
         try:
@@ -680,6 +841,11 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     f"Daily Media Processing started for {wf.format_days_label(row.days)}.",
                     started.id,
                 )
+        if data.get("shuttle_volume_id") and not row.received_at and row.status != wf.STATUS_ENDED:
+            _apply_shuttle(row, acc, data.get("shuttle_volume_id"))
+            if data.get("receive_notes"):
+                row.receive_notes = str(data.get("receive_notes"))[:4000]
+            _mark_received(row, acc)
         db.session.commit()
 
         if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -688,11 +854,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                     "ok": True,
                     "created": created,
                     "workflow_id": row.id,
-                    "redirect": url_for(
-                        "machine_room_tasks_tab",
-                        tab_slug="progress",
-                        workflow_id=row.id,
-                    ),
+                    "redirect": url_for("machine_room_workflow_page", workflow_id=row.id),
                 }
             )
         flash(
@@ -700,8 +862,177 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             "success" if created else "info",
         )
         return redirect(
-            url_for("machine_room_tasks_tab", tab_slug="progress", workflow_id=row.id)
+            url_for("machine_room_workflow_page", workflow_id=row.id)
         )
+
+    def _shuttle_volume_error(project_id: int, raw_vid) -> tuple[Any, str]:
+        """(volume, error) for a Transfer / Shuttle volume picked for a project."""
+        try:
+            vid = int(raw_vid) if raw_vid else None
+        except (TypeError, ValueError):
+            return None, "Invalid Transfer / Shuttle volume."
+        if not vid:
+            return None, ""
+        vol = db.session.get(StorageVolume, vid)
+        if vol is None or vol.storage_role != wf.ROLE_SHUTTLE:
+            return None, "Select a configured Transfer / Shuttle volume."
+        if vid not in _project_volume_ids(project_id):
+            project = db.session.get(Project, project_id)
+            return None, (
+                f"{wf.volume_label(vol)} is not linked to "
+                f"{project.name if project else 'this project'}."
+            )
+        return vol, ""
+
+    def _apply_shuttle(w, acc, raw_vid) -> str:
+        vol, err = _shuttle_volume_error(w.project_id, raw_vid)
+        if err:
+            return err
+        if vol is None:
+            w.shuttle_volume_id = None
+            w.shuttle_volume_name = ""
+            return ""
+        if w.shuttle_volume_id and w.shuttle_volume_id != vol.id and w.backup_verified_at:
+            wf.invalidate_downstream_after_receive_change(w, now_local)
+            _add_event(
+                db,
+                models,
+                w,
+                event_type="source_changed",
+                message="Shuttle volume changed — later verifications cleared for recheck",
+                actor_user_id=_user_id(acc),
+                stage=wf.STAGE_RECEIVE,
+                now_fn=now_local,
+            )
+        w.shuttle_volume_id = vol.id
+        w.shuttle_volume_name = wf.volume_label(vol)
+        return ""
+
+    def _mark_received(w, acc) -> str:
+        ok, err = wf.can_advance_from_receive(w)
+        if ok:
+            err = _shuttle_link_error(w)
+            ok = not err
+        if not ok:
+            return err
+        w.received_at = now_local()
+        w.received_by_id = _user_id(acc)
+        w.current_stage = wf.STAGE_BACKUP
+        w.status = wf.STATUS_IN_PROGRESS
+        if not w.assigned_operator_id:
+            w.assigned_operator_id = _user_id(acc)
+        if not w.backup_destination_id:
+            backups = wf.volumes_for_role(StorageVolume, wf.ROLE_PROJECTS_BACKUP)
+            if len(backups) == 1:
+                w.backup_destination_id = backups[0].id
+                w.backup_destination_name = wf.volume_label(backups[0])
+        _add_event(
+            db,
+            models,
+            w,
+            event_type="material_received",
+            message=(
+                "Shuttle received — material confirmed — "
+                f"{wf.checks_summary(w.receive_checks, wf.RECEIVE_CHECKS)}"
+            ),
+            actor_user_id=_user_id(acc),
+            stage=wf.STAGE_RECEIVE,
+            verification_kind="operator",
+            now_fn=now_local,
+        )
+        return ""
+
+    def _start_card(vol) -> dict:
+        d = _vol_dict(vol)
+        return {
+            "id": vol.id,
+            "name": d["name"],
+            "mounted": d["mounted"],
+            "free_pct": round(d["free_pct"]) if d["free_pct"] is not None and d["capacity_tb"] else None,
+        }
+
+    @app.route("/machine-room/workflows/connected-drives")
+    def machine_room_workflow_connected_drives():
+        """Drives mounted under /Volumes that are new to the system, or shuttles not yet linked to the project."""
+        _require_mr_or_supervisor()
+        project_id = request.args.get("project_id", type=int)
+        if not project_id or db.session.get(Project, project_id) is None:
+            return _json_error("Select a project first.")
+        linked = _project_volume_ids(project_id)
+        new_drives, linkable = [], []
+        for row in scan_mod.discover_mounted_volumes(StorageVolume):
+            info = {
+                "name": row.get("display_name") or row.get("name") or "",
+                "mount_path": row.get("mount_path") or "",
+                "capacity_tb": round(float(row.get("capacity_tb") or 0), 2),
+                "free_pct": round(float(row.get("free_percentage") or 0)),
+                "connection": (row.get("connection_type") or "").replace("_", " "),
+            }
+            if not row.get("already_added"):
+                new_drives.append(info)
+                continue
+            vol = db.session.get(StorageVolume, row.get("existing_volume_id") or 0)
+            if vol is not None and vol.storage_role == wf.ROLE_SHUTTLE and vol.id not in linked:
+                linkable.append({**info, "volume_id": vol.id, "name": wf.volume_label(vol)})
+        return jsonify({"ok": True, "new": new_drives, "linkable": linkable})
+
+    @app.route("/machine-room/workflows/connected-drives/add", methods=["POST"])
+    def machine_room_workflow_connected_drive_add():
+        """Register a connected drive as Transfer / Shuttle (or link an existing one) for the project."""
+        _require_mr_or_supervisor()
+        data = request.get_json(silent=True) or {}
+        try:
+            project_id = int(data.get("project_id"))
+        except (TypeError, ValueError):
+            return _json_error("Select a project first.")
+        project = db.session.get(Project, project_id)
+        if project is None:
+            return _json_error("Project not found.", 404)
+
+        vol = None
+        if data.get("volume_id"):
+            vol = db.session.get(StorageVolume, int(data["volume_id"]))
+            if vol is None or vol.storage_role != wf.ROLE_SHUTTLE:
+                return _json_error("That drive is not a Transfer / Shuttle volume.")
+        else:
+            mount_path = (data.get("mount_path") or "").strip()
+            row = next(
+                (
+                    r for r in scan_mod.discover_mounted_volumes(StorageVolume)
+                    if r.get("mount_path") == mount_path
+                ),
+                None,
+            )
+            if row is None:
+                return _json_error("That drive is no longer connected. Find drives again.")
+            if row.get("already_added"):
+                return _json_error("That drive is already registered on Storage.")
+            values, errors = mr_support.discovery_values_from_form(
+                {**{k: v for k, v in row.items() if not isinstance(v, dict)}, "storage_role": wf.ROLE_SHUTTLE}
+            )
+            if errors:
+                return _json_error(errors[0])
+            vol = StorageVolume()
+            for key, val in mr_support.create_volume_from_discovery(values, now_local()).items():
+                setattr(vol, key, val)
+            vol.storage_role = wf.ROLE_SHUTTLE
+            vol.is_mounted = True
+            vol.mounted_status = "mounted"
+            vol.last_seen_at = now_local()
+            vol.created_at = now_local()
+            vol.updated_at = now_local()
+            db.session.add(vol)
+            db.session.flush()
+
+        mr_support.ensure_volume_project_links(
+            db,
+            StorageVolumeProjectLink,
+            int(vol.id),
+            [project_id],
+            default_root_path_fn=lambda pid: scan_mod.default_project_root_path(vol, project.name),
+        )
+        db.session.commit()
+        return jsonify({"ok": True, "volume": _start_card(vol)})
 
     @app.route("/machine-room/workflows/<int:workflow_id>")
     def machine_room_workflow_detail(workflow_id: int):
@@ -753,36 +1084,9 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 )
 
         if "shuttle_volume_id" in data:
-            try:
-                vid = int(data["shuttle_volume_id"]) if data.get("shuttle_volume_id") else None
-            except (TypeError, ValueError):
-                return _json_error("Invalid Transfer / Shuttle volume.")
-            if vid:
-                vol = db.session.get(StorageVolume, vid)
-                if vol is None or vol.storage_role != wf.ROLE_SHUTTLE:
-                    return _json_error("Select a configured Transfer / Shuttle volume.")
-                if vid not in _project_volume_ids(w.project_id):
-                    return _json_error(
-                        f"{wf.volume_label(vol)} is not linked to "
-                        f"{w.project.name if w.project else 'this project'}."
-                    )
-                if w.shuttle_volume_id and w.shuttle_volume_id != vid and w.backup_verified_at:
-                    wf.invalidate_downstream_after_receive_change(w, now_local)
-                    _add_event(
-                        db,
-                        models,
-                        w,
-                        event_type="source_changed",
-                        message="Shuttle volume changed — later verifications cleared for recheck",
-                        actor_user_id=_user_id(acc),
-                        stage=wf.STAGE_RECEIVE,
-                        now_fn=now_local,
-                    )
-                w.shuttle_volume_id = vid
-                w.shuttle_volume_name = wf.volume_label(vol)
-            else:
-                w.shuttle_volume_id = None
-                w.shuttle_volume_name = ""
+            err = _apply_shuttle(w, acc, data.get("shuttle_volume_id"))
+            if err:
+                return _json_error(err)
 
         if "receive_notes" in data:
             w.receive_notes = (data.get("receive_notes") or "")[:4000]
@@ -791,38 +1095,9 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             w.receive_checks = [c for c in _parse_checks(data, "checks") if c in allowed]
 
         if action == "continue":
-            ok, err = wf.can_advance_from_receive(w)
-            if ok:
-                err = _shuttle_link_error(w)
-                ok = not err
-            if not ok:
+            err = _mark_received(w, acc)
+            if err:
                 return _json_error(err)
-            w.received_at = now_local()
-            w.received_by_id = _user_id(acc)
-            w.current_stage = wf.STAGE_BACKUP
-            w.status = wf.STATUS_IN_PROGRESS
-            if not w.assigned_operator_id:
-                w.assigned_operator_id = _user_id(acc)
-            # Default backup destination if only one configured
-            if not w.backup_destination_id:
-                backups = wf.volumes_for_role(StorageVolume, wf.ROLE_PROJECTS_BACKUP)
-                if len(backups) == 1:
-                    w.backup_destination_id = backups[0].id
-                    w.backup_destination_name = wf.volume_label(backups[0])
-            _add_event(
-                db,
-                models,
-                w,
-                event_type="material_received",
-                message=(
-                    "Shuttle received — material confirmed — "
-                    f"{wf.checks_summary(w.receive_checks, wf.RECEIVE_CHECKS)}"
-                ),
-                actor_user_id=_user_id(acc),
-                stage=wf.STAGE_RECEIVE,
-                verification_kind="operator",
-                now_fn=now_local,
-            )
             db.session.commit()
             return jsonify({"ok": True, "workflow": _workflow_detail(w, acc)})
 
@@ -1827,7 +2102,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             {
                 "ok": True,
                 "workflow_id": workflow_id,
-                "redirect": url_for("machine_room_tasks_tab", tab_slug="progress"),
+                "redirect": url_for("machine_room_workflow_page"),
             }
         )
 

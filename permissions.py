@@ -87,6 +87,7 @@ DEFAULT_PAGES: tuple[dict[str, str | bool], ...] = (
     {"key": "sticky_notes", "name": "Sticky Notes", "description": "Dashboard sticky notes (legacy)", "route_pattern": "/sticky-notes", "module": "production"},
     {"key": "booking", "name": "Booking", "description": "Edit suite booking", "route_pattern": "/booking", "module": "production"},
     {"key": "machine_room", "name": "Machine room", "description": "Machine room HDD and copy workflow", "route_pattern": "/machine", "module": "machine_room"},
+    {"key": "mr_workflow", "name": "WorkFlow", "description": "Daily Media Processing — receive, backup, transcode and hand over shooting days", "route_pattern": "/machine-room/workflow", "module": "machine_room"},
     {"key": "vfx_editor", "name": "VFX Editor", "description": "Editorial VFX authoring", "route_pattern": "/projects/", "module": "vfx"},
     {"key": "vfx_department", "name": "VFX Department", "description": "In-house VFX pipeline", "route_pattern": "/vfx-department", "module": "vfx"},
     {"key": "color_department", "name": "Color Department", "description": "Color grading pipeline", "route_pattern": "/color-department", "module": "color"},
@@ -307,6 +308,7 @@ ROLE_SEED: dict[str, dict[str, tuple[str, ...]]] = {
         "industry_radar": ("view",),
         "criticals": ("view",),
         "machine_room": ("view", "create", "edit", "start_copy", "manage_hdd", "scan"),
+        "mr_workflow": ("view",),
         "tasks": ("view", "edit"),
         "requests": ("view", "create", "edit", "edit_status"),
         "action_board": ("view", "create", "edit_own"),
@@ -354,6 +356,7 @@ JOB_TITLE_SEED: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "machine room": {
         "machine_room": ("view", "create", "edit", "start_copy", "manage_hdd", "scan"),
+        "mr_workflow": ("view",),
         "projects": ("view",),
         "project_detail": ("view",),
     },
@@ -415,6 +418,8 @@ _COLOR_CONFORM_PROJECT_PATH = re.compile(
 _COLOR_DEPARTMENT_API_PATH = re.compile(r"^/color-department/\d+/api/")
 # VFX editor routes enforce account_can_access_project and guest_access per handler.
 _PROJECT_MACHINE_ROOM_PATH = re.compile(r"^/projects/\d+/machine-room(?:/|$)")
+# Only the WorkFlow page itself; its /machine-room/workflows/... actions stay under machine_room.
+_MR_WORKFLOW_PAGE_PATH = re.compile(r"^/machine-room/workflow$")
 _VFX_EDITOR_PROJECT_PATH = re.compile(r"^/projects/\d+/vfx(?:/|$)")
 _USER_AVATAR_PATH = re.compile(r"^/users/\d+/avatar$")
 _PROFILE_AVATAR_FILE_PATH = re.compile(r"^/profile/avatar-file/")
@@ -722,6 +727,8 @@ class PermissionService:
             return "color_department"
         if _PROJECT_MACHINE_ROOM_PATH.match(p):
             return "machine_room"
+        if _MR_WORKFLOW_PAGE_PATH.match(p):
+            return "mr_workflow"
         if "/editing-items" in p:
             return "editing_items"
         if "/working-hours" in p:

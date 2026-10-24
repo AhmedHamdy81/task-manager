@@ -35676,6 +35676,8 @@ def create_app() -> Flask:
         "notification_push_realtime_for_project": _notification_push_realtime_for_project,
         "ShootingDayCriticalNote": ShootingDayCriticalNote,
         "emit_shooting_day_critical_created": emit_shooting_day_critical_created,
+        "socketio": socketio,
+        "account_can_access_project": account_can_access_project,
     }
     machine_room_media_workflow_routes_mod.register_machine_room_media_workflow_routes(
         app, _mr_media_workflow_ctx

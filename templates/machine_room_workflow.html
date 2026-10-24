@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Machine Room · WorkFlow · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/machine-room-media-workflow.css') }}">
+{% endblock %}
+{% block content %}
+<div class="tasks-page-shell tasks-page-shell--mr-mc" id="tasks-page-root">
+  {% include "partials/mr_media_workflow_mission.html" %}
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/machine-room-media-workflow.js') }}" defer></script>
+{% endblock %}

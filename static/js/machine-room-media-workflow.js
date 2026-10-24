@@ -76,11 +76,212 @@
     }
 
     var newDay = root.querySelector("[data-mr-wf-new-day]");
+    var shuttleSel = form.querySelector("[data-mr-wf-start-shuttle]");
+    var shuttleHint = form.querySelector("[data-mr-wf-start-shuttle-hint]");
+    var shuttleJson = document.getElementById("mr-wf-shuttle-json");
+    var shuttleByProject = {};
+    try {
+      shuttleByProject = JSON.parse(shuttleJson ? shuttleJson.textContent : "{}") || {};
+    } catch (e) {
+      shuttleByProject = {};
+    }
+
+    var SHUTTLE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="7" y="8" width="10" height="10" rx="1"/><path d="M3 12h4M17 12h4M5 10l-2 2 2 2M19 10l2 2-2 2"/></svg>';
+
+    function shuttleCard(v) {
+      var label = document.createElement("label");
+      label.className = "mr-mc__vol-card mr-mc__vol-card--transfer" + (v.mounted ? "" : " mr-mc__vol-card--offline");
+      var input = document.createElement("input");
+      input.type = "radio";
+      input.name = "mr-wf-start-shuttle";
+      input.value = v.id;
+      label.appendChild(input);
+      label.insertAdjacentHTML(
+        "beforeend",
+        '<span class="mr-mc__vol-card-check" aria-hidden="true">✓</span>' +
+        '<span class="mr-mc__vol-card-icon" aria-hidden="true">' + SHUTTLE_ICON + "</span>" +
+        '<span class="mr-mc__vol-card-name"></span>' +
+        '<span class="mr-mc__vol-card-role">Linked to project</span>' +
+        '<span class="mr-mc__vol-card-status"><span class="mr-mc__vol-card-mount"></span>' +
+        '<span class="mr-mc__vol-card-free"></span></span>'
+      );
+      label.querySelector(".mr-mc__vol-card-name").textContent = v.name;
+      label.querySelector(".mr-mc__vol-card-mount").textContent = v.mounted ? "Mounted" : "Not mounted";
+      label.querySelector(".mr-mc__vol-card-free").textContent =
+        v.free_pct === null || v.free_pct === undefined ? "Needs scan" : v.free_pct + "% free";
+      label.addEventListener("pointerdown", function () {
+        input.dataset.wasChecked = input.checked ? "1" : "";
+      });
+      input.addEventListener("click", function () {
+        if (input.dataset.wasChecked !== "1") return;
+        input.dataset.wasChecked = "";
+        input.checked = false;
+        syncShuttleHint();
+      });
+      input.addEventListener("change", syncShuttleHint);
+      return label;
+    }
+
+    function selectedShuttle() {
+      var el = shuttleSel ? shuttleSel.querySelector("input[name='mr-wf-start-shuttle']:checked") : null;
+      return el ? parseInt(el.value, 10) : null;
+    }
+
+    function syncShuttleHint() {
+      if (!shuttleHint) return;
+      var pid = projectSel.value;
+      var vols = pid ? (shuttleByProject[pid] || shuttleByProject[String(pid)] || []) : [];
+      if (pid && !vols.length) {
+        shuttleHint.textContent = "No Transfer / Shuttle drive is linked to this project. Link it on Storage, or pick it at the Receive step.";
+      } else if (pid && !selectedShuttle()) {
+        shuttleHint.textContent = "No drive picked — the workflow opens at the Receive step.";
+      } else {
+        shuttleHint.textContent = "Picking the shuttle drive records the material as received, so the workflow opens at Backup.";
+      }
+    }
+
+    var drivesField = shuttleSel ? shuttleSel.closest("[data-mr-wf-drives-url]") : null;
+    var FINDER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.2-4.2M11 8v6M8 11h6"/></svg>';
+    var foundByProject = {};
+    var finderState = { busy: false, note: "" };
+
+    function foundCard(drive) {
+      var card = document.createElement("div");
+      card.className = "mr-mc__vol-card mr-mc__vol-card--transfer mr-mc__vol-card--found";
+      card.insertAdjacentHTML(
+        "beforeend",
+        '<span class="mr-mc__vol-card-badge"></span>' +
+        '<span class="mr-mc__vol-card-icon" aria-hidden="true">' + SHUTTLE_ICON + "</span>" +
+        '<span class="mr-mc__vol-card-name"></span>' +
+        '<span class="mr-mc__vol-card-role"></span>' +
+        '<button type="button" class="btn btn-secondary btn-sm mr-mc__vol-card-action"></button>'
+      );
+      card.querySelector(".mr-mc__vol-card-badge").textContent = drive.volume_id ? "Not linked" : "New drive";
+      card.querySelector(".mr-mc__vol-card-name").textContent = drive.name;
+      card.querySelector(".mr-mc__vol-card-role").textContent = [
+        drive.capacity_tb ? drive.capacity_tb + " TB" : "",
+        drive.capacity_tb ? drive.free_pct + "% free" : "",
+      ].filter(Boolean).join(" · ") || drive.mount_path;
+      card.title = drive.mount_path;
+      var btn = card.querySelector(".mr-mc__vol-card-action");
+      btn.textContent = drive.volume_id ? "Link to project" : "Add as shuttle";
+      btn.addEventListener("click", function () {
+        var pid = projectSel.value;
+        btn.disabled = true;
+        var payload = drive.volume_id ? { volume_id: drive.volume_id } : { mount_path: drive.mount_path };
+        postJson(drivesField.getAttribute("data-mr-wf-drives-add-url"), Object.assign({ project_id: parseInt(pid, 10) }, payload))
+          .then(function (res) {
+            if (!res.ok) {
+              btn.disabled = false;
+              finderState.note = (res.data && res.data.error) || "Could not add the drive.";
+              renderShuttles(selectedShuttle());
+              return;
+            }
+            var list = shuttleByProject[pid] || shuttleByProject[String(pid)] || [];
+            if (!list.some(function (v) { return v.id === res.data.volume.id; })) list.push(res.data.volume);
+            shuttleByProject[String(pid)] = list;
+            foundByProject[String(pid)] = (foundByProject[String(pid)] || []).filter(function (d) { return d !== drive; });
+            finderState.note = "";
+            renderShuttles(res.data.volume.id);
+          })
+          .catch(function () {
+            btn.disabled = false;
+            finderState.note = "Could not add the drive. Please try again.";
+            renderShuttles(selectedShuttle());
+          });
+      });
+      return card;
+    }
+
+    function finderCard() {
+      var tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "mr-mc__vol-card mr-mc__vol-card--finder" + (finderState.busy ? " is-busy" : "");
+      tile.disabled = finderState.busy;
+      tile.insertAdjacentHTML(
+        "beforeend",
+        '<span class="mr-mc__vol-card-icon" aria-hidden="true">' + FINDER_ICON + "</span>" +
+        '<span class="mr-mc__vol-card-name"></span>' +
+        '<span class="mr-mc__vol-card-role"></span>'
+      );
+      tile.querySelector(".mr-mc__vol-card-name").textContent = finderState.busy ? "Looking…" : "Find connected drives";
+      tile.querySelector(".mr-mc__vol-card-role").textContent = finderState.note || "Drives plugged in but not in the system";
+      tile.addEventListener("click", findDrives);
+      return tile;
+    }
+
+    function findDrives() {
+      var pid = projectSel.value;
+      if (!pid || !drivesField || finderState.busy) return;
+      var keep = selectedShuttle();
+      finderState.busy = true;
+      finderState.note = "";
+      renderShuttles(keep);
+      var url = drivesField.getAttribute("data-mr-wf-drives-url") + "?project_id=" + encodeURIComponent(pid);
+      fetch(url, { headers: { Accept: "application/json" }, credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data || data.ok === false) {
+            finderState.note = (data && data.error) || "Could not look for drives.";
+            return;
+          }
+          var found = (data.new || []).concat(data.linkable || []);
+          foundByProject[String(pid)] = found;
+          finderState.note = found.length ? "" : "No new drives — all connected drives are in the system";
+        })
+        .catch(function () { finderState.note = "Could not look for drives. Try again."; })
+        .finally(function () {
+          finderState.busy = false;
+          renderShuttles(keep);
+        });
+    }
+
+    function renderShuttles(selectId) {
+      if (!shuttleSel) return;
+      var pid = projectSel.value;
+      var vols = pid ? (shuttleByProject[pid] || shuttleByProject[String(pid)] || []) : [];
+      shuttleSel.innerHTML = "";
+      if (!pid) {
+        var empty = document.createElement("p");
+        empty.className = "muted mr-mc__start-vols-empty";
+        empty.textContent = "Select project first…";
+        shuttleSel.appendChild(empty);
+        syncShuttleHint();
+        return;
+      }
+      vols.forEach(function (v) { shuttleSel.appendChild(shuttleCard(v)); });
+      (foundByProject[String(pid)] || []).forEach(function (d) { shuttleSel.appendChild(foundCard(d)); });
+      if (drivesField) shuttleSel.appendChild(finderCard());
+      var pickId = selectId;
+      if (pickId === undefined) {
+        var mounted = vols.filter(function (v) { return v.mounted; });
+        var pick = vols.length === 1 ? vols[0] : (mounted.length === 1 ? mounted[0] : null);
+        pickId = pick ? pick.id : null;
+      }
+      if (pickId) {
+        var input = shuttleSel.querySelector("input[value='" + pickId + "']");
+        if (input) input.checked = true;
+      }
+      syncShuttleHint();
+    }
 
     function setStartError(msg) {
       if (!startError) return;
       startError.textContent = msg || "";
       startError.hidden = !msg;
+    }
+
+    var triedStart = false;
+
+    function markMissing(tried) {
+      if (tried !== undefined) triedStart = tried;
+      var projField = projectSel.closest(".mr-mc__field");
+      var dayField = daysOpen.closest(".mr-mc__field");
+      var missingProject = !projectSel.value;
+      var missingDay = !committed.length;
+      projField.classList.toggle("is-missing", triedStart && missingProject);
+      dayField.classList.toggle("is-missing", triedStart && missingDay);
+      return missingProject ? projectSel : (missingDay ? daysOpen : null);
     }
 
     function checkedDayIds() {
@@ -97,6 +298,7 @@
     function updateCount() {
       var n = committed.length;
       if (countEl) countEl.textContent = n ? n + (n === 1 ? " day selected" : " days selected") : "";
+      markMissing();
       if (!projectSel.value) {
         daysOpen.disabled = true;
         daysSummary.textContent = "Select project first…";
@@ -144,9 +346,9 @@
         if (d.workflow_id) {
           row.appendChild(label);
           var open = document.createElement("a");
-          open.className = "mr-mc__day-open";
+          open.className = "mr-mc__day-open" + (d.workflow_completed ? " mr-mc__day-open--done" : "");
           open.href = workflowUrl(d.workflow_id);
-          open.textContent = "Open";
+          open.textContent = d.workflow_completed ? "Completed" : "Open";
           row.appendChild(open);
         } else {
           var cb = document.createElement("input");
@@ -232,6 +434,9 @@
     projectSel.addEventListener("change", function () {
       committed = [];
       renderDays([]);
+      finderState.note = "";
+      renderShuttles();
+      markMissing();
       hideNewDay();
     });
     addBtn.addEventListener("click", showNewDay);
@@ -273,7 +478,7 @@
         postJson(newDay.getAttribute("data-url"), {
           project_id: pid,
           unit_number: parseInt(newDayField("data-mr-wf-new-day-unit").value, 10) || 1,
-          day_name: newDayField("data-mr-wf-new-day-name").value,
+          day_name: newDayField("data-mr-wf-new-day-name").value.trim().replace(/^day\s*/i, ""),
           shooting_date: newDayField("data-mr-wf-new-day-date").value,
         }).then(function (res) {
           if (!res.ok) {
@@ -300,17 +505,18 @@
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
       var ids = committed.slice();
-      if (!projectSel.value) {
-        setStartError("Select a project first.");
+      setStartError("");
+      var firstMissing = markMissing(true);
+      if (firstMissing) {
+        if (!firstMissing.disabled) firstMissing.focus();
         return;
       }
-      if (!ids.length) {
-        setStartError("Select a shooting day.");
-        return;
-      }
+      var notesEl = form.querySelector("[data-mr-wf-start-notes]");
       postJson(root.getAttribute("data-create-url"), {
         project_id: parseInt(projectSel.value, 10),
         shooting_day_ids: ids,
+        shuttle_volume_id: selectedShuttle(),
+        receive_notes: notesEl ? notesEl.value : "",
       }).then(function (res) {
         if (!res.ok) {
           setStartError((res.data && res.data.error) || "Could not start workflow.");
@@ -523,7 +729,6 @@
       });
     }
     wireSaveChecks("[data-mr-wf-recv-check]", receiveUrl);
-    wireSaveChecks("[data-mr-wf-backup-check]", backupUrl);
     wireSaveChecks("[data-mr-wf-pre-check]", transcodeUrl);
     wireSaveChecks("[data-mr-wf-post-check]", transcodeUrl);
     wireSaveChecks("[data-mr-wf-complete-check]", completeUrl);
@@ -551,80 +756,117 @@
 
     var confirmModal = root.querySelector("[data-mr-wf-confirm-modal]");
     var pendingFinish = null;
-    var confirmChecks = confirmModal ? confirmModal.querySelector("[data-mr-wf-confirm-checks]") : null;
 
-    function confirmCheckState() {
-      if (!confirmChecks) return { keys: [], all: false };
-      var boxes = confirmChecks.querySelectorAll("[data-mr-wf-confirm-check]");
-      var keys = Array.prototype.filter.call(boxes, function (b) { return b.checked; })
-        .map(function (b) { return b.value; });
-      return { keys: keys, all: boxes.length > 0 && keys.length === boxes.length };
+    function confirmChecksFor(kind) {
+      return confirmModal ? confirmModal.querySelector('[data-mr-wf-confirm-checks="' + kind + '"]') : null;
     }
 
-    function syncConfirmButton() {
-      if (!confirmModal || !pendingFinish) return;
-      var button = confirmModal.querySelector('[value="confirm"]');
-      var note = confirmModal.querySelector("[data-mr-wf-confirm-note]");
-      if (pendingFinish.kind !== "transcode") {
-        button.textContent = "Record finished";
-        if (note) note.textContent = "The finish time is recorded now. Verification is a separate step.";
-        return;
-      }
-      var state = confirmCheckState();
-      button.textContent = state.all ? "Record finished & verify proxies" : "Record finished";
-      if (note) {
-        note.textContent = state.all
-          ? "All checks ticked — proxies are marked verified and the workflow moves to Complete."
-          : "Tick every check to verify the proxies now, or record the finish and verify later.";
-      }
+    function checkedIn(kind) {
+      var set = confirmChecksFor(kind);
+      if (!set) return [];
+      return Array.prototype.filter.call(set.querySelectorAll("[data-mr-wf-confirm-check]"), function (b) {
+        return b.checked;
+      }).map(function (b) { return b.value; });
     }
+
+    var confirmProgressed = false;
 
     function confirmFinish(url, payload, kind) {
       if (!confirmModal) return;
+      var isCopy = kind === "copy";
       pendingFinish = {url: url, payload: payload, kind: kind};
-      confirmModal.querySelector("[data-mr-wf-confirm-title]").textContent = kind === "copy" ? "Record copy finished" : "Record transcoding finished";
-      confirmModal.querySelector("[data-mr-wf-confirm-description]").textContent = kind === "copy"
-        ? "Confirm the copy tool has finished. Next: verify the copied original media before creating proxies."
-        : "Confirm the conversion tool has finished, then check the generated proxies.";
-      if (confirmChecks) confirmChecks.hidden = kind !== "transcode";
+      confirmProgressed = false;
+      confirmModal.querySelector("[data-mr-wf-confirm-title]").textContent = isCopy ? "Copy finished" : "Transcoding finished";
+      confirmModal.querySelector("[data-mr-wf-confirm-description]").textContent = isCopy
+        ? "Check the copied original media. Verifying now moves the workflow straight to Transcode."
+        : "Check the generated proxies. Verifying now hands the shooting day over to editing.";
+      var shown = isCopy ? ["copy"] : ["transcode", "final"];
+      confirmModal.querySelectorAll("[data-mr-wf-confirm-checks]").forEach(function (set) {
+        set.hidden = shown.indexOf(set.getAttribute("data-mr-wf-confirm-checks")) < 0;
+      });
+      confirmModal.querySelector("[data-mr-wf-confirm-next]").hidden = !isCopy;
+      confirmModal.querySelector("[data-mr-wf-confirm-failed]").hidden = !isCopy;
+      confirmModal.querySelector("[data-mr-wf-confirm-primary]").textContent = isCopy
+        ? "Copy finished & verified"
+        : "Finished — ready for editing";
       confirmModal.querySelector("[data-mr-wf-confirm-error]").hidden = true;
-      syncConfirmButton();
       confirmModal.showModal();
     }
-    if (confirmChecks) confirmChecks.addEventListener("change", syncConfirmButton);
+
+    function runSteps(steps) {
+      return steps.reduce(function (chain, step) {
+        return chain.then(function (res) {
+          if (res && !res.ok) return res;
+          return postJson(step.url, step.body).then(function (next) {
+            if (next.ok) confirmProgressed = true;
+            return next;
+          });
+        });
+      }, Promise.resolve(null));
+    }
+
     if (confirmModal) {
       confirmModal.querySelector("form").addEventListener("submit", function (event) {
         event.preventDefault();
-        if (event.submitter && event.submitter.value === "cancel") {
-          confirmModal.close(); pendingFinish = null; return;
+        var choice = event.submitter ? event.submitter.value : "verified";
+        if (choice === "cancel") {
+          confirmModal.close();
+          return;
         }
         if (!pendingFinish) return;
-        var button = confirmModal.querySelector('[value="confirm"]');
-        if (button.disabled) return;
-        button.disabled = true;
+        var buttons = confirmModal.querySelectorAll(".mr-mc__actions-row button");
+        if (buttons[0].disabled) return;
+        buttons.forEach(function (b) { b.disabled = true; });
         var finish = pendingFinish;
-        var checks = finish.kind === "transcode" ? confirmCheckState() : null;
-        var payload = Object.assign({}, finish.payload);
-        if (checks) payload.post_checks = checks.keys;
-        postJson(finish.url, payload).then(function (res) {
-          if (res.ok && checks && checks.all) {
-            return postJson(finish.url, { action: "verify", post_checks: checks.keys });
+        var isCopy = finish.kind === "copy";
+        var steps = [];
+        if (isCopy) {
+          var backupChecks = checkedIn("copy");
+          steps.push({ url: finish.url, body: Object.assign({}, finish.payload, { checks: backupChecks }) });
+          if (choice === "verified") {
+            steps.push({ url: finish.url, body: { action: "verify", checks: backupChecks, verification_method: "operator_confirmed" } });
+          } else if (choice === "failed") {
+            steps.push({ url: finish.url, body: { action: "fail_verify" } });
           }
-          return res;
-        }).then(function (res) {
-          if (res.ok) { confirmModal.close(); afterOk(res); }
-          else {
-            var error = confirmModal.querySelector("[data-mr-wf-confirm-error]");
-            error.textContent = (res.data && res.data.error) || "Could not record completion.";
-            error.hidden = false;
+        } else {
+          var postChecks = checkedIn("transcode");
+          var finalChecks = checkedIn("final");
+          steps.push({ url: finish.url, body: Object.assign({}, finish.payload, { post_checks: postChecks }) });
+          if (choice === "verified") {
+            steps.push({ url: finish.url, body: { action: "verify", post_checks: postChecks } });
+            steps.push({ url: completeUrl, body: { action: "mark_ready", checks: finalChecks } });
           }
+        }
+        var openTranscode = isCopy && choice === "verified"
+          && confirmModal.querySelector("[data-mr-wf-confirm-start-transcode]").checked;
+        runSteps(steps).then(function (res) {
+          if (res && res.ok) {
+            confirmProgressed = false;
+            confirmModal.close();
+            if (openTranscode) {
+              var u = new URL(window.location.href);
+              u.searchParams.set("open", "transcode");
+              window.location.href = u.toString();
+              return;
+            }
+            afterOk(res);
+            return;
+          }
+          var error = confirmModal.querySelector("[data-mr-wf-confirm-error]");
+          error.textContent = (res && res.data && res.data.error) || "Could not record completion.";
+          error.hidden = false;
         }).catch(function () {
           var error = confirmModal.querySelector("[data-mr-wf-confirm-error]");
           error.textContent = "Connection lost. Close and reopen the workflow to check whether completion was saved.";
           error.hidden = false;
-        }).finally(function () { button.disabled = false; });
+        }).finally(function () {
+          buttons.forEach(function (b) { b.disabled = false; });
+        });
       });
-      confirmModal.addEventListener("close", function () { pendingFinish = null; });
+      confirmModal.addEventListener("close", function () {
+        pendingFinish = null;
+        if (confirmProgressed) reloadPage();
+      });
     }
 
     function clickAction(sel, url, payloadFn) {
@@ -895,11 +1137,7 @@
       return { action: "finish_copy" };
     });
     clickAction("[data-mr-wf-backup-verify]", backupUrl, function () {
-      return {
-        action: "verify",
-        checks: collectedChecks("[data-mr-wf-backup-check]"),
-        verification_method: "operator_confirmed",
-      };
+      return { action: "verify", verification_method: "operator_confirmed" };
     });
     clickAction("[data-mr-wf-backup-fail]", backupUrl, function () {
       return { action: "fail_verify" };
@@ -1006,6 +1244,12 @@
         if (typeof tModal.showModal === "function") tModal.showModal();
         if (tEst && window.Dts) window.Dts.setTotalMinutes(tEst, tSavedEst);
       });
+      var pageUrl = new URL(window.location.href);
+      if (pageUrl.searchParams.get("open") === "transcode") {
+        pageUrl.searchParams.delete("open");
+        window.history.replaceState(null, "", pageUrl.toString());
+        if (!tOpen.disabled) tOpen.click();
+      }
       tForm.addEventListener("submit", function (ev) {
         if (ev.submitter && ev.submitter.value === "cancel") return;
         ev.preventDefault();
@@ -1060,10 +1304,22 @@
         ev.preventDefault();
         var btn = ev.submitter;
         if (btn) btn.disabled = true;
-        postJson(url, payloadFn()).then(function (res) {
+        var steps = payloadFn();
+        if (!Array.isArray(steps)) steps = [{ url: url, body: steps }];
+        var progressed = false;
+        steps.reduce(function (chain, step) {
+          return chain.then(function (res) {
+            if (res && !res.ok) return res;
+            return postJson(step.url, step.body).then(function (next) {
+              if (next.ok) progressed = true;
+              return next;
+            });
+          });
+        }, Promise.resolve(null)).then(function (res) {
           if (!res.ok) {
             errEl.textContent = (res.data && res.data.error) || failMsg;
             errEl.hidden = false;
+            if (progressed) dlg.addEventListener("close", reloadPage, { once: true });
             return;
           }
           dlg.close();
@@ -1077,7 +1333,10 @@
       });
     }
     checklistModal("[data-mr-wf-verify-open]", "[data-mr-wf-verify-modal]", transcodeUrl, function () {
-      return { action: "verify", post_checks: collectedChecks("[data-mr-wf-post-check]") };
+      return [
+        { url: transcodeUrl, body: { action: "verify", post_checks: collectedChecks("[data-mr-wf-post-check]") } },
+        { url: completeUrl, body: { action: "mark_ready", checks: collectedChecks("[data-mr-wf-verify-final-check]") } },
+      ];
     }, "Could not verify proxies.");
     checklistModal("[data-mr-wf-ready-open]", "[data-mr-wf-ready-modal]", completeUrl, function () {
       return { action: "mark_ready", checks: collectedChecks("[data-mr-wf-complete-check]") };
@@ -1250,6 +1509,121 @@
     if (root.querySelector("[data-mr-wf-clock]")) window.setInterval(update, 10000);
   }
 
+  function initFinishAlarm(root) {
+    var active = root.querySelector("[data-mr-wf-active]");
+    if (!active) return;
+
+    var BEEP_EVERY_MS = 3000;
+    var baseTitle = document.title;
+    var audioCtx = null;
+    var lastBeep = 0;
+    var flash = false;
+
+    function ctx() {
+      if (audioCtx) return audioCtx;
+      var Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) return null;
+      try {
+        audioCtx = new Ctor();
+      } catch (e) {
+        audioCtx = null;
+      }
+      return audioCtx;
+    }
+
+    function unlockAudio() {
+      var c = ctx();
+      if (c && c.state === "suspended") c.resume().catch(function () {});
+    }
+    ["pointerdown", "keydown"].forEach(function (ev) {
+      document.addEventListener(ev, unlockAudio, { capture: true });
+    });
+
+    function beep() {
+      var c = ctx();
+      if (!c || c.state !== "running") return false;
+      var t = c.currentTime;
+      [0, 0.22, 0.44].forEach(function (offset, i) {
+        var osc = c.createOscillator();
+        var gain = c.createGain();
+        osc.type = "square";
+        osc.frequency.value = i === 2 ? 1320 : 880;
+        gain.gain.setValueAtTime(0.0001, t + offset);
+        gain.gain.exponentialRampToValueAtTime(0.18, t + offset + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + offset + 0.18);
+        osc.connect(gain).connect(c.destination);
+        osc.start(t + offset);
+        osc.stop(t + offset + 0.2);
+      });
+      return true;
+    }
+
+    function isDue(box) {
+      if ((box.getAttribute("data-status") || "").trim() !== "in_progress") return false;
+      if (!box.querySelector(".mr-mc__finish-btn")) return false;
+      var snap = window.__tmTaskCopyLiveProgress && window.__tmTaskCopyLiveProgress(box);
+      if (snap) return snap.isOver;
+      var est = parseInt(box.getAttribute("data-est-min"), 10);
+      var started = parseInt(box.getAttribute("data-started-ms"), 10) || 0;
+      return !!(started && est > 0 && Date.now() >= started + est * 60000);
+    }
+
+    function message(box) {
+      var msg = box.querySelector("[data-mr-wf-alarm-msg]");
+      if (!msg) {
+        msg = document.createElement("p");
+        msg.className = "mr-mc__alarm-msg";
+        msg.setAttribute("role", "alert");
+        msg.setAttribute("data-mr-wf-alarm-msg", "");
+        var actions = box.querySelector(".task-copy-live-actions");
+        box.insertBefore(msg, actions || null);
+      }
+      return msg;
+    }
+
+    function tick() {
+      var boxes = Array.prototype.slice.call(active.querySelectorAll(".mr-mc__copy-live"));
+      var due = boxes.filter(isDue);
+      var silent = !!document.querySelector("dialog[open]");
+      var c = audioCtx;
+      var soundBlocked = !c || c.state !== "running";
+      active.querySelectorAll(".mr-mc__step.is-alarming").forEach(function (b) {
+        b.classList.remove("is-alarming");
+      });
+      boxes.forEach(function (box) {
+        var on = due.indexOf(box) >= 0;
+        box.classList.toggle("is-alarming", on);
+        var panel = box.closest("[data-mr-wf-panel]");
+        var stage = panel && panel.getAttribute("data-mr-wf-panel");
+        var stepBtn = stage && active.querySelector('[data-mr-wf-step="' + stage + '"]');
+        if (stepBtn && on) stepBtn.classList.add("is-alarming");
+        var existing = box.querySelector("[data-mr-wf-alarm-msg]");
+        if (!on) {
+          if (existing) existing.remove();
+          return;
+        }
+        var finishLabel = (box.querySelector(".mr-mc__finish-btn").textContent || "Finish").trim();
+        message(box).textContent = "Estimated time is up. Click “" + finishLabel + "” to stop the alarm."
+          + (soundBlocked ? " Click anywhere on the page to turn the alarm sound on." : "");
+      });
+      if (!due.length) {
+        document.title = baseTitle;
+        return;
+      }
+      flash = !flash;
+      document.title = flash ? "⏰ Time is up · " + baseTitle : baseTitle;
+      if (silent) return;
+      var now = Date.now();
+      if (now - lastBeep >= BEEP_EVERY_MS) {
+        unlockAudio();
+        if (beep()) lastBeep = now;
+      }
+    }
+
+    tick();
+    window.setInterval(tick, 1000);
+  }
+
   function initCreateModal(root) {
     var modal = root.querySelector("[data-mr-wf-create-modal]");
     var open = root.querySelector("[data-mr-wf-create-open]");
@@ -1267,6 +1641,166 @@
     initAssistant(root);
     initActive(root);
     initCardActions(root);
+    initReadyFilters(root);
+    initFinishAlarm(root);
+  }
+
+  function initReadyFilters(root) {
+    var box = root.querySelector("[data-mr-wf-ready]");
+    if (!box) return;
+    var rows = Array.prototype.slice.call(box.querySelectorAll("[data-mr-wf-ready-row]"));
+    var empty = box.querySelector("[data-mr-wf-ready-empty]");
+    var countEl = box.querySelector("[data-mr-wf-ready-count]");
+    var clearBtn = box.querySelector("[data-mr-wf-ready-clear]");
+    var controls = {};
+    box.querySelectorAll("[data-mr-wf-ready-filter]").forEach(function (el) {
+      controls[el.getAttribute("data-mr-wf-ready-filter")] = el;
+    });
+    var STORE_KEY = "mr-wf-ready-filters";
+    var PAGE_SIZE = 15;
+    var pager = box.querySelector("[data-mr-wf-ready-pager]");
+    var pagerInfo = box.querySelector("[data-mr-wf-ready-pager-info]");
+    var pagerNums = box.querySelector("[data-mr-wf-ready-pager-nums]");
+    var prevBtn = box.querySelector('[data-mr-wf-ready-page="prev"]');
+    var nextBtn = box.querySelector('[data-mr-wf-ready-page="next"]');
+    var page = 1;
+
+    function pageList(current, total) {
+      if (total <= 7) {
+        return Array.from({ length: total }, function (_, i) { return i + 1; });
+      }
+      var out = [1];
+      var start = Math.max(2, current - 1);
+      var end = Math.min(total - 1, current + 1);
+      if (current <= 3) end = 4;
+      if (current >= total - 2) start = total - 3;
+      if (start > 2) out.push("…");
+      for (var i = start; i <= end; i += 1) out.push(i);
+      if (end < total - 1) out.push("…");
+      out.push(total);
+      return out;
+    }
+
+    function renderPager(matched) {
+      var pages = Math.max(1, Math.ceil(matched.length / PAGE_SIZE));
+      if (page > pages) page = pages;
+      if (page < 1) page = 1;
+      var first = (page - 1) * PAGE_SIZE;
+      matched.forEach(function (row, i) {
+        row.hidden = i < first || i >= first + PAGE_SIZE;
+      });
+      if (!pager) return;
+      pager.hidden = matched.length === 0;
+      if (pagerInfo) {
+        pagerInfo.textContent = matched.length
+          ? "Showing " + (first + 1) + "–" + Math.min(first + PAGE_SIZE, matched.length) + " of " + matched.length
+          : "";
+      }
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= pages;
+      if (pagerNums) {
+        pagerNums.innerHTML = "";
+        pageList(page, pages).forEach(function (n) {
+          if (n === "…") {
+            var gap = document.createElement("span");
+            gap.className = "mr-mc__pager-gap";
+            gap.textContent = "…";
+            pagerNums.appendChild(gap);
+            return;
+          }
+          var b = document.createElement("button");
+          b.type = "button";
+          b.className = "mr-mc__pager-btn" + (n === page ? " is-current" : "");
+          b.textContent = String(n);
+          b.setAttribute("data-mr-wf-ready-page", String(n));
+          if (n === page) b.setAttribute("aria-current", "page");
+          pagerNums.appendChild(b);
+        });
+      }
+    }
+
+    function values() {
+      return {
+        q: (controls.q.value || "").trim().toLowerCase(),
+        project: controls.project.value,
+        by: controls.by.value,
+        from: controls.from.value,
+        to: controls.to.value,
+      };
+    }
+
+    function apply() {
+      var v = values();
+      var words = v.q ? v.q.split(/\s+/) : [];
+      var matched = [];
+      rows.forEach(function (row) {
+        var date = row.getAttribute("data-date") || "";
+        var hay = row.getAttribute("data-search") || "";
+        var ok = (!v.project || row.getAttribute("data-project") === v.project)
+          && (!v.by || row.getAttribute("data-by") === v.by)
+          && (!v.from || (date && date >= v.from))
+          && (!v.to || (date && date <= v.to))
+          && words.every(function (w) { return hay.indexOf(w) >= 0; });
+        row.hidden = !ok;
+        if (ok) matched.push(row);
+      });
+      var shown = matched.length;
+      renderPager(matched);
+      var active = !!(v.q || v.project || v.by || v.from || v.to);
+      if (empty) empty.hidden = shown > 0;
+      if (countEl) countEl.textContent = active ? shown + " / " + rows.length : String(rows.length);
+      if (clearBtn) clearBtn.disabled = !active;
+      try {
+        window.sessionStorage.setItem(STORE_KEY, JSON.stringify(Object.assign({ page: page }, v)));
+      } catch (e) {
+        // Storage unavailable — filters still apply for this view.
+      }
+    }
+
+    try {
+      var saved = JSON.parse(window.sessionStorage.getItem(STORE_KEY) || "{}");
+      Object.keys(controls).forEach(function (k) {
+        if (!saved[k]) return;
+        var el = controls[k];
+        if (el.tagName === "SELECT" && !el.querySelector('option[value="' + CSS.escape(saved[k]) + '"]')) return;
+        el.value = saved[k];
+      });
+      if (saved.page > 1) page = Math.floor(saved.page);
+    } catch (e) {
+      // Ignore unreadable saved filters.
+    }
+
+    function applyFromFirstPage() {
+      page = 1;
+      apply();
+    }
+
+    Object.keys(controls).forEach(function (k) {
+      controls[k].addEventListener(k === "q" ? "input" : "change", applyFromFirstPage);
+    });
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        Object.keys(controls).forEach(function (k) { controls[k].value = ""; });
+        applyFromFirstPage();
+        controls.q.focus();
+      });
+    }
+    if (pager) {
+      pager.addEventListener("click", function (e) {
+        var btn = e.target.closest("[data-mr-wf-ready-page]");
+        if (!btn || btn.disabled) return;
+        var to = btn.getAttribute("data-mr-wf-ready-page");
+        if (to === "prev") page -= 1;
+        else if (to === "next") page += 1;
+        else page = parseInt(to, 10) || 1;
+        apply();
+        var wrap = box.querySelector(".mr-mc__ready-wrap");
+        if (wrap && wrap.getBoundingClientRect().top < 0) {
+          wrap.scrollIntoView({ block: "start", behavior: "smooth" });
+        }
+      });
+    }
+    apply();
   }
 
   if (document.readyState === "loading") {

@@ -262,6 +262,8 @@ notif_events.register_notification_event(
         "default_cta_label": "",
         "default_cta_url": "",
         "default_recipients": {"preset": "project_team"},
+        "exclude_actor": False,
+        "dedupe_enabled": False,
         "variables": list(notif_events.COMMON_VARIABLES)
         + ["workflow_id", "workflow_step", "shooting_days"],
         "is_active": True,
@@ -614,7 +616,28 @@ def ensure_machine_room_media_workflow_tables(db, now_local) -> Any:
         getattr(models, name).__table__.create(bind=db.engine, checkfirst=True)
     _ensure_workflow_columns(db)
     _backfill_workflow_days(db)
+    _notify_whole_project_team(db)
     return models
+
+
+def _notify_whole_project_team(db) -> None:
+    """Older rule rows excluded the actor and deduped repeats; every step should reach every member.
+
+    Rows an admin has edited (updated_by_id set) are left as configured.
+    """
+    from sqlalchemy import inspect, text
+
+    if "notification_rule" not in inspect(db.engine).get_table_names():
+        return
+    with db.engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE notification_rule SET exclude_actor = 0, dedupe_enabled = 0 "
+                "WHERE event_key = :key AND updated_by_id IS NULL "
+                "AND (exclude_actor = 1 OR dedupe_enabled = 1)"
+            ),
+            {"key": NOTIFY_EVENT_KEY},
+        )
 
 
 def _ensure_workflow_columns(db) -> None:
