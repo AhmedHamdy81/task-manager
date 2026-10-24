@@ -1404,6 +1404,8 @@ def create_app() -> Flask:
         day_name = db.Column(db.String(50), nullable=False, default="")
         shooting_date = db.Column(db.Date, nullable=False)
         location = db.Column(db.String(255), nullable=False, default="")
+        proxy_volume_id = db.Column(db.Integer, nullable=True)
+        proxy_path = db.Column(db.String(1024), nullable=False, default="")
         day_note = db.Column(db.Text, nullable=False, default="")
         report_file = db.Column(db.String(255), nullable=True)
         report_original_name = db.Column(db.String(255), nullable=True)
@@ -7953,6 +7955,14 @@ def create_app() -> Flask:
                 conn.execute(
                     text(
                         "ALTER TABLE shooting_days_flat ADD COLUMN report_original_name VARCHAR(255)"
+                    )
+                )
+            if "proxy_volume_id" not in col_names:
+                conn.execute(text("ALTER TABLE shooting_days_flat ADD COLUMN proxy_volume_id INTEGER"))
+            if "proxy_path" not in col_names:
+                conn.execute(
+                    text(
+                        "ALTER TABLE shooting_days_flat ADD COLUMN proxy_path VARCHAR(1024) NOT NULL DEFAULT ''"
                     )
                 )
         rows = (

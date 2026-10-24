@@ -525,6 +525,10 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             "transcode_estimated_minutes": w.transcode_estimated_minutes or 0,
             "transcode_notes": w.transcode_notes or "",
             "proxy_destination_path": w.proxy_destination_path or "",
+            "proxy_from_day": bool(
+                w.proxy_destination_path
+                and _day_proxy_location(w)[1] == w.proxy_destination_path
+            ),
             "backup_copy": {
                 "video_size_tb": w.backup_video_size_tb,
                 "audio_size_gb": w.backup_audio_size_gb,
@@ -864,6 +868,18 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         return redirect(
             url_for("machine_room_workflow_page", workflow_id=row.id)
         )
+
+    def _day_proxy_location(w) -> tuple[Any, str]:
+        """Proxy folder chosen when the shooting day was added (first day that has one)."""
+        for day in w.days:
+            path = (getattr(day, "proxy_path", None) or "").strip()
+            vid = getattr(day, "proxy_volume_id", None)
+            if not path or not vid:
+                continue
+            vol = db.session.get(StorageVolume, int(vid))
+            if vol is not None and mr_support.normalize_storage_role(vol.storage_role) == "working_storage":
+                return vol, path
+        return None, ""
 
     def _shuttle_volume_error(project_id: int, raw_vid) -> tuple[Any, str]:
         """(volume, error) for a Transfer / Shuttle volume picked for a project."""
@@ -1460,6 +1476,12 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             w.backup_verification_method = method
             w.backup_verification_evidence = evidence[:4000]
             w.current_stage = wf.STAGE_TRANSCODE
+            if not w.proxy_destination_id:
+                day_vol, day_path = _day_proxy_location(w)
+                if day_vol is not None:
+                    w.proxy_destination_id = day_vol.id
+                    w.proxy_destination_name = wf.volume_label(day_vol)
+                    w.proxy_destination_path = day_path[:512]
             # Default inhouse destination
             if not w.proxy_destination_id:
                 inhouse = wf.volumes_for_role(StorageVolume, wf.ROLE_INHOUSE)

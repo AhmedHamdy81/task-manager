@@ -394,7 +394,7 @@
             <label for="mr-wf-transcode-path">Destination path</label>
             <div class="mr-mc__path-row">
               <input type="text" id="mr-wf-transcode-path" name="destination_path" maxlength="512" autocomplete="off"
-                placeholder="/Volumes/InHouse/Proxies/…" value="{{ w.proxy_destination_path }}" data-mr-wf-copy-path>
+                placeholder="/Volumes/InHouse/Proxies/…" value="{{ w.proxy_destination_path }}" data-mr-wf-copy-path{% if w.proxy_from_day %} data-from-day="1"{% endif %}>
               <button type="button" class="btn btn-secondary" data-mr-wf-copy-browse
                 title="Browse folders on the In-house Storage volume">Browse</button>
             </div>

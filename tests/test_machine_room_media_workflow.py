@@ -336,6 +336,36 @@ class MachineRoomMediaWorkflowTests(unittest.TestCase):
             self.assertTrue(res.get("ok"), (body, res))
         self.assertEqual(res["workflow"]["status"], "ready")
 
+    def test_day_proxy_location_prefills_transcode_destination(self):
+        self.day.proxy_volume_id = self.inhouse.id
+        self.day.proxy_path = "/Volumes/Nucleus1/Proxies/Day24"
+        db.session.commit()
+        self._login_mr()
+        h = self._csrf_headers()
+        wid = self.client.post(
+            "/machine-room/workflows",
+            data=json.dumps({
+                "project_id": self.project.id,
+                "shooting_day_id": self.day.id,
+                "shuttle_volume_id": self.shuttle.id,
+            }),
+            headers=h,
+        ).get_json()["workflow_id"]
+        backup = f"/machine-room/workflows/{wid}/backup"
+        for body in (
+            {"action": "start", "backup_destination_id": self.backup.id, "backup_estimated_minutes": 30},
+            {"action": "finish_copy", "checks": []},
+            {"action": "verify", "checks": [], "verification_method": "operator_confirmed"},
+        ):
+            res = self.client.post(backup, data=json.dumps(body), headers=h).get_json()
+            self.assertTrue(res.get("ok"), (body, res))
+        w = db.session.get(self.models.MachineRoomMediaWorkflow, wid)
+        db.session.refresh(w)
+        self.assertEqual(w.proxy_destination_id, self.inhouse.id)
+        self.assertEqual(w.proxy_destination_path, "/Volumes/Nucleus1/Proxies/Day24")
+        page = self.client.get(f"/machine-room/workflow?workflow_id={wid}").get_data(as_text=True)
+        self.assertIn('data-from-day="1"', page)
+
     def test_cannot_skip_backup_to_transcode(self):
         wid = self._create_workflow()
         # Try start transcode without receive/backup

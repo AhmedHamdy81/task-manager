@@ -1237,7 +1237,9 @@
         }
         syncPresetDefault();
         var remembered = rememberedDestPath(checkedCardId("data-mr-wf-proxy-dest"));
-        if (tPath && !tPath.dataset.touched && remembered) {
+        if (tPath && tPath.dataset.fromDay === "1" && !tPath.dataset.touched) {
+          setTHint("Proxy location set when this shooting day was added");
+        } else if (tPath && !tPath.dataset.touched && remembered) {
           tPath.value = remembered;
           setTHint("Restored last selected folder on this volume");
         }
