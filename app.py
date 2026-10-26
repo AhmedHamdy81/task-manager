@@ -10144,6 +10144,9 @@ def create_app() -> Flask:
         employment_structure_support_mod.ensure_employment_structure_tables(db)
         machine_room_dashboard_support_mod.ensure_machine_room_dashboard_tables(db, now_local)
         machine_room_media_workflow_support_mod.ensure_machine_room_media_workflow_tables(db, now_local)
+        import material_registration_support as material_registration_support_mod
+
+        material_registration_support_mod.ensure_material_registration_table(db, now_local)
         job_titles_master_support_mod.ensure_job_titles_master_tables(db)
         job_titles_master_support_mod.ensure_retired_post_scope_master_codes_migrated(
             db,
@@ -13303,6 +13306,15 @@ def create_app() -> Flask:
             except Exception:
                 app.logger.exception("Machine Room media workflow bundle failed")
                 wf_extra = {"mr_workflow_enabled": False}
+        reg_api = app.extensions.get("material_registration")
+        if filt.get("tab") == "progress" and reg_api is not None and reg_api.can_view(actor):
+            reg_rows = reg_api.rows_for_account(actor)
+            wf_extra = {
+                **wf_extra,
+                "mr_reg_enabled": True,
+                "mr_reg_rows": reg_rows,
+                "mr_reg_summary": reg_api.summarize(reg_rows),
+            }
         if not mr_user_ids:
             return {
                 "mr_operator_ids_empty": True,
@@ -13951,6 +13963,9 @@ def create_app() -> Flask:
         pah.log_shooting_day_deleted(d)
         for sc in list(d.pipeline_scenes or []):
             _purge_shooting_day_scene_dependencies(sc.id)
+        reg_api = app.extensions.get("material_registration")
+        if reg_api is not None:
+            reg_api.Registration.query.filter_by(shooting_day_id=int(d.id)).delete()
         db.session.delete(d)
         db.session.commit()
         flash("Shooting day removed.", "success")
@@ -17433,6 +17448,13 @@ def create_app() -> Flask:
             "project_type_is_tv": _project_type_is_tv_series,
         }
 
+    def _material_registration_queue(acc: Account | None) -> list[dict]:
+        """Shared registration rows the account may see (empty for roles that don't register)."""
+        api = app.extensions.get("material_registration")
+        if api is None or acc is None or not api.can_view(acc):
+            return []
+        return api.queue_for_account(acc)
+
     def _ignored_missing_info_keys() -> set[str]:
         return {r.issue_key for r in IgnoredMissingInfo.query.with_entities(IgnoredMissingInfo.issue_key).all()}
 
@@ -17480,6 +17502,8 @@ def create_app() -> Flask:
             return url_for("music_library")
         if et == "hdd" and pid:
             return url_for("machine_project", project_id=pid)
+        if et == "material_registration" and pid:
+            return url_for("project_production", project_id=pid) + f"#day-{eid}"
         if et == "user":
             if current_uid is not None and eid == int(current_uid):
                 return url_for("profile")
@@ -17663,6 +17687,7 @@ def create_app() -> Flask:
                     is_machine_room=account_is_machine_room_role(acc),
                     ignored_keys=_ignored_missing_info_keys(),
                     item_limit=0,
+                    material_registration_rows=_material_registration_queue(acc),
                     **_dashboard_missing_info_kwargs(),
                 )
 
@@ -17723,6 +17748,7 @@ def create_app() -> Flask:
             project_id=project_id,
             search=search,
             show_ignored=show_ignored,
+            material_registration_rows=_material_registration_queue(acc),
             **_dashboard_missing_info_kwargs(),
         )
         _attach_monitor_urls(result.get("items", []), acc)
@@ -17740,6 +17766,10 @@ def create_app() -> Flask:
             search=search,
             show_ignored=show_ignored,
             project_id=project_id,
+            material_registration_enabled=bool(
+                app.extensions.get("material_registration")
+                and app.extensions["material_registration"].can_view(acc)
+            ),
         )
 
     @app.route("/missing-information/ignore", methods=["POST"])
@@ -19427,6 +19457,14 @@ def create_app() -> Flask:
         if not account_may_use_machine_project_view(actor):
             abort(403)
         machine_ctx = build_machine_project_context(p)
+        reg_api = app.extensions.get("material_registration")
+        if reg_api is not None and reg_api.can_view(actor):
+            reg_rows = reg_api.rows_for_account(actor, p.id)
+            machine_ctx.update(
+                mr_reg_enabled=True,
+                mr_reg_rows=reg_rows,
+                mr_reg_summary=reg_api.summarize(reg_rows),
+            )
         return render_template(
             "machine_project.html",
             project=p,
@@ -35691,6 +35729,32 @@ def create_app() -> Flask:
     }
     machine_room_media_workflow_routes_mod.register_machine_room_media_workflow_routes(
         app, _mr_media_workflow_ctx
+    )
+
+    import material_registration_routes as material_registration_routes_mod
+
+    material_registration_routes_mod.register_material_registration_routes(
+        app,
+        {
+            "db": db,
+            "now_local": now_local,
+            "today_fn": today_cairo,
+            "Project": Project,
+            "ShootingDay": ShootingDay,
+            "User": User,
+            "HardDiskUsage": HardDiskUsage,
+            "machine_room_dashboard_models": machine_room_dashboard_models,
+            "account_from_session": account_from_session,
+            "account_is_machine_room_role": account_is_machine_room_role,
+            "account_is_elevated": account_is_elevated,
+            "account_is_producerish": account_can_create_projects,
+            "visible_project_ids_for_account": visible_project_ids_for_account,
+            "account_can_access_project": account_can_access_project,
+            "account_may_edit_production_for": account_may_edit_production_for,
+            "directory_user_id_for_account": directory_user_id_for_account,
+            "send_managed_notification": send_managed_notification,
+            "notification_push_realtime_for_project": _notification_push_realtime_for_project,
+        },
     )
 
     import project_activity_routes as project_activity_routes_mod

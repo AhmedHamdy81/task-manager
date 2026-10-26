@@ -1,0 +1,52 @@
+{# Shared queue of shooting days awaiting material registration.
+   Expects reg_rows (derived status rows), reg_summary (counts), reg_title, reg_lead,
+   reg_show_protection (bool). Rows and counts come from the same service everywhere. #}
+<section class="mr-section mr-reg-queue" data-mr-reg-queue aria-labelledby="mr-reg-queue-title">
+  <div class="mr-reg-queue__head">
+    <h2 id="mr-reg-queue-title">{{ reg_title }}</h2>
+    <p class="mr-reg-queue__counts" data-mr-reg-count="{{ reg_summary.needs_registration }}">
+      {{ reg_summary.needs_registration }} awaiting registration
+      {%- if reg_summary.upcoming %} · {{ reg_summary.upcoming }} upcoming{% endif %}
+      {%- if reg_summary.registered_not_copied %} · {{ reg_summary.registered_not_copied }} registered, copy not started{% endif %}
+    </p>
+  </div>
+  {% if reg_lead %}<p class="muted">{{ reg_lead }}</p>{% endif %}
+  {% set _pending = reg_rows|selectattr('needs_registration')|list %}
+  {% set _registered = reg_rows|selectattr('status', 'equalto', 'registered')|list if reg_show_registered|default(reg_show_protection) else [] %}
+  {% if _pending or _registered %}
+  <div class="mr-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>Shooting day</th>
+          <th>Status</th>
+          <th>Missing</th>
+          {% if reg_show_protection %}<th>Protection</th>{% endif %}
+          <th><span class="visually-hidden">Action</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in _pending + _registered %}
+        <tr data-mr-reg-row="{{ r.shooting_day_id }}">
+          <td>{{ r.project_name }}</td>
+          <td>{{ r.day_label }}{% if r.workflow_label %}<br><span class="muted">Workflow: {{ r.workflow_label|title }}</span>{% endif %}</td>
+          <td><span class="mr-reg-pill mr-reg-pill--{{ r.display_status }}">{{ r.display_label }}</span></td>
+          <td class="mr-reg-queue__missing">{{ r.missing_labels|join(', ') if r.missing_labels else '—' }}</td>
+          {% if reg_show_protection %}
+          <td><span class="mr-reg-protection{% if not r.needs_registration %} mr-reg-protection--not-copied{% endif %}">{{ r.protection }}</span></td>
+          {% endif %}
+          <td>
+            <button type="button" class="btn btn--ghost btn--small mr-reg-open-btn" data-mr-reg-open data-day-id="{{ r.shooting_day_id }}">
+              {{ 'Complete material registration' if r.needs_registration else 'Edit registration' }}
+            </button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="mr-reg-queue__empty">Every shooting day has its material registered.</p>
+  {% endif %}
+</section>

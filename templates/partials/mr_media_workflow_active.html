@@ -178,15 +178,19 @@
           <div><dt>Source</dt><dd>{{ w.shuttle_volume.name if w.shuttle_volume else '—' }}</dd></div>
           <div><dt>Destination</dt><dd data-mr-wf-copy-dest-name>{{ w.backup_destination.name if w.backup_destination else '—' }}</dd></div>
         </dl>
+        {% set size_defaults = w.copy_size_defaults %}
         <div class="mr-mc__copy-grid">
+          {% for key, unit, noun in [('video', 'TB', 'Video'), ('audio', 'GB', 'Audio')] %}
+          {% set d = size_defaults[key] %}
           <label class="mr-mc__field">
-            <span>Video size (TB)</span>
-            <input type="number" name="video_size_tb" min="0" step="any" value="{{ copy.video_size_tb or 0 }}">
+            <span>{{ noun }} size ({{ unit }}){% if d.day_count > 1 %} · total for {{ d.day_count }} days{% endif %}</span>
+            <input type="number" name="{{ key }}_size_{{ unit|lower }}" min="0" step="any"
+              value="{{ '%g'|format(d.value) if d.value is not none else '' }}"
+              placeholder="{{ 'Unknown' if d.source == 'incomplete' else '' }}"
+              data-mr-wf-size-source="{{ d.source }}">
+            {% if d.hint %}<span class="mr-mc__size-hint mr-mc__size-hint--{{ d.source }}">{{ d.hint }}</span>{% endif %}
           </label>
-          <label class="mr-mc__field">
-            <span>Audio size (GB)</span>
-            <input type="number" name="audio_size_gb" min="0" step="any" value="{{ copy.audio_size_gb or 0 }}">
-          </label>
+          {% endfor %}
           <div class="mr-mc__field mr-mc__field--full">
             <label for="mr-wf-copy-path">Destination path</label>
             <div class="mr-mc__path-row">

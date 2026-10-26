@@ -410,6 +410,8 @@ _EDITING_ITEM_COLOR_CONFORM_PATH = re.compile(
     r"^/editing-items/\d+/color/(?:request-conform|start-conform)$"
 )
 _CONFORM_TASK_FAIL_PATH = re.compile(r"^/conform-tasks/\d+/(?:fail|issues)$")
+# Material registration — the route checks Machine Room / supervisor access and project visibility.
+_MATERIAL_REGISTRATION_PATH = re.compile(r"^/machine-room/material-registration/\d+$")
 # DIT assignment helpers for color conform flow — routes enforce their own access checks.
 _COLOR_CONFORM_PROJECT_PATH = re.compile(
     r"^/projects/\d+/(?:dit-conform-users|mastering-delivery-users|add-dit-conform-user|add-mastering-delivery-user)$"
@@ -1082,6 +1084,8 @@ class PermissionService:
         if _EDITING_ITEM_COLOR_CONFORM_PATH.match(path):
             return None
         if _CONFORM_TASK_FAIL_PATH.match(path):
+            return None
+        if _MATERIAL_REGISTRATION_PATH.match(path):
             return None
         if _COLOR_CONFORM_PROJECT_PATH.match(path):
             return None

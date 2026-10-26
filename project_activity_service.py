@@ -330,6 +330,10 @@ def build_summary(
         pae.MEDIA_CONVERT_COMPLETED: f"{actor} completed media convert" + (f" for {label}" if label else ""),
         pae.MEDIA_CONVERT_FAILED: f"{actor} failed media convert" + (f" for {label}" if label else ""),
         pae.MEDIA_CONVERT_CANCELLED: f"{actor} cancelled media convert" + (f" for {label}" if label else ""),
+        pae.MEDIA_REGISTRATION_COMPLETED: f"{actor} completed material registration"
+        + (f" for {label}" if label else ""),
+        pae.MEDIA_REGISTRATION_UPDATED: f"{actor} updated material registration"
+        + (f" for {label}" if label else ""),
         pae.SHOOTING_DAY_CREATED: f"{actor} created {label or 'a shooting day'}",
         pae.SHOOTING_DAY_UPDATED: f"{actor} updated {label or 'a shooting day'}",
         pae.SHOOTING_DAY_DELETED: f"{actor} deleted {label or 'a shooting day'}",

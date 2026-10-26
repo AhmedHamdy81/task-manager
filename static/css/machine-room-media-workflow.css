@@ -489,6 +489,13 @@
 .mr-mc__copy-grid .mr-mc__check input {
   width: auto;
 }
+.mr-mc__size-hint {
+  font-size: 0.75rem;
+  color: rgba(226, 232, 240, 0.6);
+}
+.mr-mc__size-hint--incomplete {
+  color: #fde68a;
+}
 .mr-mc__copy-grid .mr-mc__field:has(:disabled) {
   opacity: 0.45;
 }

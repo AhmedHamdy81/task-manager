@@ -19,6 +19,9 @@ MEDIA_CONVERT_COMPLETED: Final = "media.convert.completed"
 MEDIA_CONVERT_FAILED: Final = "media.convert.failed"
 MEDIA_CONVERT_CANCELLED: Final = "media.convert.cancelled"
 
+MEDIA_REGISTRATION_COMPLETED: Final = "media.registration.completed"
+MEDIA_REGISTRATION_UPDATED: Final = "media.registration.updated"
+
 # --- Shooting day ---
 SHOOTING_DAY_CREATED: Final = "shooting_day.created"
 SHOOTING_DAY_UPDATED: Final = "shooting_day.updated"
@@ -66,6 +69,8 @@ ALL_EVENT_TYPES: Final[frozenset[str]] = frozenset(
         MEDIA_CONVERT_COMPLETED,
         MEDIA_CONVERT_FAILED,
         MEDIA_CONVERT_CANCELLED,
+        MEDIA_REGISTRATION_COMPLETED,
+        MEDIA_REGISTRATION_UPDATED,
         SHOOTING_DAY_CREATED,
         SHOOTING_DAY_UPDATED,
         SHOOTING_DAY_DELETED,

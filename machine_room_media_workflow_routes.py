@@ -18,10 +18,12 @@ from flask import (
 )
 from sqlalchemy import event as sa_event
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 import machine_room_dashboard_support as mr_support
 import machine_room_media_workflow_support as wf
 import machine_room_storage_scan as scan_mod
+import material_registration_support as reg_support
 
 # db.session is process-wide; app factories re-register, so keep one set of listeners.
 _SESSION_LISTENERS: list[tuple[str, Callable]] = []
@@ -453,6 +455,20 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             db.session.commit()
         return out
 
+    def _copy_size_defaults(w) -> dict:
+        """Start Copy form sizes: workflow values if recorded, else derived from the days' registrations.
+
+        Read-only — the workflow keeps its own operation totals and only stores sizes when
+        the operator starts the copy, so registration stays the single per-day source.
+        """
+        reg_api = app.extensions.get("material_registration")
+        rows = reg_api.service.statuses(day_ids=w.day_ids) if reg_api is not None else []
+        return reg_support.operation_size_defaults(
+            rows,
+            explicit_video_tb=w.backup_video_size_tb,
+            explicit_audio_gb=w.backup_audio_size_gb,
+        )
+
     def _workflow_detail(w, actor, *, detect_mounts: bool = False) -> dict:
         events = [
             {
@@ -538,6 +554,7 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
                 "notes": w.backup_copy_notes or "",
                 "critical": bool(w.backup_copy_critical),
             },
+            "copy_size_defaults": _copy_size_defaults(w),
             "checksum_methods": list(wf.CHECKSUM_METHODS),
             "backup_started_at": w.backup_started_at.isoformat(timespec="minutes")
             if w.backup_started_at
@@ -632,8 +649,20 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         if account_can_access_project is not None and not account_can_access_project(acc, project_id):
             return jsonify({"error": "No access to this project."}), 403
         days = mr_wf_day_statuses(project_id)
+        registration = {}
+        reg_api = app.extensions.get("material_registration")
+        if reg_api is not None:
+            for row in reg_api.rows_for_account(acc, project_id):
+                if row["needs_registration"] or row["status"] == "registered":
+                    registration[str(row["shooting_day_id"])] = {
+                        "label": row["display_label"],
+                        "status": row["display_status"],
+                    }
         return jsonify(
-            {"days": {str(k): {"label": v["label"], "status": v["status"]} for k, v in days.items()}}
+            {
+                "days": {str(k): {"label": v["label"], "status": v["status"]} for k, v in days.items()},
+                "registration": registration,
+            }
         )
 
     @app.route("/machine-room/workflow")
@@ -795,6 +824,66 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
             409,
         )
 
+    def start_or_open_workflow(acc, project_id: int, days: list, *, operator_user_id=None,
+                               shuttle_volume_id=None, receive_notes: str = ""):
+        """(workflow, created) for these days; reopens the day's workflow instead of duplicating it.
+
+        Commits. A concurrent request that inserts the same day first wins: the unique
+        day constraints reject the second insert and the existing workflow is returned.
+        """
+        uid = operator_user_id or _user_id(acc)
+        try:
+            row, created = wf.get_or_create_workflow(
+                db,
+                models,
+                project_id=project_id,
+                shooting_days=days,
+                operator_user_id=uid,
+                now_fn=now_local,
+            )
+        except wf.WorkflowDayConflict:
+            db.session.rollback()
+            raise
+        except IntegrityError:
+            db.session.rollback()
+            existing = wf.find_workflow_for_day(models, project_id, days[0].id)
+            if existing is None:
+                raise
+            return existing, False
+        if not created and not row.assigned_operator_id and uid:
+            row.assigned_operator_id = uid
+        if created:
+            started = (
+                models.MachineRoomMediaWorkflowEvent.query.filter_by(
+                    workflow_id=row.id, event_type="workflow_created"
+                )
+                .order_by(models.MachineRoomMediaWorkflowEvent.id.desc())
+                .first()
+            )
+            if started is not None:
+                _notify_step(
+                    row,
+                    "workflow_created",
+                    f"Daily Media Processing started for {wf.format_days_label(row.days)}.",
+                    started.id,
+                )
+        if shuttle_volume_id and not row.received_at and row.status != wf.STATUS_ENDED:
+            _apply_shuttle(row, acc, shuttle_volume_id)
+            if receive_notes:
+                row.receive_notes = str(receive_notes)[:4000]
+            _mark_received(row, acc)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            existing = wf.find_workflow_for_day(models, project_id, days[0].id)
+            if existing is None:
+                raise
+            return existing, False
+        return row, created
+
+    app.extensions["mr_media_workflow_start"] = start_or_open_workflow
+
     @app.route("/machine-room/workflows", methods=["POST"])
     def machine_room_workflow_create():
         acc = _require_mr_or_supervisor()
@@ -815,42 +904,16 @@ def register_machine_room_media_workflow_routes(app: Flask, ctx: dict) -> None:
         if shuttle_err:
             return _json_error(shuttle_err)
 
-        uid = _user_id(acc)
         try:
-            row, created = wf.get_or_create_workflow(
-                db,
-                models,
-                project_id=project_id,
-                shooting_days=days,
-                operator_user_id=uid,
-                now_fn=now_local,
+            row, created = start_or_open_workflow(
+                acc,
+                project_id,
+                days,
+                shuttle_volume_id=data.get("shuttle_volume_id"),
+                receive_notes=data.get("receive_notes") or "",
             )
         except wf.WorkflowDayConflict as exc:
-            db.session.rollback()
             return _conflict_response(exc.conflicts)
-        if not created and not row.assigned_operator_id and uid:
-            row.assigned_operator_id = uid
-        if created:
-            started = (
-                models.MachineRoomMediaWorkflowEvent.query.filter_by(
-                    workflow_id=row.id, event_type="workflow_created"
-                )
-                .order_by(models.MachineRoomMediaWorkflowEvent.id.desc())
-                .first()
-            )
-            if started is not None:
-                _notify_step(
-                    row,
-                    "workflow_created",
-                    f"Daily Media Processing started for {wf.format_days_label(row.days)}.",
-                    started.id,
-                )
-        if data.get("shuttle_volume_id") and not row.received_at and row.status != wf.STATUS_ENDED:
-            _apply_shuttle(row, acc, data.get("shuttle_volume_id"))
-            if data.get("receive_notes"):
-                row.receive_notes = str(data.get("receive_notes"))[:4000]
-            _mark_received(row, acc)
-        db.session.commit()
 
         if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
             return jsonify(

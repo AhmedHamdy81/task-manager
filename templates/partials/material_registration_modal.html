@@ -1,0 +1,108 @@
+{# Shared "Complete material registration" modal. Open with any element carrying
+   data-mr-reg-open data-day-id="<shooting day id>". Include once per page. #}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/material-registration.css') }}">
+<dialog class="mr-reg-modal" data-mr-reg-modal aria-labelledby="mr-reg-title" data-url-template="{{ url_for('material_registration_detail', day_id=0) }}">
+  <form class="mr-reg-modal__inner" data-mr-reg-form novalidate>
+    <header class="mr-reg-modal__head">
+      <div>
+        <h2 id="mr-reg-title" class="mr-reg-modal__title">Complete material registration</h2>
+        <p class="mr-reg-modal__sub" data-mr-reg-sub>Loading…</p>
+      </div>
+      <span class="mr-reg-pill" data-mr-reg-status></span>
+    </header>
+    <p class="mr-reg-missing" data-mr-reg-missing hidden></p>
+    <p class="mr-reg-error" data-mr-reg-error role="alert" hidden></p>
+
+    <div class="mr-reg-grid" data-mr-reg-fields hidden>
+      <input type="hidden" name="project_id" data-mr-reg-field="project_id">
+      <input type="hidden" name="shooting_day_id" data-mr-reg-field="shooting_day_id">
+      <div class="mr-reg-field">
+        <span class="mr-reg-label">Project</span>
+        <span class="mr-reg-static" data-mr-reg-text="project_name">—</span>
+      </div>
+      <div class="mr-reg-field">
+        <span class="mr-reg-label">Shooting day</span>
+        <span class="mr-reg-static" data-mr-reg-text="day">—</span>
+      </div>
+      <label class="mr-reg-field">
+        <span class="mr-reg-label">Shooting date</span>
+        <input type="date" name="shooting_date" class="mr-reg-input" data-mr-reg-field="shooting_date">
+        <span class="mr-reg-hint" data-mr-reg-date-hint hidden>Only production editors can change the shooting date.</span>
+      </label>
+      <label class="mr-reg-field">
+        <span class="mr-reg-label">Responsible operator</span>
+        <select name="responsible_user_id" class="mr-reg-input" data-mr-reg-field="responsible_user_id">
+          <option value="">— Not set —</option>
+        </select>
+      </label>
+
+      {% for key, unit, noun in [('video', 'TB', 'video'), ('audio', 'GB', 'audio')] %}
+      <fieldset class="mr-reg-field mr-reg-media" data-mr-reg-media="{{ key }}">
+        <legend class="mr-reg-label">{{ noun|capitalize }} size</legend>
+        <div class="mr-reg-seg" role="radiogroup" aria-label="{{ noun|capitalize }} material">
+          <label><input type="radio" name="{{ key }}_state" value="unknown" data-mr-reg-state="{{ key }}"> Unknown</label>
+          <label><input type="radio" name="{{ key }}_state" value="present" data-mr-reg-state="{{ key }}"> Size</label>
+          <label><input type="radio" name="{{ key }}_state" value="none" data-mr-reg-state="{{ key }}"> No {{ noun }}</label>
+        </div>
+        <span class="mr-reg-unit-input">
+          <input type="number" min="0" step="any" name="{{ key }}_size_{{ unit|lower }}" class="mr-reg-input" placeholder="Size" data-mr-reg-size="{{ key }}" disabled>
+          <span class="mr-reg-unit">{{ unit }}</span>
+        </span>
+      </fieldset>
+      {% endfor %}
+
+      <label class="mr-reg-field">
+        <span class="mr-reg-label">Material source</span>
+        <select name="material_source" class="mr-reg-input" data-mr-reg-field="material_source">
+          <option value="">— Not set —</option>
+        </select>
+      </label>
+      <label class="mr-reg-field">
+        <span class="mr-reg-label">Source disk / volume</span>
+        <select name="source_volume_id" class="mr-reg-input" data-mr-reg-field="source_volume_id">
+          <option value="">— Not set —</option>
+        </select>
+        <input type="text" name="source_label" maxlength="160" class="mr-reg-input" placeholder="Disk name (not in Storage)" data-mr-reg-field="source_label" hidden>
+      </label>
+      <div class="mr-reg-field mr-reg-field--wide">
+        <label class="mr-reg-label" for="mr-reg-source-path">Source path <span class="mr-reg-optional">(optional)</span></label>
+        <div class="mr-reg-path-row">
+          <input type="text" id="mr-reg-source-path" name="source_path" maxlength="512" class="mr-reg-input" placeholder="/Volumes/…" autocomplete="off" data-mr-reg-field="source_path">
+          <button type="button" class="btn btn--ghost btn--small" data-mr-reg-browse disabled>Browse</button>
+        </div>
+      </div>
+      <label class="mr-reg-field mr-reg-field--wide">
+        <span class="mr-reg-label">Notes <span class="mr-reg-optional">(optional)</span></span>
+        <textarea name="notes" rows="2" maxlength="4000" class="mr-reg-input" data-mr-reg-field="notes"></textarea>
+      </label>
+    </div>
+
+    <p class="mr-reg-footnote">Registration records what arrived. It does not start copying and does not mark material as backed up or protected.</p>
+    <div class="mr-reg-actions">
+      <button type="button" class="btn btn--ghost" data-mr-reg-close>Cancel</button>
+      <button type="submit" class="btn btn--ghost" value="save" data-mr-reg-submit="save" disabled>Save registration only</button>
+      <button type="submit" class="btn btn--primary" value="start" data-mr-reg-submit="start" disabled>Save and start workflow</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="mr-reg-modal mr-reg-browse" data-mr-reg-browse-modal aria-labelledby="mr-reg-browse-title">
+  <div class="mr-reg-modal__inner">
+    <header class="mr-reg-modal__head">
+      <h2 id="mr-reg-browse-title" class="mr-reg-modal__title">Choose source folder</h2>
+    </header>
+    <div class="mr-reg-browse__bar">
+      <button type="button" class="btn btn--ghost btn--small" data-mr-reg-browse-up disabled>Up</button>
+      <code data-mr-reg-browse-current>—</code>
+    </div>
+    <p class="mr-reg-hint" data-mr-reg-browse-loading hidden>Loading folders…</p>
+    <ul class="mr-reg-browse__list" data-mr-reg-browse-list aria-label="Folders"></ul>
+    <p class="mr-reg-hint" data-mr-reg-browse-empty hidden>No subfolders here. You can still select this folder.</p>
+    <p class="mr-reg-error" data-mr-reg-browse-error role="alert" hidden></p>
+    <div class="mr-reg-actions">
+      <button type="button" class="btn btn--ghost" data-mr-reg-browse-cancel>Cancel</button>
+      <button type="button" class="btn btn--primary" data-mr-reg-browse-select disabled>Select this folder</button>
+    </div>
+  </div>
+</dialog>
+<script src="{{ url_for('static', filename='js/material-registration.js') }}" defer></script>

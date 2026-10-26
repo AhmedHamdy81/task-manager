@@ -15,6 +15,19 @@
     </div>
   </div>
 
+  {% if mr_reg_enabled|default(false) %}
+  {% set reg_rows = mr_reg_rows %}
+  {% set reg_summary = mr_reg_summary %}
+  {% set reg_title = 'Material registration' %}
+  {% set reg_lead = 'Shooting days of this project whose material is not registered yet, including days added from Production.' %}
+  {% set reg_show_protection = false %}
+  {% set reg_show_registered = true %}
+  <div class="machine-panel">
+    {% include 'partials/material_registration_queue.html' %}
+  </div>
+  {% include 'partials/material_registration_modal.html' %}
+  {% endif %}
+
   <section
     class="machine-panel hdd-panel"
     aria-labelledby="hdd-heading"

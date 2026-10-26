@@ -18,6 +18,18 @@
     </p>
   </header>
 
+  {% if mr_reg_enabled|default(false) %}
+  {% set reg_rows = mr_reg_rows %}
+  {% set reg_summary = mr_reg_summary %}
+  {% set reg_title = 'Shooting days awaiting material registration' %}
+  {% set reg_lead = 'Complete the material details for these days. Registering does not start copying; use Save and start workflow when the material is ready to process.' %}
+  {% set reg_show_protection = false %}
+  <div class="panel mr-reg-queue-panel">
+    {% include 'partials/material_registration_queue.html' %}
+  </div>
+  {% include 'partials/material_registration_modal.html' %}
+  {% endif %}
+
   <div id="mr-tasks-refresh-zone">
     {% include 'partials/mr_tasks_zone_inner.html' %}
   </div>
