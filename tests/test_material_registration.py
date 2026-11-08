@@ -561,6 +561,123 @@ class MaterialRegistrationTests(unittest.TestCase):
         self.assertFalse(row["fields"]["audio"]["known"])
         self.assertEqual(self.Reg.query.count(), 0)
 
+    # --- "Record as done" (material processed before BigBang) --------------
+
+    def _stamp_volumes(self):
+        V = self.mr.StorageVolume
+        backup = V(name="Backup", display_name="G-Raid 001", mount_path="/Volumes/GRaid001",
+                   storage_role="project_backup", mounted_status="offline", is_mounted=False)
+        inhouse = V(name="Inhouse", display_name="In-house NAS", mount_path="/Volumes/Inhouse",
+                    storage_role="working_storage", mounted_status="mounted", is_mounted=True)
+        unlinked = V(name="Elsewhere", display_name="Other NAS", mount_path="/Volumes/OtherNAS",
+                     storage_role="working_storage", mounted_status="mounted", is_mounted=True)
+        db.session.add_all([backup, inhouse, unlinked])
+        db.session.flush()
+        db.session.add(self.mr.StorageVolumeProjectLink(volume_id=inhouse.id, project_id=self.project.id))
+        db.session.commit()
+        self.unlinked_inhouse = unlinked
+        return backup, inhouse
+
+    def _done(self, backup, inhouse, **overrides):
+        body = self._full(action="record_done", material_source="", audio_state="unknown", audio_size_gb="",
+                          backup_volume_id=str(backup.id), backup_path="/Volumes/GRaid001/Show/Day01",
+                          proxy_volume_id=str(inhouse.id), proxy_path="/Volumes/Inhouse/Proxies/Day01")
+        body.update(overrides)
+        return body
+
+    def test_record_done_finishes_the_day_and_selected_days_without_copying(self):
+        backup, inhouse = self._stamp_volumes()
+        SD = self.M["ShootingDay"]
+        day2 = SD(project_id=self.project.id, unit_number=1, day_name="Day 2",
+                  shooting_date=self.day.shooting_date - timedelta(days=1))
+        day3 = SD(project_id=self.project.id, unit_number=1, day_name="Day 3",
+                  shooting_date=self.day.shooting_date - timedelta(days=3))
+        running = SD(project_id=self.project.id, unit_number=1, day_name="Day 4",
+                     shooting_date=self.day.shooting_date)
+        db.session.add_all([day2, day3, running])
+        db.session.flush()
+        db.session.add(self.Reg(project_id=self.project.id, shooting_day_id=day2.id,
+                                video_state="present", video_size_tb=2.0, audio_state="none"))
+        busy, _ = self.wf.get_or_create_workflow(db, self.wfm, project_id=self.project.id, shooting_days=[running],
+                                                 operator_user_id=None,
+                                                 now_fn=lambda: __import__("datetime").datetime.utcnow())
+        db.session.commit()
+        self._login(self.mr_acc)
+        before = self.client.get(f"/machine-room/material-registration/{self.day.id}").get_json()
+        listed = {d["id"] for d in before["options"]["stamp_days"]}
+        self.assertEqual(listed, {day2.id, day3.id, self.future.id}, "no current day, no day with a WorkFlow")
+
+        r = self._post(self.day.id, **self._done(backup, inhouse, also_day_ids=[day2.id, day3.id, running.id]))
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual((r.get_json()["recorded"], r.get_json()["skipped"]), (3, 1))
+
+        WF = self.wfm.MachineRoomMediaWorkflow
+        by_day = {w.shooting_day_id: w for w in WF.query.all()}
+        for d in (self.day, day2, day3):
+            w = by_day[d.id]
+            self.assertEqual((w.status, w.current_stage), ("ready", "complete"))
+            self.assertEqual(w.backup_destination_id, backup.id)
+            self.assertEqual(w.proxy_destination_id, inhouse.id)
+            self.assertEqual(w.backup_verification_method, "recorded_as_done")
+            self.assertEqual(w.completed_at.date(), d.shooting_date, "done date defaults to the shooting date")
+            self.assertTrue(self.wf.is_recorded_done(w))
+            self.assertEqual([e.event_type for e in w.events], ["workflow_created", "recorded_as_done"])
+            self.assertFalse(self._row(d.id)["needs_registration"], "nothing left to register")
+        main = by_day[self.day.id]
+        self.assertEqual((main.backup_video_size_tb, main.backup_audio_size_gb), (1.5, None))
+        self.assertEqual(main.backup_destination_path, "/Volumes/GRaid001/Show/Day01")
+        self.assertEqual(main.proxy_destination_path, "/Volumes/Inhouse/Proxies/Day01")
+        self.assertEqual((by_day[day2.id].backup_video_size_tb, by_day[day2.id].backup_audio_size_gb), (2.0, None))
+        self.assertIsNone(by_day[day3.id].backup_video_size_tb)
+        self.assertEqual(by_day[running.id].id, busy.id)
+        self.assertEqual(by_day[running.id].status, "pending", "a running WorkFlow is never overwritten")
+        db.session.refresh(self.day)
+        self.assertEqual((self.day.proxy_volume_id, self.day.proxy_path), (inhouse.id, "/Volumes/Inhouse/Proxies/Day01"))
+
+        self.assertEqual(self.M["Task"].query.count(), 0)
+        self.assertEqual(self.mr.MediaIngestBatch.query.count(), 0)
+        self.assertEqual(self.M["Notification"].query.count(), 0, "no step or registration notifications")
+        self.assertEqual(self.mr.MachineRoomAuditLog.query.filter_by(action="workflow_recorded_done").count(), 3)
+        summary = self.api.summarize(self.api.rows_for_account(self.mr_acc))
+        self.assertEqual(summary["needs_registration"], 2, "only the future day and the running day remain")
+
+    def test_record_done_validates_and_writes_nothing_on_error(self):
+        backup, inhouse = self._stamp_volumes()
+        other = self.M["Project"](name="Other", project_type="Feature Film", production_house="T", director="T")
+        db.session.add(other)
+        db.session.flush()
+        foreign = self.M["ShootingDay"](project_id=other.id, unit_number=1, day_name="Day 1",
+                                        shooting_date=self.day.shooting_date)
+        db.session.add(foreign)
+        db.session.commit()
+        self._login(self.mr_acc)
+        future = (today_cairo() + timedelta(days=1)).isoformat()
+        bad = {
+            "shuttle as backup": {"backup_volume_id": str(self.shuttle.id)},
+            "no proxy volume": {"proxy_volume_id": ""},
+            "in-house not linked to project": {"proxy_volume_id": str(self.unlinked_inhouse.id),
+                                               "proxy_path": "/Volumes/OtherNAS/Day01"},
+            "backup path elsewhere": {"backup_path": "/Volumes/Other/Day01"},
+            "future date": {"done_on": future},
+            "other project day": {"also_day_ids": [foreign.id]},
+            "bad list": {"also_day_ids": "all"},
+        }
+        for label, override in bad.items():
+            with self.subTest(label):
+                r = self._post(self.day.id, **self._done(backup, inhouse, **override))
+                self.assertEqual(r.status_code, 400, label)
+        self.assertEqual(self.wfm.MachineRoomMediaWorkflow.query.count(), 0)
+        self.assertEqual(self.Reg.query.count(), 0)
+
+        self._post(self.day.id, **self._full(action="start"))
+        r = self._post(self.day.id, **self._done(backup, inhouse))
+        self.assertEqual(r.status_code, 409, "a day with a WorkFlow is opened, not stamped")
+        w = self.wfm.MachineRoomMediaWorkflow.query.one()
+        self.assertNotEqual(w.status, "ready", "the running WorkFlow is left untouched")
+        self.assertNotEqual(w.backup_verification_method, "recorded_as_done")
+        detail = self.client.get(f"/machine-room/material-registration/{self.day.id}").get_json()
+        self.assertIsNotNone(detail["workflow"])
+
 
 if __name__ == "__main__":
     unittest.main()

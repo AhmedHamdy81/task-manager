@@ -16,6 +16,10 @@
 
   function $(sel, root) { return (root || modal).querySelector(sel); }
   function field(name) { return form.querySelector('[data-mr-reg-field="' + name + '"]'); }
+  function doneField(name) { return form.querySelector('[data-mr-reg-done-field="' + name + '"]'); }
+  var doneToggle = form.querySelector("[data-mr-reg-done-toggle]");
+  var FOOTNOTE = "Registration records what arrived. It does not start copying and does not mark material as backed up or protected.";
+  var DONE_FOOTNOTE = "Records the day as finished (backed up and proxied before BigBang) without running the WorkFlow. Nothing is copied or verified.";
 
   function csrfToken() {
     var meta = document.querySelector('meta[name="csrf-token"]');
@@ -82,6 +86,66 @@
     return current.options.volumes.find(function (v) { return String(v.id) === id; }) || null;
   }
 
+  function syncDone() {
+    var on = !!(doneToggle && doneToggle.checked && current && !current.workflow);
+    $("[data-mr-reg-done-body]").hidden = !on;
+    form.querySelector('[data-mr-reg-submit="save"]').hidden = on;
+    form.querySelector('[data-mr-reg-submit="start"]').hidden = on;
+    form.querySelector('[data-mr-reg-submit="record_done"]').hidden = !on;
+    $("[data-mr-reg-footnote]").textContent = on ? DONE_FOOTNOTE : FOOTNOTE;
+  }
+
+  function syncDoneCount() {
+    var n = form.querySelectorAll("[data-mr-reg-done-day]:checked").length;
+    $("[data-mr-reg-done-count]").textContent = n ? "(" + n + " selected)" : "";
+  }
+
+  function renderDone(data) {
+    var section = $("[data-mr-reg-done]");
+    section.hidden = !!data.workflow;
+    doneToggle.checked = false;
+    var vols = data.options.volumes;
+    function roleItems(role, linkedOnly) {
+      return vols.filter(function (o) { return o.role === role && (!linkedOnly || o.linked); }).map(function (o) {
+        return { value: o.id, label: o.name + (o.mounted ? "" : " (not mounted)") };
+      });
+    }
+    var backups = roleItems("project_backup", false);
+    var inhouse = roleItems("working_storage", true);
+    var proxySel = doneField("proxy_volume_id");
+    proxySel.querySelector("option").textContent = inhouse.length
+      ? "— In-house Storage volume —"
+      : "— No In-house Storage linked to this project —";
+    fillSelect(doneField("backup_volume_id"), backups, backups.length === 1 ? backups[0].value : "");
+    var proxyVol = data.day.proxy_volume_id && inhouse.some(function (o) { return o.value === data.day.proxy_volume_id; })
+      ? data.day.proxy_volume_id : (inhouse.length === 1 ? inhouse[0].value : "");
+    fillSelect(doneField("proxy_volume_id"), inhouse, proxyVol);
+    doneField("backup_path").value = "";
+    doneField("proxy_path").value = String(proxyVol) === String(data.day.proxy_volume_id || "") ? (data.day.proxy_path || "") : "";
+    doneField("done_on").value = "";
+    doneField("done_on").max = new Date().toISOString().slice(0, 10);
+    var list = $("[data-mr-reg-done-days]");
+    list.innerHTML = "";
+    (data.options.stamp_days || []).forEach(function (d) {
+      var label = document.createElement("label");
+      label.className = "mr-reg-done__day";
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = String(d.id);
+      box.setAttribute("data-mr-reg-done-day", "");
+      box.addEventListener("change", syncDoneCount);
+      var text = document.createElement("span");
+      text.textContent = d.label;
+      label.appendChild(box);
+      label.appendChild(text);
+      list.appendChild(label);
+    });
+    $("[data-mr-reg-done-more]").hidden = !(data.options.stamp_days || []).length;
+    $("[data-mr-reg-done-more]").open = false;
+    syncDoneCount();
+    syncDone();
+  }
+
   function syncSource() {
     var sel = field("source_volume_id");
     var other = sel.value === "other";
@@ -143,6 +207,7 @@
 
     var start = form.querySelector('[data-mr-reg-submit="start"]');
     start.textContent = data.workflow ? "Save and open workflow" : "Save and start workflow";
+    renderDone(data);
     $("[data-mr-reg-fields]").hidden = false;
     setBusy(false);
   }
@@ -176,6 +241,13 @@
       out[key + "_state"] = checked ? checked.value : "unknown";
       out[key === "video" ? "video_size_tb" : "audio_size_gb"] = form.querySelector('[data-mr-reg-size="' + key + '"]').value;
     });
+    if (action === "record_done") {
+      ["backup_volume_id", "backup_path", "proxy_volume_id", "proxy_path", "done_on"].forEach(function (k) {
+        out[k] = doneField(k).value;
+      });
+      out.also_day_ids = Array.prototype.map.call(
+        form.querySelectorAll("[data-mr-reg-done-day]:checked"), function (b) { return Number(b.value); });
+    }
     return out;
   }
 
@@ -216,6 +288,35 @@
     r.addEventListener("change", function () { syncMedia(r.getAttribute("data-mr-reg-state")); });
   });
   field("source_volume_id").addEventListener("change", syncSource);
+  if (doneToggle) doneToggle.addEventListener("change", syncDone);
+  // Days grid: arrow keys move between days (Up/Down by row), Space toggles (native checkbox).
+  var daysGrid = $("[data-mr-reg-done-days]");
+  if (daysGrid) {
+    daysGrid.addEventListener("keydown", function (e) {
+      var keys = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: "down", ArrowUp: "up", Home: "home", End: "end" };
+      if (!(e.key in keys)) return;
+      var boxes = Array.prototype.slice.call(daysGrid.querySelectorAll("[data-mr-reg-done-day]"));
+      var i = boxes.indexOf(document.activeElement);
+      if (i < 0 || !boxes.length) return;
+      e.preventDefault();
+      var top = boxes[0].getBoundingClientRect().top;
+      var cols = boxes.filter(function (b) { return Math.abs(b.getBoundingClientRect().top - top) < 4; }).length || 1;
+      var step = keys[e.key];
+      var next = step === "down" ? i + cols : step === "up" ? i - cols
+        : step === "home" ? 0 : step === "end" ? boxes.length - 1 : i + step;
+      next = Math.max(0, Math.min(boxes.length - 1, next));
+      boxes[next].focus();
+      boxes[next].closest("label").scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  form.querySelectorAll("[data-mr-reg-done-all]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var on = b.getAttribute("data-mr-reg-done-all") === "1";
+      form.querySelectorAll("[data-mr-reg-done-day]").forEach(function (box) { box.checked = on; });
+      syncDoneCount();
+    });
+  });
   $("[data-mr-reg-close]").addEventListener("click", function () { modal.close(); });
 
   document.addEventListener("click", function (e) {

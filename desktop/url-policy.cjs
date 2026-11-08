@@ -9,4 +9,8 @@ function normalizeServerUrl(v){
 }
 function isSameOrigin(v,s){const a=parsed(v),b=parsed(s);return !!(a&&b&&a.origin===b.origin&&["https:","http:"].includes(a.protocol))}
 function isSafeExternal(v){const u=parsed(v);return !!(u&&!u.username&&!u.password&&(u.protocol==="https:"||u.protocol==="http:"||u.protocol==="mailto:"))}
-module.exports={isSafeExternal,isSameOrigin,normalizeServerUrl};
+// Google refuses OAuth inside embedded browsers, so this one-time handoff path on the
+// BigBang server opens in the system browser instead of the app window.
+const HANDOFF_PATH=/^\/integrations\/google-sheets\/browser\/[A-Za-z0-9_-]{20,100}$/;
+function isBrowserHandoff(v,s){const u=parsed(v);return !!(u&&isSameOrigin(v,s)&&!u.search&&!u.hash&&HANDOFF_PATH.test(u.pathname))}
+module.exports={isBrowserHandoff,isSafeExternal,isSameOrigin,normalizeServerUrl};

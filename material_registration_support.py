@@ -314,7 +314,13 @@ def derive_status(
     }
 
     missing = [k for k in REQUIRED_FIELDS if not fields[k]["known"]]
-    complete = not missing
+    # A day recorded as already backed up and proxied (before BigBang) has nothing left to
+    # register: its material is done, even if old sizes or sources are unknown.
+    complete = not missing or (
+        workflow is not None
+        and getattr(workflow, "status", "") == "ready"
+        and getattr(workflow, "backup_verification_method", "") == "recorded_as_done"
+    )
     upcoming = bool(day.shooting_date and day.shooting_date > today)
     copy_started = bool(
         (workflow is not None and getattr(workflow, "backup_started_at", None))

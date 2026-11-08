@@ -1,0 +1,37 @@
+{# Export dropdown. Set export_day_id to export one shooting day; leave it unset for every day. #}
+{% set _export_args = {'project_id': project.id} %}
+{% if export_day_id %}{% set _ = _export_args.update({'day_id': export_day_id}) %}{% endif %}
+<details class="production-export-menu" data-production-export-menu>
+  <summary class="btn btn--small btn--secondary production-export-btn" title="Download {{ 'this day' if export_day_id else 'every shooting day' }} as a worksheet you can edit and bring back with Import &amp; Compare">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>
+    </svg>
+    <span>{{ export_label|default('Export worksheet') }}</span>
+  </summary>
+  <div class="project-row-menu__panel production-export-menu__panel" role="menu">
+    <a class="project-row-menu__item" role="menuitem" href="{{ url_for('production_export', format='xlsx', **_export_args) }}">
+      <span>Excel workbook</span><span class="production-export-menu__ext">.xlsx</span>
+    </a>
+    <a class="project-row-menu__item" role="menuitem" href="{{ url_for('production_export', format='csv', **_export_args) }}">
+      <span>CSV</span><span class="production-export-menu__ext">.csv</span>
+    </a>
+    <p class="production-export-menu__hint">Keep the “BigBang record ID” column to update the same rows when you import the file again.</p>
+  </div>
+</details>
+<script>
+  (function () {
+    if (window.__productionExportMenu) return;
+    window.__productionExportMenu = true;
+    function closeAll(except) {
+      document.querySelectorAll("[data-production-export-menu][open]").forEach(function (m) {
+        if (m !== except) m.removeAttribute("open");
+      });
+    }
+    document.addEventListener("click", function (e) {
+      var menu = e.target.closest("[data-production-export-menu]");
+      if (menu && e.target.closest("a")) { setTimeout(function () { closeAll(); }, 0); return; }
+      closeAll(menu);
+    });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeAll(); });
+  })();
+</script>

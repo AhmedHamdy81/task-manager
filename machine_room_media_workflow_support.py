@@ -63,12 +63,15 @@ VERIFY_OPERATOR = "operator_confirmed"
 VERIFY_CHECKSUM = "checksum_verified"
 VERIFY_FAILED = "failed"
 VERIFY_SUPERVISOR = "supervisor_override"
+# Material processed before BigBang: recorded by an operator, never checked by the workflow.
+VERIFY_RECORDED = "recorded_as_done"
 VERIFICATION_METHODS: tuple[str, ...] = (
     VERIFY_PENDING,
     VERIFY_OPERATOR,
     VERIFY_CHECKSUM,
     VERIFY_FAILED,
     VERIFY_SUPERVISOR,
+    VERIFY_RECORDED,
 )
 
 PROBLEM_CATEGORIES: tuple[str, ...] = (
@@ -814,6 +817,75 @@ def get_or_create_workflow(
         now_fn=now_fn,
     )
     return row, True
+
+
+def is_recorded_done(workflow) -> bool:
+    """True for a day stamped "Record as done" (finished outside the workflow, not verified)."""
+    return (
+        workflow is not None
+        and getattr(workflow, "status", "") == STATUS_READY
+        and getattr(workflow, "backup_verification_method", "") == VERIFY_RECORDED
+    )
+
+
+def record_day_as_done(
+    db,
+    models,
+    day,
+    *,
+    backup_volume,
+    backup_path: str,
+    video_size_tb: float | None,
+    audio_size_gb: float | None,
+    proxy_volume,
+    proxy_path: str,
+    done_at: datetime,
+    actor_user_id: int | None,
+    now_fn,
+):
+    """Create this day's workflow directly in its finished state, for material that was
+    backed up and proxied before BigBang. Nothing is copied; no step notifications are sent.
+
+    Raises WorkflowDayConflict when the day already belongs to a workflow.
+    """
+    row, created = get_or_create_workflow(
+        db, models, project_id=int(day.project_id), shooting_days=[day],
+        operator_user_id=actor_user_id, now_fn=now_fn,
+    )
+    if not created:
+        raise WorkflowDayConflict({int(day.id): int(row.id)})
+    backup_name, proxy_name = volume_label(backup_volume), volume_label(proxy_volume)
+    row.received_at = done_at
+    row.received_by_id = actor_user_id
+    row.backup_destination_id = int(backup_volume.id)
+    row.backup_destination_name = backup_name[:160]
+    row.backup_destination_path = (backup_path or "")[:512]
+    row.backup_video_size_tb = video_size_tb
+    row.backup_audio_size_gb = audio_size_gb
+    row.backup_started_at = row.backup_finished_at = row.backup_verified_at = done_at
+    row.backup_verified_by_id = actor_user_id
+    row.backup_verification_method = VERIFY_RECORDED
+    row.backup_verification_evidence = "Recorded as done before BigBang; not verified by the workflow."
+    row.proxy_destination_id = int(proxy_volume.id)
+    row.proxy_destination_name = proxy_name[:160]
+    row.proxy_destination_path = (proxy_path or "")[:512]
+    row.transcode_started_at = row.transcode_finished_at = row.transcode_verified_at = done_at
+    row.transcode_verified_by_id = actor_user_id
+    row.transcode_verification_method = VERIFY_RECORDED
+    row.completed_at = done_at
+    row.completed_by_id = actor_user_id
+    row.status = STATUS_READY
+    row.current_stage = STAGE_COMPLETE
+    add_workflow_event(
+        db, models, row,
+        event_type="recorded_as_done",
+        message=f"Recorded as done (before BigBang): backup on {backup_name}, proxies on {proxy_name}",
+        actor_user_id=actor_user_id,
+        stage=STAGE_COMPLETE,
+        verification_kind="operator",
+        now_fn=now_fn,
+    )
+    return row
 
 
 def volumes_for_role(StorageVolume, role: str) -> list:

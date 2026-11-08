@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>{% if ok %}Google Sheets connected{% else %}Google Sheets not connected{% endif %} · BigBang</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    body { display: grid; place-items: center; min-height: 100vh; margin: 0; }
+    .gs-card { max-width: 460px; padding: 28px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); text-align: center; }
+    .gs-card h1 { font-size: 1.2rem; margin: 0 0 10px; }
+    .gs-ok { color: var(--success-text); }
+    .gs-bad { color: var(--error-text); }
+  </style>
+</head>
+<body>
+  <main class="gs-card">
+    <h1 class="{{ 'gs-ok' if ok else 'gs-bad' }}">{% if ok %}Google Sheets connected{% else %}Google Sheets not connected{% endif %}</h1>
+    <p>{{ message }}</p>
+  </main>
+</body>
+</html>

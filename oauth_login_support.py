@@ -1,15 +1,24 @@
-"""Google and Apple account sign-in (OAuth 2.0 / OpenID Connect)."""
+"""Google and Apple account sign-in (OAuth 2.0 / OpenID Connect).
+
+Login state is not a signed token any more: each attempt is a random, single-use,
+server-side record bound to the browser session that started it (oauth_login_state.py).
+Google identity comes from the ID token, verified for signature, issuer, audience,
+expiry and nonce; the authorization code is exchanged with PKCE.
+"""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
+import secrets
 from typing import Any, Callable
 from urllib.parse import urlencode
 
 import requests
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -18,40 +27,36 @@ PROVIDER_APPLE = "apple"
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+GOOGLE_CERTS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+GOOGLE_ISSUERS = ("https://accounts.google.com", "accounts.google.com")
+# Google is the mail provider for these, so a verified claim proves ownership of the address.
+GOOGLE_AUTHORITATIVE_DOMAINS = frozenset({"gmail.com", "googlemail.com"})
 
 APPLE_AUTH_URL = "https://appleid.apple.com/auth/authorize"
 APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"
 APPLE_ISSUER = "https://appleid.apple.com"
+APPLE_AUTHORITATIVE_DOMAINS = frozenset({"privaterelay.appleid.com", "icloud.com", "me.com", "mac.com"})
 
 _HTTP_TIMEOUT = 20
-OAUTH_STATE_SALT = "oauth-login-state"
-OAUTH_STATE_MAX_AGE_SEC = 600
-
-
-def dump_oauth_state(secret_key: str, payload: dict[str, str]) -> str:
-    return URLSafeTimedSerializer(secret_key, salt=OAUTH_STATE_SALT).dumps(payload)
-
-
-def load_oauth_state(secret_key: str, token: str | None) -> dict[str, str]:
-    raw = (token or "").strip()
-    if not raw:
-        raise OAuthLoginError("Sign-in could not be verified. Try again.")
-    try:
-        data = URLSafeTimedSerializer(secret_key, salt=OAUTH_STATE_SALT).loads(
-            raw, max_age=OAUTH_STATE_MAX_AGE_SEC
-        )
-    except SignatureExpired as exc:
-        raise OAuthLoginError("Sign-in expired. Try again.") from exc
-    except BadSignature as exc:
-        raise OAuthLoginError("Sign-in could not be verified. Try again.") from exc
-    if not isinstance(data, dict):
-        raise OAuthLoginError("Sign-in could not be verified. Try again.")
-    return {str(k): str(v) if v is not None else "" for k, v in data.items()}
+ID_TOKEN_LEEWAY_SEC = 60
 
 
 class OAuthLoginError(Exception):
     """User-facing OAuth failure (safe to flash)."""
+
+
+def new_pkce() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
+def _claim_true(value: Any) -> bool:
+    return value is True or (isinstance(value, str) and value.strip().lower() == "true")
+
+
+def _email_domain(email: str) -> str:
+    return email.rsplit("@", 1)[-1].lower() if "@" in email else ""
 
 
 _oauth_config_loader: Callable[[], Any] | None = None
@@ -112,7 +117,8 @@ def apple_configured() -> bool:
     return bool(apple_client_id())
 
 
-def google_authorize_url(*, redirect_uri: str, state: str, nonce: str) -> str:
+def google_authorize_url(*, redirect_uri: str, state: str, nonce: str, code_challenge: str) -> str:
+    # Sign-in only: no include_granted_scopes, so earlier Google Sheets grants never ride along.
     params = {
         "client_id": google_client_id(),
         "redirect_uri": redirect_uri,
@@ -120,9 +126,10 @@ def google_authorize_url(*, redirect_uri: str, state: str, nonce: str) -> str:
         "scope": "openid email profile",
         "state": state,
         "nonce": nonce,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
         "access_type": "online",
         "prompt": "select_account",
-        "include_granted_scopes": "true",
     }
     return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
 
@@ -158,54 +165,119 @@ def _http_post_form(url: str, data: dict[str, str]) -> dict[str, Any]:
     return payload
 
 
+_google_jwk_client = None
+
+
+def _google_signing_key(id_token: str):
+    global _google_jwk_client
+    from jwt import PyJWKClient
+
+    if _google_jwk_client is None:
+        _google_jwk_client = PyJWKClient(GOOGLE_CERTS_URL, cache_keys=True, timeout=_HTTP_TIMEOUT)
+    return _google_jwk_client.get_signing_key_from_jwt(id_token).key
+
+
+def verify_google_id_token(
+    id_token: str,
+    *,
+    nonce: str,
+    client_id: str,
+    signing_key: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Verified claims of a Google ID token, or OAuthLoginError (fail closed)."""
+    raw = (id_token or "").strip()
+    if not raw:
+        raise OAuthLoginError("Google did not return an identity token.")
+    if not nonce:
+        raise OAuthLoginError("Sign-in could not be verified. Try again.")
+    try:
+        import jwt
+    except ImportError as exc:  # pragma: no cover - PyJWT is in requirements.txt
+        raise OAuthLoginError("Google sign-in is unavailable on this server.") from exc
+    try:
+        key = (signing_key or _google_signing_key)(raw)
+        claims = jwt.decode(
+            raw,
+            key,
+            algorithms=["RS256"],
+            audience=client_id,
+            leeway=ID_TOKEN_LEEWAY_SEC,
+            options={"require": ["iss", "aud", "exp", "iat", "sub"]},
+        )
+    except OAuthLoginError:
+        raise
+    except Exception as exc:
+        logger.warning("Google ID token rejected: %s", type(exc).__name__)
+        raise OAuthLoginError("Could not verify the Google account.") from exc
+    if claims.get("iss") not in GOOGLE_ISSUERS:
+        raise OAuthLoginError("Could not verify the Google account.")
+    azp = claims.get("azp")
+    if azp and azp != client_id:
+        raise OAuthLoginError("Could not verify the Google account.")
+    if not hmac.compare_digest(str(claims.get("nonce") or "").encode(), nonce.encode()):
+        raise OAuthLoginError("Sign-in could not be verified. Try again.")
+    return claims
+
+
+def google_profile_from_claims(claims: dict[str, Any]) -> dict[str, Any]:
+    email = str(claims.get("email") or "").strip().lower()
+    sub = str(claims.get("sub") or "").strip()
+    if not sub:
+        raise OAuthLoginError("Google did not provide an account id.")
+    if not email or "@" not in email:
+        raise OAuthLoginError("Google did not provide an email address.")
+    if not _claim_true(claims.get("email_verified")):
+        raise OAuthLoginError("Google has not verified this email address.")
+    domain = _email_domain(email)
+    hosted = str(claims.get("hd") or "").strip().lower()
+    name = str(claims.get("name") or claims.get("given_name") or "").strip()
+    return {
+        "provider": PROVIDER_GOOGLE,
+        "sub": sub,
+        "email": email,
+        "name": name,
+        # Google is authoritative for Gmail and for Workspace domains it hosts (hd claim).
+        "email_authoritative": domain in GOOGLE_AUTHORITATIVE_DOMAINS or (bool(hosted) and hosted == domain),
+    }
+
+
 def exchange_google_code(
     *,
     code: str,
     redirect_uri: str,
+    code_verifier: str,
+    nonce: str,
     post_form: Callable[[str, dict[str, str]], dict[str, Any]] | None = None,
-    get_json: Callable[..., dict[str, Any]] | None = None,
-) -> dict[str, str]:
-    """Return {sub, email, name} for a Google authorization code."""
+    signing_key: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    """Exchange a code (PKCE) and return the verified Google profile."""
     if not google_configured():
         raise OAuthLoginError("Google sign-in is not configured.")
     if not (code or "").strip():
         raise OAuthLoginError("Google sign-in was cancelled.")
+    if not code_verifier:
+        raise OAuthLoginError("Sign-in could not be verified. Try again.")
     poster = post_form or _http_post_form
-    getter = get_json or _http_get_json
+    client_id = google_client_id()
     try:
         token = poster(
             GOOGLE_TOKEN_URL,
             {
                 "code": code.strip(),
-                "client_id": google_client_id(),
+                "client_id": client_id,
                 "client_secret": google_client_secret(),
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
+                "code_verifier": code_verifier,
             },
         )
     except requests.RequestException as exc:
-        logger.warning("Google token exchange failed: %s", exc)
+        logger.warning("Google token exchange failed: %s", type(exc).__name__)
         raise OAuthLoginError("Could not complete Google sign-in.") from exc
-    access = (token.get("access_token") or "").strip()
-    if not access:
-        raise OAuthLoginError("Google did not return an access token.")
-    try:
-        info = getter(
-            GOOGLE_USERINFO_URL,
-            headers={"Authorization": f"Bearer {access}"},
-        )
-    except requests.RequestException as exc:
-        logger.warning("Google userinfo failed: %s", exc)
-        raise OAuthLoginError("Could not read the Google account.") from exc
-    email = (info.get("email") or "").strip().lower()
-    sub = str(info.get("sub") or "").strip()
-    verified = info.get("email_verified")
-    if verified in (False, "false", "False", 0, "0"):
-        raise OAuthLoginError("Google email is not verified.")
-    if not sub or not email or "@" not in email:
-        raise OAuthLoginError("Google did not provide a verified email.")
-    name = (info.get("name") or info.get("given_name") or "").strip()
-    return {"provider": PROVIDER_GOOGLE, "sub": sub, "email": email, "name": name}
+    claims = verify_google_id_token(
+        str(token.get("id_token") or ""), nonce=nonce, client_id=client_id, signing_key=signing_key
+    )
+    return google_profile_from_claims(claims)
 
 
 def _apple_jwks(get_json: Callable[..., dict[str, Any]] | None = None) -> list[dict[str, Any]]:
@@ -225,6 +297,7 @@ def verify_apple_id_token(
     id_token: str,
     *,
     nonce: str | None = None,
+    nonce_hash: str | None = None,
     get_json: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, str]:
     """Return {sub, email, name} from a Sign in with Apple id_token."""
@@ -251,6 +324,7 @@ def verify_apple_id_token(
                 algorithms=["RS256"],
                 audience=audience,
                 issuer=APPLE_ISSUER,
+                options={"require": ["iss", "aud", "exp", "iat", "sub"]},
             )
         except Exception:
             keys = _apple_jwks(get_json)
@@ -266,6 +340,7 @@ def verify_apple_id_token(
                 algorithms=["RS256"],
                 audience=audience,
                 issuer=APPLE_ISSUER,
+                options={"require": ["iss", "aud", "exp", "iat", "sub"]},
             )
     except OAuthLoginError:
         raise
@@ -276,9 +351,18 @@ def verify_apple_id_token(
     sub = str(claims.get("sub") or "").strip()
     email = (claims.get("email") or "").strip().lower()
     token_nonce = str(claims.get("nonce") or "").strip()
-    if nonce and token_nonce and token_nonce != nonce:
+    # The nonce is mandatory: an ID token minted for another sign-in must never be accepted.
+    if nonce:
+        nonce_ok = hmac.compare_digest(token_nonce.encode(), str(nonce).encode())
+    elif nonce_hash:
+        nonce_ok = bool(token_nonce) and hmac.compare_digest(
+            hashlib.sha256(token_nonce.encode("utf-8")).hexdigest(), nonce_hash
+        )
+    else:
+        nonce_ok = False
+    if not token_nonce or not nonce_ok:
         raise OAuthLoginError("Apple sign-in could not be verified.")
-    if claims.get("email_verified") in (False, "false", "False", 0, "0"):
+    if not _claim_true(claims.get("email_verified")):
         raise OAuthLoginError("Apple email is not verified.")
     if not sub:
         raise OAuthLoginError("Apple did not provide an account id.")
@@ -286,7 +370,13 @@ def verify_apple_id_token(
         raise OAuthLoginError(
             "Apple did not share an email. Use an Apple ID that allows email, or sign in with Google."
         )
-    return {"provider": PROVIDER_APPLE, "sub": sub, "email": email, "name": ""}
+    return {
+        "provider": PROVIDER_APPLE,
+        "sub": sub,
+        "email": email,
+        "name": "",
+        "email_authoritative": _email_domain(email) in APPLE_AUTHORITATIVE_DOMAINS,
+    }
 
 
 def parse_apple_user_name(user_json: str | None) -> str:

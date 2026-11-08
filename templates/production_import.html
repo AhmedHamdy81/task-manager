@@ -1,0 +1,903 @@
+{% extends "base.html" %}
+{% block title %}Import & Compare · {{ project.name }} · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/production-import.css') }}">
+{% endblock %}
+{% macro diff_block(target_id, diffs, clearable, chosen, dec) %}
+<div class="pim-diff" data-pim-target="{{ target_id }}"{% if not chosen %} hidden{% endif %}>
+  {% for f in diffs %}
+  <label class="pim-check pim-field{% if f.identity %} pim-field--identity{% endif %}">
+    <input type="checkbox" data-pim-field="{{ f.field }}"{% if f.identity %} data-identity="1"{% endif %}{% if dec.target_id == target_id and f.field in (dec.fields or []) %} checked{% endif %}>
+    <span><strong>{{ f.label }}</strong> <span class="pim-old">{{ f.current or 'empty' }}</span> → <span class="pim-new">{{ f.incoming }}</span>
+    {% if f.consequence %}<span class="pim-small pim-consequence">{{ f.consequence }}</span>{% endif %}</span>
+  </label>
+  {% endfor %}
+  {% for f in clearable %}
+  <label class="pim-check pim-field pim-field--clear">
+    <input type="checkbox" data-pim-clear="{{ f.field }}"{% if dec.target_id == target_id and f.field in (dec.clear or []) %} checked{% endif %}>
+    <span>Clear <strong>{{ f.label }}</strong> <span class="pim-old">{{ f.current }}</span> <span class="pim-small pim-consequence">The cell is empty in the file. Only clear it if that is intended.</span></span>
+  </label>
+  {% endfor %}
+  {% if not diffs and not clearable %}<span class="muted pim-small">No differences.</span>{% endif %}
+</div>
+{% endmacro %}
+{% block content %}
+{% set step_keys = steps|map(attribute=0)|list %}
+{% set step_idx = step_keys.index(step) %}
+<div class="production-page pim" data-step="{{ step }}">
+  <div class="page-head production-page-head">
+    <p class="breadcrumb">
+      <a href="{{ url_for('projects_list') }}">Projects</a> /
+      <a href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name|e }}</a> /
+      <a href="{{ url_for('project_production', project_id=project.id) }}">Production</a> /
+      {% if fixed_day %}<a href="{{ url_for('project_production_day', project_id=project.id, day_id=fixed_day.id) }}">Unit {{ fixed_day.unit_number }} · {{ fixed_day.day_name }}</a> /{% endif %}
+    </p>
+    <h1>Import &amp; Compare</h1>
+    <p class="muted">
+      {% if sess %}<span class="pim-file">{{ sess.original_filename }}</span> · {% endif %}
+      {% if fixed_day %}Rows go to Unit {{ fixed_day.unit_number }} · {{ fixed_day.day_name }} · {{ fixed_day.shooting_date.strftime('%Y-%m-%d') }}{% else %}Shooting days and their rows from Excel (.xlsx), CSV or Google Sheets{% endif %}
+    </p>
+  </div>
+
+  <ol class="pim-steps" aria-label="Import steps">
+    {% for key, label in steps %}
+    <li class="pim-steps__item{% if loop.index0 < step_idx %} is-done{% elif loop.index0 == step_idx %} is-current{% endif %}"{% if loop.index0 == step_idx %} aria-current="step"{% endif %}>
+      <span class="pim-steps__num">{{ loop.index }}</span><span class="pim-steps__label">{{ label }}</span>
+    </li>
+    {% endfor %}
+  </ol>
+
+  {# ------------------------------------------------------------------ Upload #}
+  {% if step == 'upload' %}
+  {% set _day_arg = {'day_id': fixed_day.id} if fixed_day else {} %}
+  <nav class="pim-source-tabs" aria-label="Import source">
+    <a class="pim-source-tab{% if source_tab == 'file' %} is-active{% endif %}" href="{{ url_for('production_import_entry', project_id=project.id, **_day_arg) }}"{% if source_tab == 'file' %} aria-current="page"{% endif %}>Upload Excel / CSV</a>
+    <a class="pim-source-tab{% if source_tab == 'google' %} is-active{% endif %}" href="{{ url_for('production_import_entry', project_id=project.id, source='google', **_day_arg) }}"{% if source_tab == 'google' %} aria-current="page"{% endif %}>Google Sheets link</a>
+  </nav>
+  {% if source_tab == 'google' %}
+  <section class="panel pim-panel">
+    <h2 class="panel-title">Import from Google Sheets</h2>
+    {% if not google_configured %}
+    <p class="pim-alert pim-alert--warn">Google is not set up on this server. An administrator needs to add Google OAuth credentials and enable the Google Sheets API (see the setup notes).</p>
+    {% else %}
+    <div class="pim-gconn{% if google_status.connected %} is-connected{% endif %}">
+      {% if google_status.connected %}
+      <span class="pim-gconn__dot" aria-hidden="true"></span>
+      <span>Connected as <strong>{{ google_status.email or 'your Google account' }}</strong> · read-only access to spreadsheets you can open</span>
+      <span class="pim-gconn__actions">
+        <a class="btn btn--small btn--ghost" href="{{ url_for('google_sheets_connect', project_id=project.id, link=google_link, **_day_arg) }}">Reconnect / switch account</a>
+        <form method="post" action="{{ url_for('google_sheets_disconnect') }}" class="inline" onsubmit="return window.confirm('Disconnect Google Sheets? BigBang will lose access to your spreadsheets until you connect again. Imports already done are kept.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="project_id" value="{{ project.id }}">
+          {% if fixed_day %}<input type="hidden" name="day_id" value="{{ fixed_day.id }}">{% endif %}
+          <input type="hidden" name="link" value="{{ google_link }}">
+          <button type="submit" class="btn btn--small btn--ghost">Disconnect</button>
+        </form>
+      </span>
+      {% else %}
+      <span>Google Sheets is not connected. Connecting gives BigBang read-only access to spreadsheets your Google account can open. It does not change how you sign in to BigBang.</span>
+      <span class="pim-gconn__actions">
+        <a class="btn btn--small btn--secondary" href="{{ url_for('google_sheets_connect', project_id=project.id, link=google_link, **_day_arg) }}">Connect Google Sheets</a>
+      </span>
+      {% endif %}
+    </div>
+    <form method="post" action="{{ url_for('production_import_google', project_id=project.id) }}" class="pim-glink" data-pim-glink>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if fixed_day %}<input type="hidden" name="day_id" value="{{ fixed_day.id }}">{% endif %}
+      <label class="field"><span class="field-label">Google Sheets link</span>
+        <input type="url" name="link" value="{{ google_link }}" required maxlength="2048" class="input form-input" placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=0" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="muted pim-small">Paste the link from the spreadsheet's address bar. If it points to a worksheet (#gid=…), that worksheet is preselected; you can choose others next. The spreadsheet does not need to be public.</p>
+      <div class="pim-actions">
+        <a class="btn btn--ghost" href="{% if fixed_day %}{{ url_for('project_production_day', project_id=project.id, day_id=fixed_day.id) }}{% else %}{{ url_for('project_production', project_id=project.id) }}{% endif %}">Cancel</a>
+        <button type="submit" class="btn btn--primary" data-pim-busy="Reading spreadsheet…">{% if google_status.connected %}Load spreadsheet{% else %}Connect &amp; load spreadsheet{% endif %}</button>
+      </div>
+    </form>
+    {% endif %}
+    <ul class="pim-notes muted">
+      <li>BigBang reads a snapshot of the worksheets once. Mapping, preview and import all use that snapshot; it never writes to Google or changes sharing.</li>
+      <li>Before you import, BigBang checks whether the selected worksheets changed and lets you continue or refresh.</li>
+      <li>Up to {{ limits.max_rows_per_sheet }} rows per worksheet and {{ limits.max_sheets }} worksheets per import.</li>
+    </ul>
+  </section>
+  {% else %}
+  <section class="panel pim-panel">
+    <h2 class="panel-title">Upload a spreadsheet</h2>
+    <form method="post" enctype="multipart/form-data" class="pim-upload" novalidate>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if fixed_day %}<input type="hidden" name="day_id" value="{{ fixed_day.id }}">{% endif %}
+      <label class="pim-drop" data-pim-drop>
+        <input type="file" name="file" class="pim-drop__input" accept=".xlsx,.csv" data-pim-file>
+        <span class="pim-drop__icon" aria-hidden="true">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h8M12 11v8"/></svg>
+        </span>
+        <span class="pim-drop__title" data-pim-file-name>Drop a spreadsheet here or <span class="pim-drop__link">browse</span></span>
+        <span class="pim-drop__types" aria-label="Supported files">
+          <span class="pim-drop__type">.xlsx <span class="muted">Excel workbook</span></span>
+          <span class="pim-drop__type">.csv <span class="muted">Comma / semicolon / tab separated</span></span>
+        </span>
+        <span class="muted pim-small">Up to {{ (limits.max_bytes // (1024*1024)) }} MB · {{ limits.max_rows_per_sheet }} rows per worksheet · {{ limits.max_sheets }} worksheets. Old .xls files are not supported — save as .xlsx or .csv first. For Google Sheets, use the Google Sheets link tab.</span>
+        <span class="pim-err pim-small" data-pim-file-error hidden></span>
+      </label>
+      <ul class="pim-notes muted">
+        <li>Nothing is saved until you confirm the final step. Uploading, mapping and previewing never change project data or send notifications.</li>
+        <li>Macros, formulas and external links are never run. Formula cells use the result Excel saved; cells without a saved result are flagged.</li>
+        <li>Rows missing from the file are never deleted, and a day is never replaced as a whole.</li>
+        {% if not fixed_day and not can_create_days %}<li>You can add and update rows on existing days. Creating new shooting days needs the Add shooting day permission.</li>{% endif %}
+        <li>The uploaded file is kept privately for up to 24 hours and removed after the import.</li>
+      </ul>
+      <div class="pim-actions">
+        <a class="btn btn--ghost" href="{% if fixed_day %}{{ url_for('project_production_day', project_id=project.id, day_id=fixed_day.id) }}{% else %}{{ url_for('project_production', project_id=project.id) }}{% endif %}">Cancel</a>
+        <button type="submit" class="btn btn--primary">Upload &amp; continue</button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+  {% endif %}
+
+  {% if source and step != 'upload' %}
+  {% set _fresh = source.freshness or {} %}
+  <section class="pim-source" aria-label="Import source">
+    <div class="pim-source__main">
+      <span class="pim-source__badge">Google Sheets</span>
+      <a href="{{ source.url }}" target="_blank" rel="noopener noreferrer" class="pim-source__title">{{ source.title }}</a>
+      <span class="muted pim-small">Snapshot {{ (source.fetched_at or '')[:16]|replace('T', ' ') }} UTC{% if source.time_zone %} · spreadsheet time zone {{ source.time_zone }}{% endif %}{% if source.locale %} · locale {{ source.locale }}{% endif %}</span>
+    </div>
+    {% if step != 'results' %}
+    <form method="post" action="{{ url_for('production_import_source', project_id=project.id, token=sess.token) }}" class="pim-source__refresh" onsubmit="return window.confirm('Fetch the latest values from Google Sheets? The comparison is rebuilt and choices for rows that changed are reset to Keep.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="refresh">
+      <input type="hidden" name="back" value="{{ step }}">
+      <button type="submit" class="btn btn--small btn--ghost" title="Fetch the latest values. Comparison choices for changed rows will need review.">Refresh source</button>
+    </form>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ------------------------------------------------------------------ Worksheets #}
+  {% if step == 'sheets' %}
+  <form method="post" class="pim-panel-stack" data-pim-sheets>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if sess.file_kind == 'csv' %}
+    {% set c = opts.csv or {} %}
+    <section class="panel pim-panel">
+      <h2 class="panel-title">CSV reading</h2>
+      {% if c.encoding_ambiguous or c.delimiter_ambiguous %}
+      <p class="pim-alert pim-alert--warn">
+        {% if c.encoding_ambiguous %}The text encoding could not be detected with certainty (it is not UTF-8). {% endif %}
+        {% if c.delimiter_ambiguous %}More than one delimiter fits this file. {% endif %}
+        Check the preview below, change the settings if the text looks wrong, and confirm.
+      </p>
+      {% endif %}
+      <div class="pim-grid">
+        <label class="field"><span class="field-label">Encoding</span>
+          <select name="csv_encoding" class="input form-input">
+            {% for val, label in csv_encodings %}<option value="{{ val }}"{% if c.encoding == val %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="field"><span class="field-label">Delimiter</span>
+          <select name="csv_delimiter" class="input form-input">
+            {% for val, label in csv_delimiters %}<option value="{{ val }}"{% if c.delimiter == val %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        {% if c.encoding_ambiguous or c.delimiter_ambiguous %}
+        <label class="pim-check"><input type="checkbox" name="csv_confirmed" value="1"{% if c.confirmed %} checked{% endif %}> The preview below looks right</label>
+        {% endif %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% if not fixed_day %}
+    <section class="panel pim-panel">
+      <h2 class="panel-title">Layout</h2>
+      <div class="pim-layouts">
+        <label class="pim-layout"><input type="radio" name="layout" value="table"{% if opts.layout != 'day_sheets' %} checked{% endif %}>
+          <span><strong>One table, several days</strong><span class="muted">Each row says its unit and shooting day (columns or defaults).</span></span></label>
+        <label class="pim-layout"><input type="radio" name="layout" value="day_sheets"{% if opts.layout == 'day_sheets' %} checked{% endif %}>
+          <span><strong>One worksheet per shooting day</strong><span class="muted">You enter each worksheet's unit, day and date below. Sheet names are never used to guess the day.</span></span></label>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="panel pim-panel">
+      <h2 class="panel-title">Worksheets</h2>
+      <div class="pim-sheetbar" data-pim-sheetpicker data-autopen="{{ '1' if choose_sheets else '0' }}">
+        <span class="pim-sheetbar__label">Importing</span>
+        <span class="pim-sheetbar__names" data-pim-sheets-summary></span>
+        {% if workbook.sheets|length > 1 %}
+        <button type="button" class="btn btn--small btn--secondary" data-pim-sheets-open>Change worksheets</button>
+        {% endif %}
+      </div>
+      <dialog class="project-task-modal pim-sheet-modal" data-pim-sheet-modal aria-labelledby="pim-sheet-modal-title">
+        <div class="project-task-modal-inner">
+          <div class="project-task-modal-head">
+            <h2 id="pim-sheet-modal-title" class="project-task-modal-title">Choose worksheets</h2>
+          </div>
+          <p class="muted pim-small">{{ sess.original_filename }} has {{ workbook.sheets|length }} worksheets. Select one or more to import — selected worksheets are combined into one comparison.</p>
+          <div class="pim-sheet-modal__bulk">
+            <button type="button" class="btn btn--small btn--ghost" data-pim-sheets-all>Select all</button>
+            <button type="button" class="btn btn--small btn--ghost" data-pim-sheets-none>Clear</button>
+          </div>
+          <div class="pim-sheet-modal__list">
+            {% for sheet in workbook.sheets %}
+            <label class="pim-sheetrow">
+              <input type="checkbox" name="sheets" value="{{ sheet.name }}" data-pim-sheet-toggle="{{ loop.index0 }}"{% if sheet.name in (opts.sheets or []) %} checked{% endif %}>
+              <span class="pim-sheetrow__name">{{ sheet.name }}</span>
+              <span class="pim-sheetrow__meta">{{ sheet.rows|length }} rows · {{ sheet.width }} columns{% if sheet.errors %} · {{ sheet.errors }} error cells{% endif %}</span>
+              {% set _hdr = (sheet.rows[(((opts.sheet_settings or {}).get(sheet.name, {})).header_row or 1) - 1] if sheet.rows else []) %}
+              <span class="pim-sheetrow__cols">{% for c in _hdr if c.kind != 'empty' %}{{ c.display|truncate(24, True, '…') }}{% if not loop.last %} · {% endif %}{% else %}empty{% endfor %}</span>
+            </label>
+            {% endfor %}
+          </div>
+          <p class="pim-small" data-pim-sheets-count></p>
+          <div class="project-edit-modal__actions pim-sheet-modal__actions">
+            <button type="button" class="btn btn--ghost" data-pim-sheets-cancel>Cancel</button>
+            <button type="button" class="btn btn--primary" data-pim-sheets-apply>Use selected worksheets</button>
+          </div>
+        </div>
+      </dialog>
+      <p class="muted">For each worksheet, choose the row that holds the column headers. Rows above the header and empty rows are skipped.</p>
+      {% for sheet in workbook.sheets %}
+      {% set st = (opts.sheet_settings or {}).get(sheet.name, {}) %}
+      {% set i = loop.index0 %}
+      {% set _shown = 100 %}
+      <article class="pim-sheet{% if sheet.name not in (opts.sheets or []) %} is-off{% endif %}" data-pim-sheet="{{ i }}" data-header="{{ st.header_row or 1 }}">
+        <header class="pim-sheet__head">
+          <div class="pim-sheet__pick">
+            <strong>{{ sheet.name }}</strong> <span class="muted">{{ sheet.rows|length }} row(s) · {{ sheet.width }} column(s){% if sheet.truncated %} · truncated{% endif %}{% if sheet.formula_missing %} · {{ sheet.formula_missing }} formula cell(s) without a saved result{% endif %}{% if sheet.errors %} · {{ sheet.errors }} error cell(s){% endif %}</span>
+          </div>
+          <label class="field field--inline"><span class="field-label">Header row</span>
+            <input type="number" min="1" max="{{ [sheet.rows|length, 1]|max }}" name="header_{{ i }}" value="{{ st.header_row or 1 }}" class="input form-input pim-num" data-pim-header-input></label>
+          <label class="field field--inline"><span class="field-label">Skip rows after header</span>
+            <input type="number" min="0" max="50" name="skip_{{ i }}" value="{{ st.skip_rows or 0 }}" class="input form-input pim-num"></label>
+        </header>
+        {% if not fixed_day %}
+        <div class="pim-sheet__day" data-pim-dayctx>
+          <span class="field-label">This worksheet's day</span>
+          <input type="text" name="unit_{{ i }}" value="{{ st.unit or '' }}" placeholder="Unit (e.g. 1)" class="input form-input pim-num" aria-label="Unit for {{ sheet.name }}">
+          <input type="text" name="day_{{ i }}" value="{{ st.day or '' }}" placeholder="Day (e.g. 5)" class="input form-input" aria-label="Day for {{ sheet.name }}">
+          <input type="text" name="date_{{ i }}" value="{{ st.date or '' }}" placeholder="Date (YYYY-MM-DD)" class="input form-input" aria-label="Date for {{ sheet.name }}">
+        </div>
+        {% endif %}
+        <div class="pim-table-wrap pim-table-wrap--preview">
+          <table class="pim-table pim-table--raw">
+            <tbody data-pim-sheet-rows>
+              {% for row in sheet.rows[:_shown] %}
+              <tr data-row-number="{{ loop.index }}">
+                <th scope="row" class="pim-rownum">{{ loop.index }}</th>
+                {% for cell in row %}<td class="pim-cell pim-cell--{{ cell.kind }}" title="{{ cell.display }}">{{ cell.display|truncate(40, True, '…') }}</td>{% endfor %}
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="pim-sheet__more">
+          <span class="muted pim-small" data-pim-sheet-count>Showing {{ [sheet.rows|length, _shown]|min }} of {{ sheet.rows|length }} rows</span>
+          {% if sheet.rows|length > _shown %}
+          <button type="button" class="btn btn--small btn--ghost" data-pim-sheet-more data-url="{{ url_for('production_import_sheet_rows', project_id=project.id, token=sess.token, sheet=i, start=_shown) }}">Show all {{ sheet.rows|length }} rows</button>
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+      {% if workbook.warnings %}<ul class="pim-alert pim-alert--warn pim-list">{% for w in workbook.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+    </section>
+    <div class="pim-actions">
+      <button type="submit" class="btn btn--ghost" form="pim-cancel-form">Cancel import</button>
+      <button type="submit" class="btn btn--primary">Continue to mapping</button>
+    </div>
+  </form>
+  {% if source %}
+  {% set _loaded_ids = (source.loaded or [])|map(attribute='sheet_id')|list %}
+  {% set _others = (source.available or [])|rejectattr('sheet_id', 'in', _loaded_ids)|list %}
+  {% if _others %}
+  <section class="panel pim-panel">
+    <h2 class="panel-title">Other worksheets in this spreadsheet</h2>
+    <p class="muted">Only the worksheets above are in your snapshot. Load more to select them; the snapshot is taken again for all loaded worksheets.</p>
+    <form method="post" action="{{ url_for('production_import_source', project_id=project.id, token=sess.token) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="load">
+      <input type="hidden" name="back" value="sheets">
+      <div class="pim-sheetpick">
+        {% for s in _others %}
+        <label class="pim-check"><input type="checkbox" name="sheet_ids" value="{{ s.sheet_id }}"> {{ s.title }} <span class="muted">{{ s.rows }} × {{ s.cols }}{% if s.hidden %} · hidden{% endif %}</span></label>
+        {% endfor %}
+      </div>
+      <div class="pim-actions pim-actions--start"><button type="submit" class="btn btn--small btn--secondary" data-pim-busy="Loading…">Load selected worksheets</button></div>
+    </form>
+  </section>
+  {% endif %}
+  {% endif %}
+  {% endif %}
+
+  {# ------------------------------------------------------------------ Mapping #}
+  {% if step == 'mapping' %}
+  <form method="post" class="pim-panel-stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if errors %}<ul class="pim-alert pim-alert--error pim-list">{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+
+    <section class="panel pim-panel">
+      <div class="pim-panel__head">
+        <h2 class="panel-title">Map columns</h2>
+        <div class="pim-presets">
+          {% if presets %}
+          <select name="preset_id" class="input form-input" aria-label="Mapping preset">
+            {% for p in presets %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+          </select>
+          <button type="submit" name="action" value="apply_preset" class="btn btn--small btn--secondary" formnovalidate>Apply preset</button>
+          <button type="submit" name="action" value="remove_preset" class="btn btn--small btn--ghost" formnovalidate onclick="return window.confirm('Remove this mapping preset for everyone on the project?');">Remove</button>
+          {% endif %}
+        </div>
+      </div>
+      <p class="muted">Suggestions come from English and Arabic header names. Check every column: nothing is imported until you confirm. Columns set to “Don't import” are listed in the preview.</p>
+      <div class="pim-table-wrap">
+        <table class="pim-table pim-table--map">
+          <colgroup><col class="pim-map__c-col"><col class="pim-map__c-sheet"><col><col class="pim-map__c-field"></colgroup>
+          <thead><tr><th>Column in file</th><th>Worksheets</th><th>Sample values</th><th>BigBang field</th></tr></thead>
+          <tbody>
+            {% for c in columns %}
+            {% set cur = current_mapping.get(c.key, '') %}
+            <tr class="{% if not cur %}is-ignored{% endif %}">
+              <td><strong>{{ c.header }}</strong></td>
+              <td class="muted pim-small">{% for s in c.sheets %}{{ s }} <span class="pim-map__letter">{{ c.letters[loop.index0] }}</span>{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+              <td><div class="pim-samples">{% for s in c.samples %}<span class="pim-sample" title="{{ s }}">{{ s }}</span>{% else %}<span class="muted pim-small">empty</span>{% endfor %}</div></td>
+              <td>
+                <div class="pim-map__field">
+                  <select name="map__{{ c.key }}" class="input form-input" aria-label="Field for {{ c.header }}" data-pim-map-select>
+                    <option value="">— Don't import —</option>
+                    {% for f in allowed_fields %}<option value="{{ f.key }}"{% if cur == f.key %} selected{% endif %}>{{ f.label }}</option>{% endfor %}
+                  </select>
+                  {% if suggested.get(c.key) and suggested.get(c.key) == cur and not opts.mapping_touched %}<span class="pim-badge pim-badge--hint">Suggested</span>{% endif %}
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="muted">No columns found under the chosen header rows.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="muted pim-small">Supported fields: {% for f in allowed_fields %}{{ f.label }}{% if not loop.last %}, {% endif %}{% endfor %}. Other information (for example camera, lens or cast) has no BigBang field and is not imported.</p>
+    </section>
+
+    <section class="panel pim-panel">
+      <h2 class="panel-title">Defaults for empty cells</h2>
+      <p class="muted">Used only when a row's cell is empty or the column is not mapped.</p>
+      {% set d = opts.defaults or {} %}
+      <div class="pim-grid">
+        {% if not fixed_day %}
+        <label class="field"><span class="field-label">Unit</span><input type="text" name="default__unit_number" value="{{ d.unit_number or '' }}" class="input form-input" placeholder="e.g. 1"></label>
+        <label class="field"><span class="field-label">Shooting day</span><input type="text" name="default__day_name" value="{{ d.day_name or '' }}" class="input form-input" placeholder="e.g. 5"></label>
+        <label class="field"><span class="field-label">Shooting date</span><input type="text" name="default__shooting_date" value="{{ d.shooting_date or '' }}" class="input form-input" placeholder="YYYY-MM-DD"></label>
+        {% endif %}
+        <label class="field"><span class="field-label">Item type</span>
+          <select name="default__item_type" class="input form-input">
+            <option value="">Scene (form default)</option>
+            {% for t in item_types %}<option value="{{ t }}"{% if d.item_type == t %} selected{% endif %}>{{ t }}</option>{% endfor %}
+          </select>
+        </label>
+        {% if is_tv %}
+        <label class="field"><span class="field-label">Episode</span><input type="text" name="default__episode" value="{{ d.episode or '' }}" class="input form-input" placeholder="e.g. 3 or X"></label>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel pim-panel" id="examples">
+      <h2 class="panel-title">How values are read</h2>
+      {% set po = opts.parse or {} %}
+      <div class="pim-grid">
+        <label class="field"><span class="field-label">Date order{% if examples.date_ambiguous and not po.date_order %} <span class="pim-badge pim-badge--warn">needed</span>{% endif %}</span>
+          <select name="date_order" class="input form-input">
+            <option value="">Only accept unambiguous dates</option>
+            {% for val, label in date_orders %}<option value="{{ val }}"{% if po.date_order == val %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="field"><span class="field-label">Duration format</span>
+          <select name="duration_format" class="input form-input">
+            {% for val, label in duration_formats %}<option value="{{ val }}"{% if (po.duration_format or 'auto') == val %} selected{% endif %}>{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="field"><span class="field-label">Values meaning “no information”</span>
+          <input type="text" name="blank_tokens" value="{{ blank_tokens }}" class="input form-input" placeholder="--, n/a"></label>
+      </div>
+      <div class="pim-grid pim-grid--wide">
+        <label class="field"><span class="field-label">Values meaning Yes (all status columns)</span><input type="text" name="true_tokens" value="{{ true_tokens }}" class="input form-input"></label>
+        <label class="field"><span class="field-label">Values meaning No (all status columns)</span><input type="text" name="false_tokens" value="{{ false_tokens }}" class="input form-input"></label>
+      </div>
+      <p class="muted pim-small">Comma-separated, case-insensitive. Empty and “no information” cells never change a stored value. Values specific to one column are defined under “Status values” below.</p>
+      {% if examples.examples %}
+      <div class="pim-examples">
+        {% for field, items in examples.examples.items() %}
+        <div class="pim-example">
+          <h3>{{ fields|selectattr('key', 'equalto', field)|map(attribute='label')|first }}</h3>
+          <ul>{% for ex in items %}<li><code>{{ ex.raw }}</code>{% if ex.kind not in ('text', 'empty') %} <span class="muted">({{ ex.kind }} cell)</span>{% endif %} → {% if ex.error %}<span class="pim-err">{{ ex.error }}</span>{% else %}<strong>{{ ex.value }}</strong>{% endif %}</li>{% endfor %}</ul>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if examples.formula_missing %}<p class="pim-alert pim-alert--warn">{{ examples.formula_missing }} formula cell(s) have no saved result. Their rows are marked Invalid unless you recalculate and save the workbook in Excel.</p>{% endif %}
+      <button type="submit" name="action" value="examples" class="btn btn--small btn--secondary" formnovalidate>Update examples</button>
+    </section>
+
+    {# ---- Durations ---- #}
+    {% if examples.durations %}
+    <section class="panel pim-panel" id="prep-durations">
+      <h2 class="panel-title">Durations</h2>
+      {% for d in examples.durations %}
+      <div class="pim-prep">
+        <div class="pim-prep__head">
+          <strong>{{ d.header or ('Column ' ~ d.column) }}</strong> <span class="muted pim-small">{{ d.sheet }} · column {{ d.column }}</span>
+          <span class="pim-prep__chips">
+            {% for kind, n in d.counts.items() %}<span class="pim-badge">{{ {'elapsed': 'Elapsed duration', 'time_of_day': 'Time of day', 'number': 'Number', 'text': 'Text'}[kind] }} · {{ n }}</span>{% endfor %}
+            {% if d.placeholders %}<span class="pim-badge">“no information” · {{ d.placeholders }}</span>{% endif %}
+          </span>
+        </div>
+        <p class="muted pim-small">Formats: {% for f, n in d.formats %}<code>{{ f }}</code> ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}{% if d.longest %} · longest Excel value {{ d.longest }}{% endif %}</p>
+        {% if d.examples %}
+        <div class="pim-table-wrap"><table class="pim-table pim-table--dur">
+          <thead><tr><th>Cell</th><th>Shows</th><th>Format</th><th>Type</th><th>As shown in Excel</th><th>Shifted</th><th>Result with current choice</th></tr></thead>
+          <tbody>{% for ex in d.examples %}<tr>
+            <td><code>{{ ex.ref }}</code></td><td><code>{{ ex.raw }}</code></td><td class="muted"><code>{{ ex.fmt }}</code></td><td>{{ ex.kind }}</td>
+            <td>{{ ex.as_shown or '—' }}</td><td class="muted">{{ ex.shifted or '—' }}</td>
+            <td>{% if ex.error %}<span class="pim-err pim-small">{{ ex.error }}</span>{% else %}<strong>{{ ex.result }}</strong>{% endif %}</td>
+          </tr>{% endfor %}</tbody>
+        </table></div>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% if examples.has_excel_times %}
+      <fieldset class="pim-confirm{% if examples.duration_needs_choice and not po.excel_time_mode %} is-needed{% endif %}">
+        <legend>How should Excel time cells be read?{% if examples.duration_needs_choice and not po.excel_time_mode %} <span class="pim-badge pim-badge--warn">confirm</span>{% endif %}</legend>
+        {% for val, label in excel_time_modes %}
+        <label class="pim-check"><input type="radio" name="excel_time_mode" value="{{ val }}"{% if po.excel_time_mode == val %} checked{% endif %}>
+          <span>{{ label }}{% if val == examples.duration_recommended %} <span class="pim-badge pim-badge--hint">Recommended</span>{% endif %}</span></label>
+        {% endfor %}
+        <p class="muted pim-small">
+          {% if examples.duration_needs_choice %}Some cells are stored as a time of day (for example <code>h:mm:ss</code>), so BigBang will not guess.{% else %}All Excel cells use an elapsed-duration format such as <code>[h]:mm:ss</code> and are read as shown unless you choose otherwise.{% endif %}
+          Durations over 24 hours are kept in full. Fractions of a second round to the nearest second (exactly half rounds up).
+          {% if not examples.duration_recommended %}<strong>Every Excel time has whole minutes only — check whether the values were typed as minutes:seconds.</strong>{% endif %}
+        </p>
+        <button type="submit" name="action" value="examples" class="btn btn--small btn--ghost" formnovalidate>Update examples</button>
+      </fieldset>
+      {% else %}
+      <input type="hidden" name="excel_time_mode" value="{{ po.excel_time_mode or '' }}">
+      {% endif %}
+    </section>
+    {% else %}
+    <input type="hidden" name="excel_time_mode" value="{{ po.excel_time_mode or '' }}">
+    {% endif %}
+
+    {# ---- Status values ---- #}
+    {% if examples.tokens %}
+    <section class="panel pim-panel" id="prep-tokens">
+      <h2 class="panel-title">Status values{% if examples.tokens_unknown %} <span class="pim-badge pim-badge--warn">{{ examples.tokens_unknown }} to define</span>{% endif %}</h2>
+      <p class="muted pim-small">Each distinct value found in the status columns. Definitions apply to that column only. “Ignore” means no information: the stored value is kept. To skip a column entirely, set it to “Don't import” above.</p>
+      {% for fkey, t in examples.tokens.items() %}
+      <div class="pim-prep">
+        <div class="pim-prep__head"><strong>{{ t.label }}</strong> <span class="muted pim-small">{{ t.columns|join(', ') }}</span></div>
+        <div class="pim-table-wrap"><table class="pim-table pim-table--tokens">
+          <thead><tr><th>Value</th><th>Cells</th><th>Examples</th><th>Means</th></tr></thead>
+          <tbody>
+            {% for item in t["items"] %}
+            <tr class="{% if not item.meaning %}is-unknown{% endif %}">
+              <td><code>{{ item.display }}</code></td>
+              <td>{{ item.count }}</td>
+              <td class="muted pim-small">{{ item.samples|join(', ') }}</td>
+              <td>
+                <input type="hidden" name="tokname__{{ fkey }}__{{ loop.index0 }}" value="{{ item.display }}">
+                <select name="tok__{{ fkey }}__{{ loop.index0 }}" class="input form-input" aria-label="Meaning of {{ item.display }} in {{ t.label }}">
+                  {% set scoped = (field_tokens.get(fkey) or {}).get(item.token, '') %}
+                  <option value="">{% if item.scope == 'shared' %}Shared list: {{ 'Yes' if item.meaning == 'yes' else 'No' }}{% else %}— Choose —{% endif %}</option>
+                  {% for val, label in token_choices %}<option value="{{ val }}"{% if scoped == val %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table></div>
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {# ---- Fill down ---- #}
+    {% if examples.fill_candidates %}
+    <section class="panel pim-panel" id="prep-fill">
+      <h2 class="panel-title">Fill down</h2>
+      <p class="muted pim-small">Some day-level values are written only on the first row of each group. Fill-down carries a value to the blank cells below it in the same worksheet. It never fills upward or overwrites a value, and it stops at blank, summary and repeated-header rows. A new Day starts without the previous Day's Location and Date. Inherited values are marked in the preview.</p>
+      {% for sheet_name in opts.sheets or [] %}
+      {% set si = loop.index0 %}
+      {% set cands = examples.fill_candidates.get(sheet_name) %}
+      {% if cands %}
+      {% set st = (opts.sheet_settings or {}).get(sheet_name, {}) %}
+      {% set decided = 'fill_down' in st %}
+      <div class="pim-prep{% if not decided and cands|selectattr('suggested')|list %} is-needed{% endif %}">
+        <div class="pim-prep__head"><strong>{{ sheet_name }}</strong>{% if not decided and cands|selectattr('suggested')|list %} <span class="pim-badge pim-badge--warn">choose</span>{% endif %}</div>
+        <input type="hidden" name="fill_seen__{{ si }}" value="1">
+        <div class="pim-fill__mode" role="radiogroup" aria-label="Fill down for {{ sheet_name }}">
+          <label class="pim-check"><input type="radio" name="fill_mode__{{ si }}" value="fill"{% if decided and st.fill_down %} checked{% endif %}> <strong>Fill down the ticked columns</strong></label>
+          <label class="pim-check"><input type="radio" name="fill_mode__{{ si }}" value="off"{% if decided and not st.fill_down %} checked{% endif %}> <strong>Keep blank cells blank</strong></label>
+        </div>
+        <div class="pim-fill">
+          {% for c in cands %}
+          <label class="pim-check pim-fill__opt">
+            <input type="checkbox" name="fill__{{ si }}" value="{{ c.field }}"{% if c.field in (st.fill_down or []) %} checked{% endif %}>
+            <span><strong>Fill down {{ c.label }}</strong> <span class="muted">(column {{ c.column }})</span>{% if c.suggested %} <span class="pim-badge pim-badge--hint">Suggested</span>{% endif %}
+              <span class="pim-small muted pim-fill__stats">Value in {{ c.explicit }} row(s); blank in {{ c.blank }} data row(s) below a value{% if c.merged %}, of which {{ c.merged }} are merged cells{% endif %}.</span></span>
+          </label>
+          {% endfor %}
+          {% if cands|selectattr('field', 'equalto', 'location')|list and cands|selectattr('field', 'equalto', 'day_name')|list %}
+          <label class="pim-check pim-small"><input type="checkbox" name="fill_across__{{ si }}" value="1"{% if st.fill_location_across_days %} checked{% endif %}> Also carry Location into a new Day when the new Day has none</label>
+          {% endif %}
+        </div>
+        {% if not decided %}<p class="muted pim-small">Choose one of the two options; nothing is filled until you do.</p>{% endif %}
+      </div>
+      {% endif %}
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {# ---- Preparation summary ---- #}
+    {% if prep %}
+    <section class="panel pim-panel" id="prep-summary">
+      <h2 class="panel-title">Preparation summary</h2>
+      <div class="pim-stats">
+        <div class="pim-stat"><span>{{ prep.rows }}</span>row(s) will be compared</div>
+        <div class="pim-stat"><span>{{ prep.invalid }}</span>row(s) with invalid values</div>
+        <div class="pim-stat"><span>{{ prep.unresolved_day }}</span>row(s) without a shooting day</div>
+        <div class="pim-stat pim-stat--muted"><span>{{ prep.ignored }}</span>column(s) not imported</div>
+      </div>
+      <ul class="pim-list pim-small">
+        <li>Excel times: {% if po.excel_time_mode %}{{ dict(excel_time_modes)[po.excel_time_mode].split(' — ')[0] }}{% else %}not set{% endif %}</li>
+        {% for fkey, mapping in field_tokens.items() %}<li>{{ fields|selectattr('key', 'equalto', fkey)|map(attribute='label')|first }}: {% for tok, m in mapping.items() %}“{{ tok }}” = {{ m }}{% if not loop.last %}, {% endif %}{% endfor %}</li>{% endfor %}
+        {% for s in prep.sheets %}
+        <li>{{ s.sheet }}: fill-down {% if s.fill_down %}{{ s.fill_down|map('replace', '_', ' ')|join(', ') }} — {% for f, n in s.stats.inherited.items() %}{{ n }} {{ f|replace('_', ' ') }} value(s) inherited{% if not loop.last %}, {% endif %}{% else %}nothing inherited{% endfor %}{% else %}off{% endif %}{% if s.stats.summary_rows %}; {{ s.stats.summary_rows }} summary/blank row(s) skipped{% endif %}{% if s.stats.group_headers %}; {{ s.stats.group_headers }} group header row(s){% endif %}{% if s.unresolved_day %}; <span class="pim-err">{{ s.unresolved_day }} row(s) have no shooting day</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      <p class="muted pim-small">Counts reflect the settings saved on this page. Click “Update examples” after changing settings to refresh them.</p>
+    </section>
+    {% endif %}
+
+    <section class="panel pim-panel pim-panel--row">
+      <label class="field field--inline"><span class="field-label">Save this mapping as a project preset</span>
+        <input type="text" name="preset_name" maxlength="80" class="input form-input" placeholder="Preset name"></label>
+      <button type="submit" name="action" value="save_preset" class="btn btn--small btn--secondary" formnovalidate>Save preset</button>
+    </section>
+
+    <div class="pim-actions">
+      <a class="btn btn--ghost" href="{{ url_for('production_import_sheets', project_id=project.id, token=sess.token) }}">Back</a>
+      <button type="submit" class="btn btn--ghost" form="pim-cancel-form">Cancel import</button>
+      <button type="submit" name="action" value="continue" class="btn btn--primary">Preview &amp; compare</button>
+    </div>
+  </form>
+  {% endif %}
+
+  {# ------------------------------------------------------------------ Preview #}
+  {% if step == 'preview' %}
+  {% set counts = plan.counts %}
+  <section class="panel pim-panel">
+    <div class="pim-panel__head">
+      <h2 class="panel-title">Comparison</h2>
+      <form method="post" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" name="action" value="refresh" class="btn btn--small btn--ghost">Compare again with current data</button>
+      </form>
+    </div>
+    <div class="pim-chips" role="group" aria-label="Filter rows by status">
+      <button type="button" class="pim-chip is-active" data-pim-filter="all">All <span>{{ plan.rows|length }}</span></button>
+      {% for key, label in status_labels.items() %}
+      <button type="button" class="pim-chip pim-chip--{{ key }}" data-pim-filter="{{ key }}"{% if not counts[key] %} disabled{% endif %}>{{ label }} <span>{{ counts[key] }}</span></button>
+      {% endfor %}
+    </div>
+    {% if plan.warnings %}<ul class="pim-alert pim-alert--warn pim-list">{% for w in plan.warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+    {% if plan.ignored_columns %}
+    <details class="pim-ignored">
+      <summary>{{ plan.ignored_columns|length }} column(s) are not imported</summary>
+      <ul class="pim-list">{% for c in plan.ignored_columns %}<li><strong>{{ c.header or ('Column ' ~ c.column) }}</strong> <span class="muted">({{ c.sheet }}, column {{ c.column }})</span> — {{ c.reason }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% set _prep = plan.preparation or {} %}
+    {% if _prep %}
+    <div class="pim-prepbar">
+      <span class="pim-prepbar__label">Prepared with</span>
+      <span>Excel times: {{ dict(excel_time_modes).get(_prep.excel_time_mode, 'not set').split(' — ')[0] }}</span>
+      {% for fkey, mapping in (_prep.field_tokens or {}).items() %}<span>{{ fields|selectattr('key', 'equalto', fkey)|map(attribute='label')|first }}: {% for tok, m in mapping.items() %}“{{ tok }}” = {{ m }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endfor %}
+      {% for s in _prep.sheets or [] %}<span>{{ s.sheet }}: fill-down {{ (s.fill_down|map('replace', '_', ' ')|join(', ')) or 'off' }}{% for f, n in (s.stats.inherited or {}).items() %} · {{ n }} {{ f|replace('_', ' ') }} inherited{% endfor %}{% if s.unresolved_day %} · <span class="pim-err">{{ s.unresolved_day }} without a day</span>{% endif %}</span>{% endfor %}
+      <a class="btn btn--small btn--ghost" href="{{ url_for('production_import_mapping', project_id=project.id, token=sess.token) }}#prep-durations">Change preparation</a>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="panel pim-panel" id="days">
+    <h2 class="panel-title">Shooting days</h2>
+    {% set _open_days = plan.days|selectattr('needs_decision')|list %}
+    {% if plan.days and plan.days[0].status != 'fixed' %}
+    <form method="post" class="pim-dayall" data-pim-dayall>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="days_all">
+      <div class="pim-dayall__head">
+        <h3>Apply to all days</h3>
+        <p class="muted pim-small">{{ _open_days|length }} of {{ plan.days|length }} days still need a choice. Set them all at once, then adjust any single day in the table below.{% if can_create_days %} Every shooting day needs a date.{% endif %}</p>
+      </div>
+      <div class="pim-dayall__grid">
+        <label class="pim-dayall__field">
+          <span>For each day</span>
+          <select name="all_choice" class="input form-input" data-pim-dayall-choice>
+            {% if can_create_days %}<option value="create">Create a new day</option>{% endif %}
+            <option value="skip">Skip its rows</option>
+          </select>
+        </label>
+        {% if can_create_days %}
+        <label class="pim-dayall__field" data-pim-dayall-create>
+          <span>First shooting date</span>
+          <input type="date" name="all_start" class="input form-input">
+        </label>
+        <fieldset class="pim-dayall__field pim-dayall__off" data-pim-dayall-create>
+          <legend>Days off</legend>
+          <div class="pim-dayall__weekdays">
+            {% for wd, label in weekdays %}<label><input type="checkbox" name="all_off" value="{{ wd }}"><span>{{ label }}</span></label>{% endfor %}
+          </div>
+        </fieldset>
+        {% endif %}
+        <label class="pim-dayall__field">
+          <span>Apply to</span>
+          <select name="all_scope" class="input form-input">
+            <option value="open">Days still needing a choice ({{ _open_days|length }})</option>
+            <option value="all">All days in the file ({{ plan.days|length }})</option>
+          </select>
+        </label>
+        <button type="submit" class="btn btn--small btn--secondary pim-dayall__go">Apply to days</button>
+      </div>
+      {% if can_create_days %}<p class="muted pim-small pim-dayall__note" data-pim-dayall-create>New days get consecutive dates in file order, per unit, skipping the days off. Days that already match an existing day keep it.</p>{% endif %}
+    </form>
+    {% endif %}
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="pim-table-wrap">
+        <table class="pim-table pim-table--days">
+          <colgroup><col><col class="pim-col-rows"><col><col class="pim-col-use"></colgroup>
+          <thead><tr><th>Day in file</th><th>Rows</th><th>Status</th><th>Use</th></tr></thead>
+          <tbody>
+            {% for g in plan.days %}
+            {% set dec = g.decision or {} %}
+            <tr class="pim-day pim-day--{{ g.status }}">
+              <td><strong>{{ g.label }}</strong><div class="muted pim-small">{{ g.sources|join(', ') }} · rows {{ g.row_span }}</div></td>
+              <td>{{ g.row_count }}</td>
+              <td>
+                <span class="pim-badge pim-badge--day-{{ g.status }}">{% if g.status == 'existing' or g.status == 'fixed' %}Existing day{% elif g.status == 'new' %}New day{% elif g.status == 'conflict' %}Date conflict{% elif g.status == 'ambiguous' %}Ambiguous{% else %}Invalid{% endif %}</span>
+                <div class="pim-small">{{ g.reason }}</div>
+                {% if g.warning %}<div class="pim-small pim-warn">{{ g.warning }}</div>{% endif %}
+                {% if g.decision_error %}<div class="pim-small pim-err">{{ g.decision_error }}</div>{% endif %}
+              </td>
+              <td class="pim-day__use"><div class="pim-day__stack">
+                {% if g.status == 'fixed' %}
+                <span>{{ g.label }}</span>
+                {% elif g.status != 'invalid' %}
+                <select name="day_choice__{{ g.key }}" class="input form-input" data-pim-day-choice>
+                  <option value="">{% if g.target and g.target.kind == 'existing' and not dec.choice %}{{ g.matched_label }}{% elif g.target and g.target.kind == 'new' and not dec.choice %}Create {{ g.target.day_name }} · {{ g.target.date }}{% else %}— Choose —{% endif %}</option>
+                  {% for d in all_days %}<option value="existing:{{ d.id }}"{% if dec.choice == 'existing:' ~ d.id %} selected{% endif %}>Use Unit {{ d.unit_number }} · {{ d.day_name }} · {{ d.shooting_date.strftime('%Y-%m-%d') }}</option>{% endfor %}
+                  {% if can_create_days %}<option value="create"{% if dec.choice == 'create' %} selected{% endif %}>Create a new day…</option>{% endif %}
+                  <option value="skip"{% if dec.choice == 'skip' %} selected{% endif %}>Skip this day's rows</option>
+                </select>
+                {% if can_create_days %}
+                <div class="pim-day__create" data-pim-day-create{% if dec.choice != 'create' %} hidden{% endif %}>
+                  <label><span>Name</span><input type="text" name="day_name__{{ g.key }}" value="{{ dec.day_name or g.new_name or g.day_name or '' }}" placeholder="Day name" class="input form-input" maxlength="50"></label>
+                  <label><span>Date <em>required</em></span><input type="date" name="day_date__{{ g.key }}" value="{{ dec.date or g.date or '' }}" class="input form-input" data-pim-day-date></label>
+                </div>
+                {% endif %}
+                {% endif %}
+                {% if g.location_change %}
+                <label class="pim-check pim-small"><input type="checkbox" name="day_location__{{ g.key }}" value="1"{% if dec.update_location %} checked{% endif %}> Update location: <span class="pim-old">{{ g.location_change.current or 'empty' }}</span> → <span class="pim-new">{{ g.location_change.incoming }}</span></label>
+                {% endif %}
+              </div></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="muted">No rows with a shooting day were found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if plan.days and plan.days[0].status != 'fixed' %}
+      <div class="pim-actions pim-actions--start"><button type="submit" name="action" value="days" class="btn btn--small btn--secondary">Apply day choices</button></div>
+      {% endif %}
+    </form>
+  </section>
+
+  <form method="post" class="panel pim-panel" id="pim-rows-form" data-pim-rows>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="decisions">
+    <input type="hidden" name="plan_hash" value="{{ sess.plan_hash }}">
+    <input type="hidden" name="decisions" value="" data-pim-decisions>
+    <div class="pim-panel__head">
+      <h2 class="panel-title">Rows</h2>
+      <div class="pim-bulk" role="group" aria-label="Bulk actions">
+        <button type="button" class="btn btn--small btn--ghost" data-pim-bulk="add-new">Add all New</button>
+        <button type="button" class="btn btn--small btn--ghost" data-pim-bulk="skip-new">Skip all New</button>
+        <button type="button" class="btn btn--small btn--ghost" data-pim-bulk="update-changed" title="Selects every non-identity change on Changed rows. Identity changes, clears and Ambiguous rows still need individual choices.">Select safe changes on Changed rows</button>
+        <button type="button" class="btn btn--small btn--ghost" data-pim-bulk="keep-changed">Keep all Changed</button>
+      </div>
+    </div>
+    <p class="muted pim-small">Identical rows are skipped, New rows are proposed for adding, Changed and Ambiguous rows are kept until you choose, and Invalid rows are excluded. Empty cells never erase stored values.</p>
+    <div class="pim-table-wrap">
+      <table class="pim-table pim-table--rows">
+        <thead><tr><th>Source</th><th>Status</th><th>Incoming</th><th>Existing record</th><th>Changes</th><th>Action</th></tr></thead>
+        <tbody>
+          {% for r in plan.rows %}
+          {% set d = decisions.get(r.id, {}) %}
+          {% set act = d.action or r.default_action %}
+          <tr class="pim-row pim-row--{{ r.status }}" data-pim-row="{{ r.id }}" data-status="{{ r.status }}" data-match="{{ r.match.id if r.match else '' }}">
+            <td class="pim-src"><strong>{{ r.sheet }}</strong><span class="muted">row {{ r.row_number }}</span></td>
+            <td>
+              <span class="pim-badge pim-badge--{{ r.status }}">{{ status_labels[r.status] }}</span>
+              <div class="pim-small">{{ r.reason }}</div>
+              {% if r.errors %}<ul class="pim-errors">{% for e in r.errors %}<li>{% if e.column %}<strong>{{ e.column }}</strong>: {% endif %}{% if e.value %}<code>{{ e.value }}</code> — {% endif %}{{ e.message }}</li>{% endfor %}</ul>{% endif %}
+            </td>
+            <td>
+              <div>{{ r.identity }}</div>
+              {% if r.day_label %}<div class="muted pim-small">{{ r.day_label }}</div>{% endif %}
+              {% if r.inherited %}<div class="pim-inh-list">{% for k, inh in r.inherited.items() %}<span class="pim-inh" title="Original cell was blank — value inherited from {{ inh.sheet }}!{{ inh['from'] }}{% if inh.how == 'merged' %} (merged cell){% endif %}">{{ fields|selectattr('key', 'equalto', k)|map(attribute='label')|first }} ⤓ {{ inh['from'] }}</span>{% endfor %}</div>{% endif %}
+              {% if r['values'] %}<details class="pim-values"><summary>Values</summary><dl>{% for k, v in r['values'].items() %}<dt>{{ fields|selectattr('key', 'equalto', k)|map(attribute='label')|first }}</dt><dd>{{ v }}{% if r.inherited and k in r.inherited %} <span class="pim-inh">inherited from {{ r.inherited[k].sheet }}!{{ r.inherited[k]['from'] }}{% if r.inherited[k].how == 'merged' %} · merged cell{% endif %} · cell was blank</span>{% endif %}</dd>{% endfor %}</dl></details>{% endif %}
+            </td>
+            <td>
+              {% if r.match %}
+              <div>{{ r.match.label }}</div>
+              {% if r.match.runtime_selected %}<div class="muted pim-small">Runtime take</div>{% endif %}
+              {% elif r.candidates %}
+              <fieldset class="pim-cands"><legend class="pim-small">Choose the row to update</legend>
+                {% for c in r.candidates %}
+                <label class="pim-check"><input type="radio" name="cand__{{ r.id }}" value="{{ c.id }}" data-pim-cand{% if d.target_id == c.id %} checked{% endif %}> {{ c.label }}{% if c.runtime_selected %} <span class="muted">(runtime take)</span>{% endif %}</label>
+                {% endfor %}
+              </fieldset>
+              {% elif r.conflict_record %}
+              <div class="muted pim-small">Existing #{{ r.conflict_record.id }} · {{ r.conflict_record.day }}</div>
+              {% elif r.legacy_match %}
+              <div class="muted pim-small">Legacy row #{{ r.legacy_match.id }}</div>
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td class="pim-changes">
+              {% if r.match %}{{ diff_block(r.match.id, r.diffs, r.clearable, true, d) }}
+              {% elif r.candidates %}{% for c in r.candidates %}{{ diff_block(c.id, c.diffs, c.clearable, d.target_id == c.id, d) }}{% endfor %}
+              {% elif r.status == 'new' %}<span class="muted pim-small">Added with the incoming values.</span>
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td>
+              <select class="input form-input pim-action" data-pim-action aria-label="Action for {{ r.sheet }} row {{ r.row_number }}"{% if r.allowed_actions|length < 2 %} disabled{% if r.status == 'invalid' %} title="Invalid rows can't be imported. Fix the reason under Status, then compare again."{% elif r.status == 'ambiguous' %} title="Choose this row's shooting day under Shooting days first."{% endif %}{% endif %}>
+                {% for a in r.allowed_actions %}<option value="{{ a }}"{% if a == act %} selected{% endif %}>{{ action_labels[a] }}</option>{% endfor %}
+              </select>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="muted">No data rows were found. Check the header row and mapping.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="pim-alert pim-alert--error" data-pim-client-error hidden></p>
+    <div class="pim-actions">
+      <a class="btn btn--ghost" href="{{ url_for('production_import_mapping', project_id=project.id, token=sess.token) }}">Back to mapping</a>
+      <button type="submit" class="btn btn--ghost" form="pim-cancel-form">Cancel import</button>
+      <button type="submit" class="btn btn--primary">Review &amp; confirm</button>
+    </div>
+  </form>
+  {% endif %}
+
+  {# ------------------------------------------------------------------ Confirm #}
+  {% if step == 'confirm' %}
+  <section class="panel pim-panel">
+    <h2 class="panel-title">Confirm import</h2>
+    <div class="pim-stats">
+      <div class="pim-stat"><span>{{ summary.days_created }}</span>new shooting day(s)</div>
+      <div class="pim-stat"><span>{{ summary.rows_added }}</span>row(s) added</div>
+      <div class="pim-stat"><span>{{ summary.rows_updated }}</span>row(s) updated ({{ summary.fields_updated }} field(s){% if summary.fields_cleared %}, {{ summary.fields_cleared }} cleared{% endif %})</div>
+      <div class="pim-stat"><span>{{ summary.day_locations_updated }}</span>day location(s) updated</div>
+      <div class="pim-stat pim-stat--muted"><span>{{ summary.rows_skipped }}</span>row(s) kept / skipped</div>
+    </div>
+    <ul class="pim-notes muted">
+      <li>Nothing is deleted: rows that are not in the file stay as they are.</li>
+      <li>New days join the material-registration queue. No copies, verified backups or Ready states are created.</li>
+      <li>Day and episode totals, runtime takes and completion are recalculated with the usual rules.</li>
+      <li>Everything is saved together; if anything fails, nothing is saved. If someone changed these rows since your preview, you will be asked to review again.</li>
+    </ul>
+    {% if identity_changes %}<p class="pim-alert pim-alert--warn">{{ identity_changes }} update(s) change a row's episode, scene or item type. Runtime takes and duplicate checks for those scenes are recalculated.</p>{% endif %}
+    {% if summary.fields_cleared %}<p class="pim-alert pim-alert--warn">{{ summary.fields_cleared }} stored value(s) will be cleared because you selected Clear.</p>{% endif %}
+
+    {% if new_days %}
+    <h3 class="pim-h3">New shooting days</h3>
+    <ul class="pim-list">{% for g in new_days %}<li>Unit {{ g.target.unit }} · {{ g.target.day_name }} · {{ g.target.date }}{% if g.target.location %} · {{ g.target.location }}{% endif %}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if updates %}
+    <h3 class="pim-h3">Updates</h3>
+    <div class="pim-table-wrap"><table class="pim-table">
+      <thead><tr><th>Source</th><th>Record</th><th>Changes</th></tr></thead>
+      <tbody>{% for u in updates %}<tr>
+        <td>{{ u.row.sheet }} · row {{ u.row.row_number }}</td><td>#{{ u.target_id }}</td>
+        <td>{% for f in u.fields %}<div{% if f.identity %} class="pim-field--identity"{% endif %}><strong>{{ f.label }}</strong> <span class="pim-old">{{ f.current or 'empty' }}</span> → <span class="pim-new">{{ f.incoming }}</span></div>{% endfor %}
+          {% for f in u.clears %}<div class="pim-field--clear">Clear <strong>{{ f.label }}</strong> <span class="pim-old">{{ f.current }}</span></div>{% endfor %}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% endif %}
+    {% if adds %}
+    <h3 class="pim-h3">Rows to add</h3>
+    <div class="pim-table-wrap"><table class="pim-table">
+      <thead><tr><th>Source</th><th>Day</th><th>Item</th></tr></thead>
+      <tbody>{% for r in adds[:200] %}<tr><td>{{ r.sheet }} · row {{ r.row_number }}</td><td>{{ r.day_label }}</td><td>{{ r.identity }}{% if r._action == 'add_reshoot' %} <span class="pim-badge pim-badge--hint">as Reshoot</span>{% endif %}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% if adds|length > 200 %}<p class="muted">…and {{ adds|length - 200 }} more.</p>{% endif %}
+    {% endif %}
+
+    {% if freshness %}
+    <div class="pim-fresh pim-fresh--{{ freshness.state }}" role="status">
+      {% if freshness.state == 'unchanged' %}
+      <strong>Source unchanged.</strong> {{ freshness.message }}
+      {% elif freshness.state == 'changed' %}
+      <strong>The source changed after your snapshot.</strong> {{ freshness.message }}
+      Importing now uses the snapshot you reviewed, not the newer values. To use the newer values, refresh the source and review again.
+      {% else %}
+      <strong>Could not check the source.</strong> {{ freshness.message }} BigBang cannot tell whether the worksheets changed since your snapshot.
+      {% endif %}
+      {% if freshness.state != 'unchanged' %}
+      <form method="post" action="{{ url_for('production_import_source', project_id=project.id, token=sess.token) }}" class="pim-fresh__refresh">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="refresh">
+        <input type="hidden" name="back" value="confirm">
+        <button type="submit" class="btn btn--small btn--secondary" data-pim-busy="Refreshing…">Refresh source and review again</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endif %}
+    <form method="post" class="pim-actions" data-pim-confirm>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="plan_hash" value="{{ sess.plan_hash }}">
+      {% if freshness and freshness.state != 'unchanged' %}
+      <label class="pim-check pim-fresh__ack"><input type="checkbox" name="ack_source" value="1" required> Import the reviewed snapshot ({{ (source.fetched_at or '')[:16]|replace('T', ' ') }} UTC) anyway</label>
+      {% endif %}
+      <a class="btn btn--ghost" href="{{ url_for('production_import_preview', project_id=project.id, token=sess.token) }}">Back to comparison</a>
+      <button type="submit" class="btn btn--ghost" form="pim-cancel-form">Cancel import</button>
+      <button type="submit" class="btn btn--primary"{% if not (summary.rows_added or summary.rows_updated or summary.day_locations_updated) %} disabled{% endif %}>Import now</button>
+    </form>
+  </section>
+  {% endif %}
+
+  {# ------------------------------------------------------------------ Results #}
+  {% if step == 'results' %}
+  {% set c = result.counts or {} %}
+  <section class="panel pim-panel">
+    <h2 class="panel-title">Import completed</h2>
+    <div class="pim-stats">
+      <div class="pim-stat"><span>{{ c.days_created or 0 }}</span>new shooting day(s)</div>
+      <div class="pim-stat"><span>{{ c.rows_added or 0 }}</span>row(s) added</div>
+      <div class="pim-stat"><span>{{ c.rows_updated or 0 }}</span>row(s) updated</div>
+      <div class="pim-stat pim-stat--muted"><span>{{ c.rows_skipped or 0 }}</span>row(s) kept / skipped</div>
+    </div>
+    <p class="muted pim-small">{{ result.file }} · {{ result.worksheets|join(', ') }} · {{ result.executed_at|replace('T', ' ') }}</p>
+    {% if result.days %}
+    <h3 class="pim-h3">Shooting days</h3>
+    <ul class="pim-daylinks">{% for d in result.days %}<li><a href="{{ url_for('project_production_day', project_id=project.id, day_id=d.id) }}">{{ d.label }}</a>{% if d.id in (result.created_days|map(attribute='id')|list) %} <span class="pim-badge pim-badge--new">New</span>{% endif %}</li>{% endfor %}</ul>
+    {% endif %}
+    <div class="pim-actions pim-actions--start">
+      <a class="btn btn--secondary" href="{{ url_for('production_import_results_csv', project_id=project.id, token=sess.token) }}">Download results (CSV)</a>
+      <a class="btn btn--ghost" href="{% if sess.target_day_id %}{{ url_for('project_production_day', project_id=project.id, day_id=sess.target_day_id) }}{% else %}{{ url_for('project_production', project_id=project.id) }}{% endif %}">Back to production</a>
+    </div>
+    <div class="pim-table-wrap">
+      <table class="pim-table">
+        <thead><tr><th>Source</th><th>Outcome</th><th>Record</th><th>Item</th><th>Details</th></tr></thead>
+        <tbody>{% for r in result.rows %}<tr class="pim-row--{{ r.outcome }}">
+          <td>{{ r.sheet }} · row {{ r.row }}</td>
+          <td><span class="pim-badge pim-badge--out-{{ r.outcome }}">{{ r.outcome|capitalize }}</span></td>
+          <td>{% if r.record_id %}#{{ r.record_id }}{% endif %}</td>
+          <td>{{ r.identity }}</td><td class="pim-small">{{ r.message }}</td>
+        </tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if sess and step not in ('results',) %}
+  <form method="post" id="pim-cancel-form" action="{{ url_for('production_import_cancel', project_id=project.id, token=sess.token) }}" onsubmit="return window.confirm('Cancel this import? Nothing has been changed.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/production-import.js') }}" defer></script>
+{% endblock %}

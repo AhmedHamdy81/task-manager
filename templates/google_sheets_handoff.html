@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Connect Google Sheets · {{ app_name }}{% endblock %}
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/production-import.css') }}">
+{% endblock %}
+{% block content %}
+<div class="production-page pim">
+  <section class="panel pim-panel pim-handoff" data-pim-handoff data-status-url="{{ status_url }}" data-return-url="{{ return_url }}">
+    <h2 class="panel-title">Connect Google Sheets in your browser</h2>
+    <p>Google does not allow signing in inside the desktop app. Continue in your web browser — it only connects Google Sheets to your BigBang account and does not sign the browser in to BigBang.</p>
+    <ol class="pim-list">
+      <li>Click <strong>Open browser</strong> and choose your Google account.</li>
+      <li>Allow BigBang to <strong>see your Google Sheets spreadsheets</strong> (read-only).</li>
+      <li>Come back here — this page continues automatically.</li>
+    </ol>
+    <div class="pim-actions pim-actions--start">
+      <a class="btn btn--primary" href="{{ handoff_url }}" target="_blank" rel="noopener noreferrer" data-pim-handoff-open>Open browser</a>
+      <a class="btn btn--ghost" href="{{ return_url }}">Cancel</a>
+    </div>
+    <p class="muted pim-small" data-pim-handoff-state role="status">Waiting for Google… The link works once and expires in 5 minutes.</p>
+  </section>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/production-import.js') }}" defer></script>
+{% endblock %}

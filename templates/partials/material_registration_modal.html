@@ -75,13 +75,55 @@
         <span class="mr-reg-label">Notes <span class="mr-reg-optional">(optional)</span></span>
         <textarea name="notes" rows="2" maxlength="4000" class="mr-reg-input" data-mr-reg-field="notes"></textarea>
       </label>
+
+      <section class="mr-reg-done mr-reg-field--wide" data-mr-reg-done hidden>
+        <label class="mr-reg-done__toggle">
+          <input type="checkbox" data-mr-reg-done-toggle>
+          <span><strong>Already backed up and proxied</strong> <span class="mr-reg-optional">— material processed before BigBang</span></span>
+        </label>
+        <div class="mr-reg-done__body" data-mr-reg-done-body hidden>
+          <div class="mr-reg-grid">
+            <label class="mr-reg-field">
+              <span class="mr-reg-label">Backed up to</span>
+              <select class="mr-reg-input" data-mr-reg-done-field="backup_volume_id"><option value="">— Projects Backup volume —</option></select>
+            </label>
+            <label class="mr-reg-field">
+              <span class="mr-reg-label">Backup folder <span class="mr-reg-optional">(optional)</span></span>
+              <input type="text" maxlength="512" class="mr-reg-input" placeholder="/Volumes/…" autocomplete="off" data-mr-reg-done-field="backup_path">
+            </label>
+            <label class="mr-reg-field">
+              <span class="mr-reg-label">Proxies placed on</span>
+              <select class="mr-reg-input" data-mr-reg-done-field="proxy_volume_id"><option value="">— In-house Storage volume —</option></select>
+            </label>
+            <label class="mr-reg-field">
+              <span class="mr-reg-label">Proxy folder <span class="mr-reg-optional">(optional)</span></span>
+              <input type="text" maxlength="512" class="mr-reg-input" placeholder="/Volumes/…" autocomplete="off" data-mr-reg-done-field="proxy_path">
+            </label>
+            <label class="mr-reg-field">
+              <span class="mr-reg-label">Done on <span class="mr-reg-optional">(optional)</span></span>
+              <input type="date" class="mr-reg-input" data-mr-reg-done-field="done_on">
+              <span class="mr-reg-hint">Empty: each day's shooting date.</span>
+            </label>
+          </div>
+          <details class="mr-reg-done__more" data-mr-reg-done-more>
+            <summary>Same for other days of this project <span class="mr-reg-done__count" data-mr-reg-done-count></span></summary>
+            <p class="mr-reg-hint">Days that already have a WorkFlow are not listed. They use their own registered sizes and saved proxy folder.</p>
+            <div class="mr-reg-done__tools">
+              <button type="button" class="btn btn--ghost btn--small" data-mr-reg-done-all="1">Select all</button>
+              <button type="button" class="btn btn--ghost btn--small" data-mr-reg-done-all="0">Clear</button>
+            </div>
+            <div class="mr-reg-done__days" data-mr-reg-done-days></div>
+          </details>
+        </div>
+      </section>
     </div>
 
-    <p class="mr-reg-footnote">Registration records what arrived. It does not start copying and does not mark material as backed up or protected.</p>
+    <p class="mr-reg-footnote" data-mr-reg-footnote>Registration records what arrived. It does not start copying and does not mark material as backed up or protected.</p>
     <div class="mr-reg-actions">
       <button type="button" class="btn btn--ghost" data-mr-reg-close>Cancel</button>
       <button type="submit" class="btn btn--ghost" value="save" data-mr-reg-submit="save" disabled>Save registration only</button>
       <button type="submit" class="btn btn--primary" value="start" data-mr-reg-submit="start" disabled>Save and start workflow</button>
+      <button type="submit" class="btn btn--primary" value="record_done" data-mr-reg-submit="record_done" hidden disabled>Record as done</button>
     </div>
   </form>
 </dialog>

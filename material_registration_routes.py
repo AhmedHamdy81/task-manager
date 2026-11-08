@@ -6,7 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from flask import Flask, abort, jsonify, request, url_for
+from flask import Flask, abort, flash, jsonify, request, url_for
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
@@ -372,6 +372,149 @@ def register_material_registration_routes(app: Flask, ctx: dict) -> SimpleNamesp
             day_change = (day_before, pas.shooting_day_snapshot(day))
         return reg, changes, day_change
 
+    # --- "Record as done" (material processed before BigBang) ----------------
+
+    def _stampable_days(project_id: int, *, exclude_id: int | None = None) -> list:
+        """Project days that have no workflow yet, in shooting order."""
+        days = ShootingDay.query.filter_by(project_id=int(project_id)).all()
+        taken = wf.workflow_ids_by_day(wf_models, [int(d.id) for d in days])
+        legacy = {
+            int(w.shooting_day_id)
+            for w in wf_models.MachineRoomMediaWorkflow.query.filter_by(project_id=int(project_id)).all()
+        }
+        out = [d for d in days if int(d.id) not in taken and int(d.id) not in legacy and int(d.id) != exclude_id]
+        return sorted(out, key=lambda d: (d.unit_number or 0, d.shooting_date or datetime.min.date(), d.id))
+
+    def _role_volume(raw, role: str, label: str) -> tuple[Any, str]:
+        try:
+            vol = db.session.get(StorageVolume, int(raw)) if raw not in (None, "", "0", 0) else None
+        except (TypeError, ValueError):
+            vol = None
+        if vol is None or mr_support.normalize_storage_role(vol.storage_role) != role:
+            return None, f"Select the {label} volume."
+        return vol, ""
+
+    def _record_done(acc, day, data: dict, values: dict):
+        backup_vol, err = _role_volume(data.get("backup_volume_id"), wf.ROLE_PROJECTS_BACKUP, "Projects Backup")
+        if err:
+            return _json_error(err)
+        proxy_vol, err = _role_volume(data.get("proxy_volume_id"), wf.ROLE_INHOUSE, "In-house Storage")
+        if err:
+            return _json_error(err)
+        if StorageVolumeProjectLink.query.filter_by(
+            volume_id=int(proxy_vol.id), project_id=int(day.project_id)
+        ).first() is None:
+            return _json_error("Choose an In-house Storage volume linked to this project.")
+        backup_path, err = wf.validate_destination_path(
+            data.get("backup_path"), backup_vol.mount_path or "", wf.volume_label(backup_vol))
+        if err:
+            return _json_error(err.replace("Destination", "Backup"))
+        proxy_path, err = wf.validate_destination_path(
+            data.get("proxy_path"), proxy_vol.mount_path or "", wf.volume_label(proxy_vol))
+        if err:
+            return _json_error(err.replace("Destination", "Proxy"))
+        done_on = None
+        raw_done = str(data.get("done_on") or "").strip()
+        if raw_done:
+            try:
+                done_on = datetime.strptime(raw_done, "%Y-%m-%d").date()
+            except ValueError:
+                return _json_error("Enter a valid date for when the work was done.")
+            if done_on > today_fn():
+                return _json_error("The done date cannot be in the future.")
+        raw_ids = data.get("also_day_ids") or []
+        if not isinstance(raw_ids, list) or len(raw_ids) > 500:
+            return _json_error("Invalid list of other shooting days.")
+        try:
+            extra_ids = {int(x) for x in raw_ids} - {int(day.id)}
+        except (TypeError, ValueError):
+            return _json_error("Invalid list of other shooting days.")
+        if extra_ids:
+            found = ShootingDay.query.filter(ShootingDay.id.in_(list(extra_ids))).all()
+            if len(found) != len(extra_ids) or any(int(d.project_id) != int(day.project_id) for d in found):
+                return _json_error("Other shooting days must belong to this project.")
+        allowed = {int(d.id): d for d in _stampable_days(int(day.project_id), exclude_id=int(day.id))}
+        if wf.find_workflow_for_day(wf_models, int(day.project_id), int(day.id)) is not None:
+            return _json_error("This day already has a WorkFlow. Open it to update it.", 409)
+
+        for attempt in (1, 2):
+            try:
+                reg, changes, day_change = _apply(acc, day, values)
+                db.session.flush()
+                break
+            except IntegrityError:
+                db.session.rollback()
+                day = _day_or_404(int(day.id))
+                if attempt == 2:
+                    raise
+
+        uid = directory_user_id_for_account(acc)
+        regs = {int(r.shooting_day_id): r for r in Registration.query.filter(
+            Registration.shooting_day_id.in_(list(extra_ids) or [0])).all()}
+
+        def media(state, size):
+            return float(size) if state == reg_support.MEDIA_PRESENT and size is not None else None
+
+        def done_at_for(d):
+            when = done_on or d.shooting_date or today_fn()
+            return datetime.combine(when, datetime.min.time()).replace(hour=12)
+
+        plan = [(day, backup_path, proxy_path, media(values["video_state"], values["video_size_tb"]),
+                 media(values["audio_state"], values["audio_size_gb"]))]
+        for d_id in sorted(extra_ids):
+            d = allowed.get(d_id)
+            if d is None:
+                continue
+            r = regs.get(d_id)
+            plan.append((d, "", "", media(getattr(r, "video_state", None), getattr(r, "video_size_tb", None)),
+                         media(getattr(r, "audio_state", None), getattr(r, "audio_size_gb", None))))
+
+        # Days with a workflow were filtered out above; all stamps go in one transaction.
+        recorded, skipped = [], len(extra_ids) - (len(plan) - 1)
+        try:
+            for d, b_path, p_path, video_tb, audio_gb in plan:
+                own_proxy_path = p_path
+                if not own_proxy_path and getattr(d, "proxy_volume_id", None) == proxy_vol.id:
+                    own_proxy_path = (getattr(d, "proxy_path", "") or "").strip()
+                wf.record_day_as_done(
+                    db, wf_models, d,
+                    backup_volume=backup_vol, backup_path=b_path,
+                    video_size_tb=video_tb, audio_size_gb=audio_gb,
+                    proxy_volume=proxy_vol, proxy_path=own_proxy_path,
+                    done_at=done_at_for(d), actor_user_id=uid, now_fn=now_local,
+                )
+                if hasattr(d, "proxy_volume_id") and not getattr(d, "proxy_volume_id", None) and own_proxy_path:
+                    d.proxy_volume_id = int(proxy_vol.id)
+                    d.proxy_path = own_proxy_path[:1024]
+                recorded.append(d)
+        except (wf.WorkflowDayConflict, IntegrityError):
+            db.session.rollback()
+            return _json_error("A selected day was given a WorkFlow meanwhile. Reload and try again.", 409)
+        for d in recorded:
+            db.session.add(MachineRoomAuditLog(
+                account_id=int(acc.id), action="workflow_recorded_done", entity_type="shooting_day",
+                entity_id=int(d.id), created_at=now_local(),
+                detail=(f"{reg_support.day_label(d)}: recorded as done before BigBang — backup "
+                        f"{wf.volume_label(backup_vol)}, proxies {wf.volume_label(proxy_vol)}")[:4000],
+            ))
+        if reg.completed_at is None:
+            reg.completed_at = now_local()
+            reg.completed_by_user_id = uid
+            reg.completed_by_account_id = int(acc.id)
+        db.session.commit()
+        if day_change is not None:
+            try:
+                import project_activity_hooks as pah
+
+                pah.log_shooting_day_updated(day, day_change[0], day_change[1])
+            except Exception:
+                app.logger.exception("Shooting day date change log failed")
+        msg = f"Recorded {len(recorded)} shooting day(s) as done (backed up and proxied before BigBang)."
+        if skipped:
+            msg += f" {skipped} day(s) skipped because they already have a WorkFlow."
+        flash(msg, "success")
+        return jsonify({"ok": True, "recorded": len(recorded), "skipped": skipped})
+
     # --- Routes --------------------------------------------------------------
 
     @app.route("/machine-room/material-registration/<int:day_id>")
@@ -394,6 +537,8 @@ def register_material_registration_routes(app: Flask, ctx: dict) -> SimpleNamesp
                     "day_name": day.day_name or "",
                     "label": reg_support.day_label(day),
                     "shooting_date": day.shooting_date.isoformat() if day.shooting_date else "",
+                    "proxy_volume_id": getattr(day, "proxy_volume_id", None),
+                    "proxy_path": (getattr(day, "proxy_path", "") or ""),
                 },
                 "status": {
                     "key": row["status"],
@@ -422,6 +567,11 @@ def register_material_registration_routes(app: Flask, ctx: dict) -> SimpleNamesp
                     "volumes": _volume_options(int(day.project_id)),
                     "operators": _operator_options(acc, values["responsible_user_id"]),
                     "default_operator_id": directory_user_id_for_account(acc),
+                    "stamp_days": [
+                        {"id": int(d.id), "label": reg_support.day_label(d),
+                         "date": d.shooting_date.isoformat() if d.shooting_date else ""}
+                        for d in _stampable_days(int(day.project_id), exclude_id=int(day.id))
+                    ],
                 },
             }
         )
@@ -433,7 +583,7 @@ def register_material_registration_routes(app: Flask, ctx: dict) -> SimpleNamesp
         _require(acc, day)
         data = request.get_json(silent=True) or {}
         action = str(data.get("action") or "save").strip().lower()
-        if action not in ("save", "start"):
+        if action not in ("save", "start", "record_done"):
             return _json_error("Unknown action.")
         values, err = _parse(data, day)
         if err:
@@ -441,6 +591,8 @@ def register_material_registration_routes(app: Flask, ctx: dict) -> SimpleNamesp
         if values["shooting_date"] and values["shooting_date"] != day.shooting_date:
             if not can_edit_date(acc, int(day.project_id)):
                 return _json_error("You do not have permission to change the shooting date.", 403)
+        if action == "record_done":
+            return _record_done(acc, day, data, values)
 
         for attempt in (1, 2):
             try:

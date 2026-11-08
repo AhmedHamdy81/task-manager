@@ -90,6 +90,8 @@ import project_storage_routes as project_storage_routes_mod
 import job_titles_master_support as job_titles_master_support_mod
 import account_approval_support as account_approval_support_mod
 import oauth_login_support as oauth_login_support_mod
+import oauth_login_state as oauth_login_state_mod
+import login_throttle as login_throttle_mod
 import oauth_settings as oauth_settings_mod
 import account_approval_routes as account_approval_routes_mod
 import workflow_engine as workflow_engine_mod
@@ -591,8 +593,14 @@ def create_app() -> Flask:
         app.config["TESTING"] = True
     if not app.config.get("TESTING"):
         security_support_mod.enforce_production_config()
-    app.config["SECRET_KEY"] = security_support_mod.resolve_secret_key()
+    app.config["SECRET_KEY"] = security_support_mod.resolve_secret_key(testing=bool(app.config.get("TESTING")))
+    if app.config.get("TESTING") and not (os.environ.get("GOOGLE_SHEETS_TOKEN_KEY") or "").strip():
+        app.config["GOOGLE_SHEETS_TOKEN_KEY"] = secrets.token_urlsafe(48)
     security_support_mod.configure_secure_session(app)
+    security_support_mod.configure_proxy(app)
+    security_support_mod.register_host_check(app)
+    # Throttling is on everywhere except automated tests, which enable it explicitly.
+    app.config.setdefault("AUTH_THROTTLE_ENABLED", not app.config.get("TESTING"))
     # Local development: pick up template/static edits without a full restart.
     if not security_support_mod.is_production_env():
         app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -6373,20 +6381,14 @@ def create_app() -> Flask:
 
     bootstrap_admin_email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@tbbstudios.com").strip().lower()
     bootstrap_admin_username = (os.environ.get("BOOTSTRAP_ADMIN_USERNAME", "admin") or "admin").strip().lower()
-    _bootstrap_pw_env = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD")
-    if _bootstrap_pw_env is not None and _bootstrap_pw_env.strip():
-        bootstrap_admin_password = _bootstrap_pw_env
-    elif security_support_mod.is_production_env():
+    # Only used to create the first administrator; never a built-in default.
+    bootstrap_admin_password = (os.environ.get("BOOTSTRAP_ADMIN_PASSWORD") or "").strip()
+    if bootstrap_admin_password and security_support_mod.weak_password_problem(bootstrap_admin_password):
+        app.logger.warning(
+            "BOOTSTRAP_ADMIN_PASSWORD is %s; the bootstrap admin will not be created with it.",
+            security_support_mod.weak_password_problem(bootstrap_admin_password),
+        )
         bootstrap_admin_password = ""
-        app.logger.warning(
-            "BOOTSTRAP_ADMIN_PASSWORD is unset in production — bootstrap admin will not be created."
-        )
-    else:
-        bootstrap_admin_password = "password"
-        app.logger.warning(
-            "Using insecure default BOOTSTRAP_ADMIN_PASSWORD for development. "
-            "Set BOOTSTRAP_ADMIN_PASSWORD before deploying."
-        )
 
     def ensure_sqlite_work_request_tables() -> None:
         """Create work_requests tables on existing SQLite databases."""
@@ -6472,10 +6474,9 @@ def create_app() -> Flask:
             ("guest_reviewer_user", "guest_reviewer@local.test", GUEST_ACCESS_REVIEWER),
             ("guest_approver_user", "guest_approver@local.test", GUEST_ACCESS_APPROVER),
         )
-        pwd = os.environ.get("BOOTSTRAP_GUEST_PASSWORD") or (
-            "" if security_support_mod.is_production_env() else "guest"
-        )
-        if not pwd:
+        pwd = (os.environ.get("BOOTSTRAP_GUEST_PASSWORD") or "").strip()
+        if not pwd or security_support_mod.weak_password_problem(pwd):
+            app.logger.warning("BOOTSTRAP_GUEST_USERS=1 needs a strong BOOTSTRAP_GUEST_PASSWORD; guests not created.")
             return
         created_user_ids: list[int] = []
         for username, email, level in specs:
@@ -10147,6 +10148,14 @@ def create_app() -> Flask:
         import material_registration_support as material_registration_support_mod
 
         material_registration_support_mod.ensure_material_registration_table(db, now_local)
+        import production_import_service as production_import_service_mod
+
+        production_import_service_mod.ensure_tables(db, now_local)
+        import google_sheets_service as google_sheets_service_mod
+
+        google_sheets_service_mod.ensure_tables(db, now_local)
+        oauth_login_state_mod.ensure_tables(db, now_local)
+        login_throttle_mod.ensure_table(db)
         job_titles_master_support_mod.ensure_job_titles_master_tables(db)
         job_titles_master_support_mod.ensure_retired_post_scope_master_codes_migrated(
             db,
@@ -10169,6 +10178,10 @@ def create_app() -> Flask:
             "login_google_callback",
             "login_apple",
             "login_apple_callback",
+            # Google Sheets consent may finish in an external browser (Desktop); both
+            # endpoints validate a one-time server-side state and never sign anyone in.
+            "google_sheets_browser_start",
+            "google_sheets_callback",
             "register",
             "logout",
             "static",
@@ -10609,6 +10622,50 @@ def create_app() -> Flask:
     def account_can_manage_project_team_for(acc: Account | None, project_id: int) -> bool:
         return account_may_full_control_project(acc, project_id)
 
+    def account_is_project_lead(acc: Account | None, project_id: int) -> bool:
+        """Project member whose job titles include a Supervisor ("Lead") title."""
+        if acc is None or _normalized_account_role_key(acc.role) in (ROLE_GUEST, ROLE_MACHINE_ROOM):
+            return False
+        if not account_approval_support_mod.account_may_use_app(acc) or not account_can_access_project(acc, project_id):
+            return False
+        user = account_directory_user(acc)
+        if user is None:
+            return False
+        if ProjectMember.query.filter_by(project_id=int(project_id), user_id=int(user.id)).first() is None:
+            return False
+        return any(bool(getattr(jt, "is_supervisor_title", False)) for jt in user.assigned_job_titles())
+
+    def account_lead_scopes_on_project(acc: Account | None, project_id: int) -> frozenset[str]:
+        """Post-production scopes a Lead member may manage (own assignment + job-title scopes)."""
+        from project_settings import collect_user_post_scope_keys, post_scope_key_set
+
+        if not account_is_project_lead(acc, project_id):
+            return frozenset()
+        user = account_directory_user(acc)
+        member = ProjectMember.query.filter_by(project_id=int(project_id), user_id=int(user.id)).first()
+        scopes = set(collect_user_post_scope_keys(user))
+        own = (getattr(member, "assigned_post_scope_code", None) or "").strip()
+        if own:
+            scopes.add(own)
+        return frozenset(scopes & set(post_scope_key_set()))
+
+    def project_member_scopes(member, user) -> frozenset[str]:
+        """A member's scopes: the assigned scope when set, otherwise their job-title scopes."""
+        from project_settings import collect_user_post_scope_keys
+
+        assigned = (getattr(member, "assigned_post_scope_code", None) or "").strip()
+        if assigned:
+            return frozenset({assigned})
+        return frozenset(collect_user_post_scope_keys(user)) if user is not None else frozenset()
+
+    def account_may_change_project_member(acc: Account | None, project_id: int, member, user) -> bool:
+        """Full control, or a Lead when every scope of that member is one of the Lead's scopes."""
+        if account_can_manage_project_team_for(acc, project_id):
+            return True
+        lead_scopes = account_lead_scopes_on_project(acc, project_id)
+        member_scopes = project_member_scopes(member, user)
+        return bool(lead_scopes) and bool(member_scopes) and member_scopes <= lead_scopes
+
     def account_is_editing_team(acc: Account | None) -> bool:
         if acc is None:
             return False
@@ -10648,6 +10705,14 @@ def create_app() -> Flask:
     ) -> bool:
         """Full control roles, or Offline Editing team members on this project."""
         if account_may_full_control_project(acc, project_id):
+            return True
+        return account_is_offline_editing_team_on_project(acc, project_id)
+
+    def account_can_add_shooting_days_for(acc: Account | None, project_id: int) -> bool:
+        """Production page: admins and the project's Offline Editing team may add shooting days."""
+        if acc is None or account_is_guest(acc) or not account_can_access_project(acc, project_id):
+            return False
+        if account_is_elevated(acc):
             return True
         return account_is_offline_editing_team_on_project(acc, project_id)
 
@@ -10889,6 +10954,10 @@ def create_app() -> Flask:
         normalized_role_key=_normalized_account_role_key,
         directory_user_id_for_account=directory_user_id_for_account,
         may_full_control_project=account_may_full_control_project,
+        # Leads (Supervisor job title) on a project: notes, and team changes within their scopes
+        # (the team routes enforce the scope rules).
+        may_add_project_notes=account_is_project_lead,
+        may_manage_project_team=lambda acc, pid: bool(account_lead_scopes_on_project(acc, pid)),
         resolve_project_id_from_path=resolve_project_id_from_request_path,
         account_has_vfx_job_title=account_has_vfx_job_title,
         guest_effective_role_key=guest_effective_role_key,
@@ -13564,9 +13633,27 @@ def create_app() -> Flask:
 
     @app.template_global()
     def can_manage_project_team_scope_for(project_id: int, scope_key: str | None = None) -> bool:
-        del scope_key
         acc = db.session.get(Account, session.get("account_id"))
-        return account_can_manage_project_team_for(acc, int(project_id))
+        if account_can_manage_project_team_for(acc, int(project_id)):
+            return True
+        return bool(scope_key) and scope_key in account_lead_scopes_on_project(acc, int(project_id))
+
+    @app.template_global()
+    def can_manage_any_project_team_scope_for(project_id: int) -> bool:
+        acc = db.session.get(Account, session.get("account_id"))
+        return account_can_manage_project_team_for(acc, int(project_id)) or bool(
+            account_lead_scopes_on_project(acc, int(project_id))
+        )
+
+    @app.template_global()
+    def can_change_project_member_for(project_id: int, user_id: int) -> bool:
+        acc = db.session.get(Account, session.get("account_id"))
+        if account_can_manage_project_team_for(acc, int(project_id)):
+            return True
+        member = ProjectMember.query.filter_by(project_id=int(project_id), user_id=int(user_id)).first()
+        return member is not None and account_may_change_project_member(
+            acc, int(project_id), member, db.session.get(User, int(user_id))
+        )
 
     @app.template_global()
     def can_view_project_log_book_for(project_id: int) -> bool:
@@ -14166,23 +14253,37 @@ def create_app() -> Flask:
         )
         return acc
 
-    def _account_from_oauth_profile(profile: dict[str, str]) -> Account:
+    def _account_from_oauth_profile(profile: dict) -> Account:
         provider = (profile.get("provider") or "").strip()
         subject = (profile.get("sub") or "").strip()
         email = (profile.get("email") or "").strip().lower()
-        if provider and subject:
-            linked = AccountOAuthIdentity.query.filter_by(
-                provider=provider, subject=subject
-            ).first()
-            if linked is not None:
-                acc = db.session.get(Account, linked.account_id)
-                if acc is not None:
-                    if email and linked.email != email:
-                        linked.email = email
-                    return acc
-        acc = Account.query.filter(db.func.lower(Account.email) == email).first() if email else None
+        if not provider or not subject or not email:
+            raise oauth_login_support_mod.OAuthLoginError("Sign-in could not be verified. Try again.")
+        linked = AccountOAuthIdentity.query.filter_by(provider=provider, subject=subject).first()
+        if linked is not None:
+            acc = db.session.get(Account, linked.account_id)
+            if acc is None:
+                raise oauth_login_support_mod.OAuthLoginError("Sign-in could not be verified. Try again.")
+            if linked.email != email:
+                linked.email = email
+            return acc
+        acc = Account.query.filter(db.func.lower(Account.email) == email).first()
         if acc is not None:
+            # Linking by email gives the provider account full access to the BigBang account,
+            # so only do it when the provider owns the mailbox (Gmail / Google-hosted domain,
+            # Apple-issued address) and the account has no other identity at that provider.
+            if not profile.get("email_authoritative"):
+                raise oauth_login_support_mod.OAuthLoginError(
+                    "This email already has a BigBang account. Sign in with your password; "
+                    "an administrator can link your Google or Apple sign-in afterwards."
+                )
+            other = AccountOAuthIdentity.query.filter_by(account_id=acc.id, provider=provider).first()
+            if other is not None:
+                raise oauth_login_support_mod.OAuthLoginError(
+                    "This BigBang account is linked to a different account at that provider."
+                )
             _link_oauth_identity(acc, profile)
+            log_security_event("oauth_identity_linked", account_id=acc.id, details={"provider": provider})
             return acc
         if not app.config.get("ALLOW_PUBLIC_REGISTER"):
             raise oauth_login_support_mod.OAuthLoginError(
@@ -14196,14 +14297,36 @@ def create_app() -> Flask:
                 "Could not create an account for that email."
             ) from exc
 
+    oauth_login_states = oauth_login_state_mod.LoginStateStore(db, now=now_local, session_getter=lambda: session)
+    auth_throttle = login_throttle_mod.Throttle(db, secret=lambda: app.config["SECRET_KEY"], now=now_local)
+    app.extensions["auth_throttle"] = auth_throttle
+    app.extensions["oauth_login_states"] = oauth_login_states
+
+    def _client_source() -> str:
+        return security_support_mod.client_ip(request) or ""
+
+    def _throttled(buckets: list[tuple[str, str]]) -> bool:
+        """Reserve one attempt; True when the caller must refuse (generic response)."""
+        if not app.config.get("AUTH_THROTTLE_ENABLED", True):
+            return False
+        decision = auth_throttle.reserve(buckets)
+        if not decision.allowed:
+            log_security_event(
+                "auth_throttled",
+                details={"scopes": sorted({s for s, _v in buckets}), "retry_after": decision.retry_after},
+            )
+        return not decision.allowed
+
+    def _throttle_response(template: str, status: int = 429, **ctx):
+        flash(login_throttle_mod.GENERIC_MESSAGE, "error")
+        return render_template(template, **ctx), status
+
     def _begin_oauth_login(provider: str, next_url: str):
         if session.get("account_id"):
             return redirect(next_url)
-        nonce = secrets.token_urlsafe(24)
-        state = oauth_login_support_mod.dump_oauth_state(
-            app.config["SECRET_KEY"],
-            {"p": provider, "n": nonce, "next": next_url},
-        )
+        if _throttled([("oauth_start_ip", _client_source())]):
+            flash(login_throttle_mod.GENERIC_MESSAGE, "error")
+            return redirect(url_for("login", next=next_url))
         if provider == oauth_login_support_mod.PROVIDER_GOOGLE:
             if not oauth_login_support_mod.google_configured():
                 flash(
@@ -14211,11 +14334,13 @@ def create_app() -> Flask:
                     "error",
                 )
                 return redirect(url_for("login", next=next_url))
+            attempt = oauth_login_states.begin(provider, next_url)
             return redirect(
                 oauth_login_support_mod.google_authorize_url(
                     redirect_uri=url_for("login_google_callback", _external=True),
-                    state=state,
-                    nonce=nonce,
+                    state=attempt["state"],
+                    nonce=attempt["nonce"],
+                    code_challenge=attempt["challenge"],
                 )
             )
         if not oauth_login_support_mod.apple_configured():
@@ -14224,25 +14349,33 @@ def create_app() -> Flask:
                 "error",
             )
             return redirect(url_for("login", next=next_url))
-        return redirect(
+        attempt = oauth_login_states.begin(provider, next_url)
+        resp = redirect(
             oauth_login_support_mod.apple_authorize_url(
                 redirect_uri=url_for("login_apple_callback", _external=True),
-                state=state,
-                nonce=nonce,
+                state=attempt["state"],
+                nonce=attempt["nonce"],
             )
         )
-
-    def _oauth_state_payload(provider: str, state: str) -> dict[str, str]:
-        data = oauth_login_support_mod.load_oauth_state(app.config["SECRET_KEY"], state)
-        if data.get("p") != provider:
-            raise oauth_login_support_mod.OAuthLoginError(
-                "Sign-in could not be verified. Try again."
+        if request.is_secure:
+            resp.set_cookie(
+                oauth_login_state_mod.APPLE_BIND_COOKIE, attempt["bind"],
+                max_age=int(oauth_login_state_mod.STATE_TTL.total_seconds()), httponly=True, secure=True,
+                samesite="None", path=oauth_login_state_mod.APPLE_BIND_PATH,
             )
-        return data
+        return resp
 
-    def _finish_oauth_login(profile: dict[str, str], next_url: str):
+    def _oauth_already_signed_in():
+        """A callback never swaps the signed-in BigBang account for another one."""
+        if not session.get("account_id"):
+            return None
+        flash("You are already signed in. Sign out first to use a different account.", "info")
+        return redirect(url_for("index"))
+
+    def _finish_oauth_login(profile: dict, next_url: str, attempt_id: str):
         acc = _account_from_oauth_profile(profile)
         db.session.commit()
+        oauth_login_states.finish(attempt_id, "signed_in")
         details = {"method": "oauth", "provider": profile.get("provider")}
         if not account_approval_support_mod.account_may_use_app(acc):
             return _login_restricted_account(acc, details=details)
@@ -14262,7 +14395,12 @@ def create_app() -> Flask:
                 flash("Email or username and password are required.", "error")
                 return render_template("login.html", next_url=next_url)
 
-            login_lower = login_id.lower()
+            login_lower = login_throttle_mod.normalize_identifier(login_id)
+            buckets = [("login_account", login_lower), ("login_ip", _client_source())]
+            # Checked before the password, for every identifier, so the response never
+            # reveals whether the account exists.
+            if _throttled(buckets):
+                return _throttle_response("login.html", next_url=next_url)
             if "@" in login_id:
                 acc = Account.query.filter_by(email=login_lower).first()
             else:
@@ -14277,6 +14415,9 @@ def create_app() -> Flask:
                 flash("Invalid sign-in or password.", "error")
                 return render_template("login.html", next_url=next_url)
 
+            if app.config.get("AUTH_THROTTLE_ENABLED", True):
+                auth_throttle.clear([("login_account", login_lower)])
+                auth_throttle.release([("login_ip", _client_source())])
             return _complete_account_login(acc, next_url)
 
         return render_template("login.html", next_url=_safe_next_url(request.args.get("next")))
@@ -14290,20 +14431,27 @@ def create_app() -> Flask:
 
     @app.route("/login/google/callback")
     def login_google_callback():
+        signed_in = _oauth_already_signed_in()
+        if signed_in is not None:
+            return signed_in
         err = (request.args.get("error") or "").strip()
-        if err:
-            flash("Google sign-in was cancelled.", "error")
-            return redirect(url_for("login"))
         try:
-            payload = _oauth_state_payload(
-                oauth_login_support_mod.PROVIDER_GOOGLE,
-                request.args.get("state") or "",
+            # Browser binding, single use and expiry are checked before anything else,
+            # in particular before the authorization code is exchanged.
+            attempt = oauth_login_states.claim(
+                oauth_login_support_mod.PROVIDER_GOOGLE, request.args.get("state") or ""
             )
+            if err:
+                oauth_login_states.finish(attempt["id"], "cancelled")
+                flash("Google sign-in was cancelled.", "error")
+                return redirect(url_for("login"))
             profile = oauth_login_support_mod.exchange_google_code(
                 code=request.args.get("code") or "",
                 redirect_uri=url_for("login_google_callback", _external=True),
+                code_verifier=attempt["verifier"],
+                nonce=attempt["nonce"],
             )
-            return _finish_oauth_login(profile, _safe_next_url(payload.get("next")))
+            return _finish_oauth_login(profile, _safe_next_url(attempt["next"]), attempt["id"])
         except oauth_login_support_mod.OAuthLoginError as exc:
             db.session.rollback()
             flash(str(exc), "error")
@@ -14323,23 +14471,28 @@ def create_app() -> Flask:
 
     @app.route("/login/apple/callback", methods=["GET", "POST"])
     def login_apple_callback():
+        signed_in = _oauth_already_signed_in()
+        if signed_in is not None:
+            return signed_in
         src = request.form if request.method == "POST" else request.args
-        if (src.get("error") or "").strip():
-            flash("Apple sign-in was cancelled.", "error")
-            return redirect(url_for("login"))
         try:
-            payload = _oauth_state_payload(
-                oauth_login_support_mod.PROVIDER_APPLE,
-                src.get("state") or "",
+            attempt = oauth_login_states.claim(
+                oauth_login_support_mod.PROVIDER_APPLE, src.get("state") or "",
+                cookie_bind=request.cookies.get(oauth_login_state_mod.APPLE_BIND_COOKIE),
             )
+            if (src.get("error") or "").strip():
+                oauth_login_states.finish(attempt["id"], "cancelled")
+                flash("Apple sign-in was cancelled.", "error")
+                return redirect(url_for("login"))
             profile = oauth_login_support_mod.verify_apple_id_token(
                 src.get("id_token") or "",
-                nonce=payload.get("n") or None,
+                nonce=attempt["nonce"] or None,
+                nonce_hash=attempt["nonce_hash"] or None,
             )
             name = oauth_login_support_mod.parse_apple_user_name(src.get("user"))
             if name:
                 profile["name"] = name
-            return _finish_oauth_login(profile, _safe_next_url(payload.get("next")))
+            return _finish_oauth_login(profile, _safe_next_url(attempt["next"]), attempt["id"])
         except oauth_login_support_mod.OAuthLoginError as exc:
             db.session.rollback()
             flash(str(exc), "error")
@@ -14505,7 +14658,12 @@ def create_app() -> Flask:
             return redirect(url_for("index"))
         if request.method == "POST":
             login_id = (request.form.get("login") or "").strip()
-            acc = _account_by_login_id(login_id)
+            limited = _throttled([
+                ("reset_account", login_throttle_mod.normalize_identifier(login_id)),
+                ("reset_ip", _client_source()),
+            ])
+            # Throttled requests get the same answer as real ones and send nothing.
+            acc = None if limited else _account_by_login_id(login_id)
             try:
                 expiry_minutes = int(
                     app.config.get("MAIL_RESET_EXPIRY_MINUTES")
@@ -14543,7 +14701,7 @@ def create_app() -> Flask:
                     app.logger.info(
                         "Password reset email delivered for account_id=%s", int(acc.id)
                     )
-            else:
+            elif not limited:
                 log_security_event(
                     "password_reset_requested",
                     details={"login": login_id.lower()[:120], "unknown": True},
@@ -14560,6 +14718,9 @@ def create_app() -> Flask:
     def reset_password(token: str):
         if session.get("account_id"):
             return redirect(url_for("index"))
+        if request.method == "POST" and _throttled([("reset_submit_ip", _client_source())]):
+            flash(login_throttle_mod.GENERIC_MESSAGE, "error")
+            return redirect(url_for("forgot_password"))
         acc = _account_from_password_reset_token(token)
         if acc is None:
             flash("That reset link is invalid or has expired. Request a new one.", "error")
@@ -14578,6 +14739,11 @@ def create_app() -> Flask:
                 return render_template("reset_password.html", token=token)
             acc.password_hash = generate_password_hash(new_pw, method="pbkdf2:sha256")
             db.session.commit()
+            if app.config.get("AUTH_THROTTLE_ENABLED", True):
+                auth_throttle.clear([
+                    ("login_account", login_throttle_mod.normalize_identifier(acc.email)),
+                    ("login_account", login_throttle_mod.normalize_identifier(acc.username)),
+                ])
             log_security_event("password_reset_completed", account_id=int(acc.id))
             flash("Your password was updated. Sign in with the new password.", "success")
             return redirect(url_for("login"))
@@ -14593,6 +14759,8 @@ def create_app() -> Flask:
             return redirect(url_for("index"))
 
         if request.method == "POST":
+            if _throttled([("register_ip", _client_source())]):
+                return _throttle_response("register.html", job_titles=_registration_job_titles())
             name = (request.form.get("name") or "").strip()
             email = (request.form.get("email") or "").strip().lower()
             password = request.form.get("password") or ""
@@ -31793,9 +31961,11 @@ def create_app() -> Flask:
     @app.route("/projects/<int:project_id>/members/add", methods=["GET", "POST"])
     def project_members_add(project_id: int):
         actor = db.session.get(Account, session.get("account_id"))
-        if actor is None or not account_can_manage_project_team_for(actor, project_id):
+        full_control = actor is not None and account_can_manage_project_team_for(actor, project_id)
+        lead_scopes = frozenset() if full_control else account_lead_scopes_on_project(actor, project_id)
+        if actor is None or not (full_control or lead_scopes):
             flash(
-                "Only administrators, super users, producers, or Post-production Team members on this project can change project teams.",
+                "Only administrators, super users, producers, Post-production Team members, or Leads (within their scopes) on this project can change project teams.",
                 "error",
             )
             return redirect(url_for("projects_list"))
@@ -31836,6 +32006,13 @@ def create_app() -> Flask:
         valid_scope_keys = post_scope_key_set()
         if scope_filter and scope_filter not in valid_scope_keys:
             scope_filter = None
+        if not full_control:
+            # Leads add people only to their own scopes, and cannot bypass eligibility checks.
+            if not scope_filter or scope_filter not in lead_scopes:
+                flash("As a Lead you can add people only to your own scopes. Open Manage on one of them.", "error")
+                return redirect(url_for("project_team", project_id=p.id))
+            employment_override = eligibility_override = False
+            override_reason = None
 
         existing_members = {
             int(m.user_id): m
@@ -31856,6 +32033,7 @@ def create_app() -> Flask:
         skipped_machine_room = 0
         skipped_ineligible = 0
         skipped_account_restricted = 0
+        skipped_other_scope = 0
         try:
             for uid in candidate_ids:
                 if uid not in users_by_id:
@@ -31881,6 +32059,13 @@ def create_app() -> Flask:
                         existing_members[uid] = existing
                         known_member_ids.add(uid)
 
+                if (
+                    not full_control
+                    and existing is not None
+                    and not account_may_change_project_member(actor, p.id, existing, u)
+                ):
+                    skipped_other_scope += 1
+                    continue
                 if scope_filter and scope_filter in valid_scope_keys:
                     elig = jtms_add.get_scope_eligibility_for_user(
                         u, scope_filter, SystemMasterEntry=SystemMasterEntry
@@ -31985,14 +32170,20 @@ def create_app() -> Flask:
                 f"{skipped_account_restricted} user(s) skipped — their account is suspended/disabled/pending approval.",
                 "warning",
             )
+        if skipped_other_scope:
+            flash(
+                f"{skipped_other_scope} user(s) skipped — they belong to a scope you do not lead.",
+                "warning",
+            )
         return redirect(url_for("project_team", project_id=p.id))
 
     @app.route("/projects/<int:project_id>/members/<int:user_id>/remove", methods=["GET", "POST"])
     def project_member_remove(project_id: int, user_id: int):
         actor = db.session.get(Account, session.get("account_id"))
-        if actor is None or not account_can_manage_project_team_for(actor, project_id):
+        full_control = actor is not None and account_can_manage_project_team_for(actor, project_id)
+        if actor is None or not (full_control or account_lead_scopes_on_project(actor, project_id)):
             flash(
-                "Only administrators, super users, producers, or Post-production Team members on this project can change project teams.",
+                "Only administrators, super users, producers, Post-production Team members, or Leads (within their scopes) on this project can change project teams.",
                 "error",
             )
             return redirect(url_for("projects_list"))
@@ -32007,6 +32198,9 @@ def create_app() -> Flask:
             flash("That user is not on this project team.", "error")
             return redirect(url_for("project_team", project_id=p.id))
         u = db.session.get(User, user_id)
+        if not full_control and not account_may_change_project_member(actor, p.id, m, u):
+            flash("As a Lead you can remove only people whose scopes are all yours.", "error")
+            return redirect(url_for("project_team", project_id=p.id))
         uname = ((u.name or u.email) if u is not None else f"User {user_id}") or f"User {user_id}"
         scope = (m.assigned_post_scope_code or "").strip() or None
         import project_activity_hooks as pah
@@ -35757,6 +35951,49 @@ def create_app() -> Flask:
         },
     )
 
+    import google_sheets_routes as google_sheets_routes_mod
+
+    google_sheets_routes_mod.register_google_sheets_routes(
+        app,
+        {
+            "db": db,
+            "now_local": now_local,
+            "Project": Project,
+            "ShootingDay": ShootingDay,
+            "account_from_session": account_from_session,
+            "account_can_access_project": account_can_access_project,
+            "client_config": lambda: (
+                oauth_login_support_mod.google_client_id(),
+                oauth_login_support_mod.google_client_secret(),
+            ),
+        },
+    )
+
+    import production_import_routes as production_import_routes_mod
+
+    production_import_routes_mod.register_production_import_routes(
+        app,
+        {
+            "db": db,
+            "now_local": now_local,
+            "Project": Project,
+            "ShootingDay": ShootingDay,
+            "ShootingDayScene": ShootingDayScene,
+            "SceneRow": SceneRow,
+            "account_from_session": account_from_session,
+            "account_can_access_project": account_can_access_project,
+            "account_may_edit_production_for": account_may_edit_production_for,
+            "account_can_add_shooting_days_for": account_can_add_shooting_days_for,
+            "find_episode_scene_label_duplicate": find_episode_scene_label_duplicate,
+            "shooting_day_scene_runtime_siblings": shooting_day_scene_runtime_siblings,
+            "next_legacy_scene_id_for_day": next_legacy_scene_id_for_day,
+            "ensure_vfx_bridge": _ensure_vfx_bridge_for_project,
+            "send_managed_notification": send_managed_notification,
+            "notification_push_realtime_for_project": _notification_push_realtime_for_project,
+            "storage_dir": os.path.join(os.path.dirname(db_path), "uploads", "production_imports"),
+        },
+    )
+
     import project_activity_routes as project_activity_routes_mod
 
     project_activity_routes_mod.register_project_activity_routes(
@@ -35869,14 +36106,8 @@ if __name__ == "__main__":
     # Default 5001: macOS AirPlay uses 5000 on ::1, so http://localhost:5000 often
     # hits AirTunes (403) instead of this app. Override with PORT / HOST if needed.
     _port = int(os.environ.get("PORT", "5001"))
-    _host = os.environ.get("HOST", "127.0.0.1")
-    _debug = os.environ.get("FLASK_DEBUG", os.environ.get("DEBUG", "0")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if security_support_mod.is_production_env():
-        _debug = False
+    _host = security_support_mod.resolve_bind_host()
+    _debug = security_support_mod.resolve_debug(_host)
     if (not _debug) or (os.environ.get("WERKZEUG_RUN_MAIN") == "true"):
         print(f"\n  Open in browser: http://{_host}:{_port}/\n", flush=True)
     socketio.run(
